@@ -8,9 +8,9 @@ Clean up all completed subagent sessions. These are child sessions spawned by th
 
 Execute the cleanup based on the scope argument:
 - Default (no args): Clean current project's subagents only
-- `all`: Clean ALL subagent sessions (global + all projects)  
-- `global`: Clean only global subagents
-- `list`: Just list subagent sessions without deleting
+- `--all`: Clean ALL subagent sessions (global + all projects)  
+- `--global`: Clean only global subagents
+- `--list`: Just list subagent sessions without deleting
 
 ## Step 1: Identify Current Project
 
