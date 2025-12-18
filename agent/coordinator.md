@@ -1,6 +1,6 @@
 ---
 description: "Coordinator for complex multi-step workflows requiring delegation to multiple specialists. Use it when you need to orchestrate large features across code-explorer, code-implementer, code-quality, etc. Not needed for simple tasks."
-mode: agent
+mode: primary
 temperature: 0.2
 tools:
   write: true
