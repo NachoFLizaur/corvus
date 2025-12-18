@@ -49,6 +49,7 @@ Invoke agents via `@` mentions:
 | Command | Purpose |
 |---------|---------|
 | `/cleanup-subagents` | Clean up subagent sessions |
+| `/git-commit` | Smart git commit with conventional commit message generation |
 
 ## Structure
 
