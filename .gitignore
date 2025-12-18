@@ -1,0 +1,12 @@
+# Dependencies
+node_modules/
+__pycache__/
+.venv/
+
+# Editor/OS
+.DS_Store
+*.swp
+
+# Local config
+.env
+.env.local
