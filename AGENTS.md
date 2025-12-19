@@ -36,7 +36,7 @@ When a user request clearly matches an agent's purpose, **delegate IMMEDIATELY**
 | researcher | Technical questions, best practices, external research | `@researcher` |
 | agent-generator | Creating new custom agents and workflows | `@agent-generator` |
 | media-processor | Analyzing images, PDFs, diagrams | `@media-processor` |
-| coordinator | Orchestrating complex multi-step workflows | `@coordinator` |
+| orchestrator | Orchestrating complex multi-step workflows | `@orchestrator` |
 
 ## When to Delegate
 
@@ -85,7 +85,7 @@ When a user request clearly matches an agent's purpose, **delegate IMMEDIATELY**
 - Extracting info from PDFs
 - Understanding visual content
 
-**Use @coordinator when:**
+**Use @orchestrator when:**
 - Large features requiring multiple specialists
 - Complex workflows with dependencies
 - Need automated delegation and tracking
