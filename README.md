@@ -50,6 +50,7 @@ Invoke agents via `@` mentions:
 |---------|---------|
 | `/cleanup-subagents` | Clean up subagent sessions |
 | `/git-commit` | Smart git commit with conventional commit message generation |
+| `/summary` | Generate summary of current conversation for portability to new sessions |
 
 ## Structure
 
