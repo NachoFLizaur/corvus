@@ -253,6 +253,7 @@ Your response succeeds when:
 - ✅ Code claims backed by file:line references
 - ✅ Results directly address user's intent
 - ✅ Patterns rated for quality (when applicable)
+- ✅ Project environment documented (when investigating for implementation)
 
 Your response FAILS if:
 - ❌ Sequential tool execution when parallel was possible
@@ -260,3 +261,113 @@ Your response FAILS if:
 - ❌ Relative paths instead of absolute
 - ❌ Claims without code evidence
 - ❌ Obvious matches missed
+- ❌ Missing environment info when needed for task planning
+
+---
+
+## PROJECT ENVIRONMENT DETECTION
+
+**IMPORTANT**: When investigating a codebase for implementation planning, ALWAYS detect and report the project environment. This information is critical for generating correct commands in task files.
+
+### What to Detect
+
+#### 1. Virtual Environments (Python)
+```bash
+# Check for common venv locations
+ls -la .venv/ venv/ env/ .env/ 2>/dev/null
+ls -la */venv/ */.venv/ 2>/dev/null
+
+# Check for conda
+ls -la environment.yml conda.yaml 2>/dev/null
+
+# Check for poetry
+ls -la poetry.lock pyproject.toml 2>/dev/null
+```
+
+#### 2. Package Managers
+```bash
+# Node.js - check which lockfile exists
+ls -la package-lock.json yarn.lock pnpm-lock.yaml bun.lockb 2>/dev/null
+
+# Python
+ls -la requirements.txt requirements-dev.txt pyproject.toml setup.py Pipfile 2>/dev/null
+
+# Go
+ls -la go.mod go.sum 2>/dev/null
+
+# Rust
+ls -la Cargo.toml Cargo.lock 2>/dev/null
+```
+
+#### 3. Build/Task Runners
+```bash
+# Check package.json scripts
+cat package.json | grep -A 50 '"scripts"'
+
+# Makefiles
+ls -la Makefile makefile GNUmakefile 2>/dev/null
+
+# Task runners
+ls -la Taskfile.yml justfile 2>/dev/null
+```
+
+#### 4. Project Structure (Monorepo Detection)
+```bash
+# Check for workspaces
+cat package.json | grep -A 10 '"workspaces"'
+ls -la pnpm-workspace.yaml lerna.json nx.json turbo.json 2>/dev/null
+
+# Check for multiple package.json / pyproject.toml
+find . -name "package.json" -o -name "pyproject.toml" | head -20
+```
+
+### Environment Report Format
+
+Include this section in your report when investigating for implementation:
+
+```markdown
+## Project Environment
+
+### Python Environment
+- **Virtual Environment**: `.venv/` (Python 3.11)
+- **Package Manager**: pip with `requirements.txt`
+- **Activation**: `source .venv/bin/activate`
+- **Command Prefix**: `.venv/bin/python` or activate first
+
+### Node.js Environment  
+- **Package Manager**: pnpm (lockfile: `pnpm-lock.yaml`)
+- **Node Version**: 20.x (from `.nvmrc` or `package.json.engines`)
+
+### Available Scripts
+| Command | Purpose |
+|---------|---------|
+| `pnpm test` | Run tests |
+| `pnpm build` | Production build |
+| `pnpm typecheck` | Type checking |
+| `.venv/bin/pytest` | Python tests |
+| `.venv/bin/mypy .` | Python type check |
+
+### Recommended Command Patterns
+```bash
+# Python commands (use venv)
+.venv/bin/python -m pytest tests/
+.venv/bin/python -m mypy app/
+
+# Or activate first
+source .venv/bin/activate && pytest tests/
+
+# Node commands
+pnpm test
+pnpm run typecheck
+```
+```
+
+### Why This Matters
+
+Task files need correct commands. Without environment detection:
+- ❌ `python -m pytest` - Uses system Python, wrong dependencies
+- ❌ `npm test` - Wrong package manager, may fail
+
+With environment detection:
+- ✅ `.venv/bin/python -m pytest` - Uses project venv
+- ✅ `pnpm test` - Correct package manager

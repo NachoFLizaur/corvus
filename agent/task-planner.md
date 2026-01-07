@@ -415,9 +415,10 @@ Phase 3 (Testing):
 - Reference existing patterns in codebase
 
 ### Validation Commands
-- Project-specific commands (not generic)
+- **Project-specific commands** - Use venv paths, correct package manager
 - Type check, lint, test, build as appropriate
 - Specific test patterns to run
+- **NEVER use bare `python`, `pytest`, `npm`** - always use project environment
 
 ---
 
@@ -480,6 +481,7 @@ When invoked by the orchestrator, you will receive:
 {Summary of code-explorer findings}
 - Files to modify: [list]
 - Patterns to follow: [list]
+- Project environment: [venv, package manager, etc.]
 ```
 
 Use this context to:
@@ -487,6 +489,47 @@ Use this context to:
 2. Include relevant patterns in implementation steps
 3. Add research links to task notes
 4. Identify risks based on exploration findings
+5. **Use correct commands based on project environment** (see below)
+
+### Using Project Environment Information
+
+The code-explorer provides environment details. Use them for validation commands:
+
+**Python with venv**:
+```bash
+# CORRECT - uses project venv
+.venv/bin/python -m pytest tests/
+.venv/bin/python -m mypy app/
+source .venv/bin/activate && pytest
+
+# WRONG - uses system Python
+python -m pytest tests/
+pytest tests/
+```
+
+**Node.js with specific package manager**:
+```bash
+# If pnpm detected
+pnpm test
+pnpm run typecheck
+
+# If yarn detected  
+yarn test
+yarn typecheck
+
+# If npm detected
+npm test
+npm run typecheck
+```
+
+**Monorepo with workdir**:
+```bash
+# Run from specific package
+cd backend && .venv/bin/pytest
+cd frontend && pnpm test
+```
+
+**IMPORTANT**: Never use generic commands like `python`, `pytest`, `npm` without checking the project environment first. Always use the venv path or activate the environment.
 
 ---
 
