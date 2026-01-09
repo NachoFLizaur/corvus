@@ -533,6 +533,92 @@ cd frontend && pnpm test
 
 ---
 
+## UPDATING EXISTING PLANS
+
+When asked to update an existing MASTER_PLAN.md (for follow-up work):
+
+### Rules for Updates
+
+1. **Read the existing plan first** - Understand current state and structure
+2. **Preserve completed statuses** - NEVER change `[x]` back to `[ ]`
+3. **Add to appropriate phase** - Or create new "Follow-up" phase
+4. **Maintain sequential task IDs** - Continue numbering from last task
+5. **Update all counts** - Progress, totals, phase summaries
+
+### Adding Follow-up Tasks
+
+**Option A: Add to existing phase** (if logically fits)
+```markdown
+## Phase 2: Implementation (8-10h)  -->  (9-11h)
+
+| Order | Task ID | File | Description | Status |
+|-------|---------|------|-------------|--------|
+| 4 | perf-04 | `04-task.md` | Original task | [x] |
+| 5 | perf-05 | `05-task.md` | Original task | [x] |
+| 6 | perf-06 | `06-new-followup.md` | Follow-up fix | [ ] |  <-- NEW
+```
+
+**Option B: Create follow-up phase** (for distinct work)
+```markdown
+## Phase N+1: Follow-up Fixes (1-2h)
+
+| Order | Task ID | File | Description | Status |
+|-------|---------|------|-------------|--------|
+| [N+1] | [feature]-[N+1] | `[NN]-followup-fix.md` | [Description] | [ ] |
+
+**Milestone**: All follow-up issues resolved
+```
+
+### Updating Progress
+
+```markdown
+# Before
+**Progress**: 8/10 tasks complete (80%)
+
+# After adding 2 follow-up tasks
+**Progress**: 8/12 tasks complete (67%)
+```
+
+### Updating Quick Reference
+
+```markdown
+# Add new tasks at the end
+ 8. perf-08  Original task              [x]
+ 9. perf-09  Original task              [x]
+10. perf-10  Original task              [x]
+11. perf-11  Follow-up fix 1            [ ]  <-- NEW
+12. perf-12  Follow-up fix 2            [ ]  <-- NEW
+```
+
+### Task File for Follow-ups
+
+Create individual task file following the standard template:
+
+```markdown
+# [N]. [Follow-up Title]
+
+## Meta
+- **ID**: [feature]-[N]
+- **Feature**: [feature]
+- **Phase**: [N+1] (Follow-up Fixes)
+- **Priority**: P2
+- **Depends On**: [related original tasks if any]
+- **Effort**: S (30min - 1h)
+- **Tags**: [follow-up, bug-fix]
+
+## Objective
+[Clear description of what this follow-up addresses]
+
+## Context
+This is a follow-up to the original implementation.
+Related to: [original task IDs if applicable]
+User request: "[original user request that triggered this]"
+
+[Rest of standard template...]
+```
+
+---
+
 ## OUTPUT FORMAT
 
 ### After Creating Task Files
