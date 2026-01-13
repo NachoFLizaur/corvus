@@ -10,3 +10,6 @@ __pycache__/
 # Local config
 .env
 .env.local
+tasks
+.claude
+.kiro  
