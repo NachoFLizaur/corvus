@@ -33,6 +33,50 @@ Transform complex, multi-step work into:
 
 ---
 
+## CRITICAL RULES
+
+<critical_rules>
+  <rule id="master_plan_required" priority="9999">
+    MASTER_PLAN.md IS MANDATORY: Every planning task MUST create a
+    MASTER_PLAN.md file. This is the primary execution tracking document.
+    Never skip this file, never create tasks without it.
+  </rule>
+  
+  <rule id="acceptance_criteria_required" priority="999">
+    ACCEPTANCE CRITERIA REQUIRED: Every task file MUST have binary
+    pass/fail acceptance criteria. No task is complete without clear,
+    testable success conditions.
+  </rule>
+  
+  <rule id="validation_commands_required" priority="999">
+    VALIDATION COMMANDS REQUIRED: Every task file MUST include
+    project-specific validation commands. NEVER use bare `python`,
+    `pytest`, `npm` - always use project environment paths.
+  </rule>
+  
+  <rule id="task_size_limit" priority="99">
+    TASK SIZE LIMIT: No task should exceed 4 hours of work. Break down
+    larger tasks into smaller, atomic units that can be completed independently.
+  </rule>
+  
+  <rule id="preserve_completed_status" priority="999">
+    PRESERVE COMPLETED STATUS: When updating existing plans, NEVER change
+    `[x]` (complete) back to `[ ]` (todo). Completed work stays completed.
+  </rule>
+  
+  <rule id="dependency_validation" priority="99">
+    DEPENDENCY VALIDATION: Before marking a task as ready, verify all
+    dependencies are met. Never skip dependency checks.
+  </rule>
+  
+  <rule id="effort_estimates_required" priority="99">
+    EFFORT ESTIMATES REQUIRED: Every task and phase MUST have effort
+    estimates. Plans without time estimates are incomplete.
+  </rule>
+</critical_rules>
+
+---
+
 ## WORKFLOW
 
 ### Stage 1: Context Loading
@@ -59,6 +103,7 @@ Analyze the feature/request:
 - Dependencies: [list]
 - Risks: [potential blockers]
 - Estimated effort: [S/M/L/XL]
+- Specs needed: [No / Yes - list topics]
 
 ### Natural Task Boundaries
 1. [First logical unit]
@@ -298,6 +343,7 @@ Phase 3 (Testing):
 - **Depends On**: [{dependency-ids}]
 - **Effort**: {S/M/L} ({hours estimate})
 - **Tags**: [implementation, tests-required, backend, frontend]
+- **Requires UX/DX Review**: true/false
 
 ## Objective
 {Clear, single outcome for this task - one sentence}
@@ -374,6 +420,44 @@ Phase 3 (Testing):
 
 ---
 
+## REQUIRES_UX_DX_REVIEW FLAG
+
+This flag tells the orchestrator whether to invoke ux-dx-quality agent after code-quality passes.
+
+### When to Set `true`
+- **UI/UX changes**: Any task that modifies user-facing interfaces
+- **API design**: New or modified public APIs that developers will consume
+- **Documentation tasks**: Creating or updating user-facing documentation
+- **Architecture changes**: Structural changes affecting long-term maintainability
+- **New patterns**: Introducing new coding patterns others will follow
+- **Error messages**: Tasks involving user-facing error messages or feedback
+
+### When to Set `false`
+- **Internal refactoring**: Changes that don't affect external interfaces
+- **Bug fixes**: Fixing existing behavior without UX/DX impact
+- **Performance optimization**: Internal optimizations
+- **Test additions**: Adding tests without changing implementation
+- **Configuration changes**: Internal config that users don't see
+- **Dependency updates**: Updating packages without API changes
+
+### Examples
+
+**true - needs subjective review:**
+```markdown
+- **Requires UX/DX Review**: true
+# Task: Create new CLI command for user authentication
+# Reason: Users will interact with this command directly
+```
+
+**false - objective quality sufficient:**
+```markdown
+- **Requires UX/DX Review**: false
+# Task: Optimize database query performance
+# Reason: Internal change, no user-facing impact
+```
+
+---
+
 ## NAMING CONVENTIONS
 
 | Element | Convention | Example |
@@ -419,6 +503,154 @@ Phase 3 (Testing):
 - Type check, lint, test, build as appropriate
 - Specific test patterns to run
 - **NEVER use bare `python`, `pytest`, `npm`** - always use project environment
+
+---
+
+## SPECS LAYER (L/XL Complexity)
+
+For features assessed as **L (Large)** or **XL (Extra Large)** complexity, consider creating a specs layer to document complex topics in depth.
+
+### When to Create Specs
+
+| Complexity | Tasks | Specs Needed? |
+|------------|-------|---------------|
+| S (Small) | 1-2 | No |
+| M (Medium) | 3-5 | No |
+| L (Large) | 6-10 | Consider for complex topics |
+| XL (Extra Large) | 10+ | Yes, for each major concern |
+
+### Decision Criteria
+
+Create specs when the feature involves:
+- Complex data models requiring detailed schema documentation
+- API contracts with multiple endpoints and edge cases
+- Architectural decisions with significant trade-offs
+- Integration points with external systems
+- Security considerations requiring detailed analysis
+- Performance requirements needing benchmarks
+
+### Specs Directory Structure
+
+```
+tasks/{feature}/
+├── MASTER_PLAN.md
+├── specs/                    # Specs layer (L/XL only)
+│   ├── data-model.md         # Data structures and relationships
+│   ├── api-contract.md       # API endpoints and contracts
+│   ├── architecture.md       # Architectural decisions
+│   ├── security.md           # Security considerations
+│   └── performance.md        # Performance requirements
+├── 01-{task}.md
+├── 02-{task}.md
+└── ...
+```
+
+### Spec File Template
+
+```markdown
+# {Topic} Specification
+
+## Overview
+{Brief description of what this spec covers}
+
+## Status
+- [ ] Draft
+- [ ] Review
+- [x] Approved
+
+## Context
+{Why this spec exists, what problem it solves}
+
+## Specification
+
+### {Section 1}
+{Detailed specification}
+
+### {Section 2}
+{Detailed specification}
+
+## Examples
+
+### Example 1: {Name}
+```{language}
+{Concrete example}
+```
+
+## Decisions
+
+| Decision | Options Considered | Choice | Rationale |
+|----------|-------------------|--------|-----------|
+| {Decision} | {Options} | {Choice} | {Why} |
+
+## Open Questions
+- [ ] {Question 1}
+- [ ] {Question 2}
+
+## References
+- {Link to related documentation}
+- {Link to related task files}
+```
+
+### Linking Specs to Tasks
+
+Task files should reference relevant specs:
+
+```markdown
+## Context
+{Why this task exists}
+
+**Related Specs**:
+- `specs/data-model.md` - See "User Entity" section
+- `specs/api-contract.md` - See "POST /users" endpoint
+```
+
+### Spec Topics by Domain
+
+| Domain | Common Spec Topics |
+|--------|-------------------|
+| Backend API | data-model, api-contract, authentication, error-handling |
+| Frontend | component-hierarchy, state-management, routing, styling |
+| Infrastructure | deployment, scaling, monitoring, security |
+| Data Pipeline | schema, transformations, validation, error-recovery |
+
+### Complexity Assessment Update
+
+When assessing complexity in Stage 2 (Analysis), add specs consideration:
+
+```markdown
+### Complexity Assessment
+- Files affected: [estimate]
+- Dependencies: [list]
+- Risks: [potential blockers]
+- Estimated effort: [S/M/L/XL]
+- **Specs needed**: [Yes/No - list topics if Yes]
+```
+
+### Creating Specs During Planning
+
+If specs are needed, create them in Stage 4 (File Creation) before task files:
+
+1. Create `tasks/{feature}/specs/` directory
+2. Create spec files for each identified topic
+3. Reference specs in relevant task files
+4. Update MASTER_PLAN.md to list specs
+
+### MASTER_PLAN.md Specs Section
+
+Add to MASTER_PLAN.md when specs exist:
+
+```markdown
+---
+
+## Specifications
+
+| Spec | Status | Description |
+|------|--------|-------------|
+| `specs/data-model.md` | Approved | User and account data structures |
+| `specs/api-contract.md` | Draft | REST API endpoints |
+
+**Note**: Review specs before starting related tasks.
+```
 
 ---
 
@@ -615,6 +847,227 @@ Related to: [original task IDs if applicable]
 User request: "[original user request that triggered this]"
 
 [Rest of standard template...]
+```
+
+---
+
+## LEARNING MODE
+
+When invoked with `**MODE**: LEARNING`, the task-planner operates in reflection mode. There are two triggers:
+
+| Trigger | When Invoked | Purpose |
+|---------|--------------|---------|
+| FAILURE_ANALYSIS | Quality gate fails | Analyze root cause BEFORE fixing |
+| SUCCESS_EXTRACTION | All gates pass | Extract learnings for future tasks |
+
+### Invocation Format
+
+```markdown
+**TASK**: [Description]
+**MODE**: LEARNING
+**TRIGGER**: FAILURE_ANALYSIS | SUCCESS_EXTRACTION
+[Additional context based on trigger]
+```
+
+### FAILURE_ANALYSIS Mode
+
+**Purpose**: Analyze why a quality gate failed BEFORE any fix is attempted.
+
+**When Invoked**: 
+- 4b (code-quality) returns FAIL
+- 4c (ux-dx-quality) returns FAIL
+
+**Input Context**:
+```markdown
+**TASK**: Analyze quality gate failure
+**MODE**: LEARNING
+**TRIGGER**: FAILURE_ANALYSIS
+**FAILED GATE**: [4b objective / 4c subjective]
+**ITERATION**: [current iteration number, max 3]
+
+**FAILURE DETAILS**:
+- What failed: [specific test/build/criteria]
+- Error message: [exact error]
+- Files involved: [list]
+- Previous fix attempts: [if iteration > 1]
+```
+
+**Questions to Answer**:
+1. What is the root cause of this failure?
+2. Is the task definition correct, or does it need updating?
+3. Was there missing context that caused the failure?
+4. What should the fix approach be?
+5. If this is iteration > 1, why did the previous fix not work?
+
+**Output Format**:
+```markdown
+## Failure Analysis
+
+**Failed Gate**: [4b/4c]
+**Iteration**: [N] of 3
+
+### Root Cause
+[Clear explanation of why the failure occurred]
+
+### Task Definition Assessment
+- **Is task definition correct?**: Yes / No
+- **Updates needed**: [None / List of updates]
+- **Task file updated**: Yes / No
+
+### Missing Context
+[Any context that was missing that contributed to failure]
+
+### Recommended Fix Approach
+[Specific, actionable fix instructions]
+
+### Fix Instructions for code-implementer
+```
+**TASK**: Fix implementation based on failure analysis
+
+**ROOT CAUSE**: [from above]
+
+**SPECIFIC CHANGES REQUIRED**:
+1. [Change 1]
+2. [Change 2]
+
+**FILES TO MODIFY**:
+- [file]: [what to change]
+
+**MUST ADDRESS**: [root cause, not symptoms]
+```
+
+### If Task File Updated
+[Summary of changes made to task file]
+```
+
+**Constraints**:
+- MUST identify root cause, not just symptoms
+- MUST provide actionable fix instructions
+- MAY update task file if definition was wrong
+- MUST note if this is a repeated failure pattern
+
+### SUCCESS_EXTRACTION Mode
+
+**Purpose**: Extract learnings from successful task completion for future reference.
+
+**When Invoked**: 
+- After ALL quality gates pass (4b mandatory, 4c if required)
+- Before updating master plan (step 4d in validation flow)
+
+**Input Context**:
+```markdown
+**TASK**: Extract learnings from successful task completion
+**MODE**: LEARNING
+**TRIGGER**: SUCCESS_EXTRACTION
+**COMPLETED TASK**: `tasks/[feature]/[NN-task-name].md`
+
+**IMPLEMENTATION SUMMARY**:
+- Files created/modified: [list]
+- Approach taken: [summary]
+- Actual effort vs estimated: [comparison]
+- Iterations needed: [count, 0 if no failures]
+- Failures encountered: [brief summary if any]
+```
+
+**Questions to Answer**:
+1. What reusable components were created?
+2. What patterns were discovered?
+3. Do any future tasks need updating based on learnings?
+4. Were estimates accurate?
+5. If failures occurred, what could have prevented them?
+
+**Output Format**:
+```markdown
+## Success Learnings
+
+**Completed Task**: [task ID and name]
+**Actual Effort**: [time] vs Estimated: [time]
+**Iterations**: [N] (0 = first attempt success)
+
+### Reusable Components Created
+| Component | Location | Purpose | When to Reuse |
+|-----------|----------|---------|---------------|
+| [name] | `[path]` | [what it does] | [scenarios] |
+
+### Patterns Discovered
+- **[Pattern name]**: [Description and when to apply]
+
+### Future Task Updates
+| Task | Update | Reason |
+|------|--------|--------|
+| [task-NN] | [change] | [why] |
+
+### Estimate Accuracy
+- **Estimated**: [X]
+- **Actual**: [Y]
+- **Variance**: [over/under by Z]
+- **Reason for variance**: [explanation]
+
+### Failure Prevention (if iterations > 0)
+[What could have caught these issues earlier?]
+- [Suggestion 1]
+- [Suggestion 2]
+
+### Learnings Log Entry (for MASTER_PLAN.md)
+```markdown
+### From Task [NN]: [Task Name]
+**Date**: [YYYY-MM-DD]
+**Effort**: [actual] vs [estimated]
+**Iterations**: [N]
+
+**Key Learnings**:
+- [Learning 1]
+- [Learning 2]
+
+**Reusable Components**:
+- `[path]`: [description]
+```
+```
+
+**Constraints**:
+- MUST document reusable components if any created
+- MUST assess estimate accuracy
+- MUST update future tasks if learnings affect them
+- MUST provide learnings log entry for MASTER_PLAN.md
+- SHOULD note failure prevention insights if iterations > 0
+
+### Learning Mode Constraints
+
+1. **NEVER change completed task status** - `[x]` stays `[x]`
+2. **ALWAYS preserve task history** - Don't delete, only add/update
+3. **ALWAYS document reasoning** - Explain why changes were made
+4. **ALWAYS update progress counts** - If tasks added/removed
+5. **PREFER minimal changes** - Only update what's necessary
+6. **FAILURE_ANALYSIS must precede fixes** - Never skip analysis
+7. **SUCCESS_EXTRACTION only after ALL gates pass** - Not after partial success
+
+### Reusable Component Documentation
+
+When a reusable component is identified in SUCCESS_EXTRACTION, document it:
+
+```markdown
+### Reusable Component: [Name]
+
+**Location**: `[file path]`
+**Created in**: Task [NN]
+**Type**: [Function | Class | Pattern | Configuration | Template]
+
+**Purpose**: [What it does]
+
+**Usage**:
+```[language]
+// How to use it
+```
+
+**When to Use**:
+- [Scenario 1]
+- [Scenario 2]
+
+**When NOT to Use**:
+- [Anti-pattern or limitation]
+
+**Dependencies**:
+- [Required imports/setup]
 ```
 
 ---
