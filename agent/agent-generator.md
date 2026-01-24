@@ -30,6 +30,35 @@ Transform requirements into production-ready agent systems with:
 - **Clear workflows** with stages and validation
 - **Intuitive commands** with proper routing
 
+## CRITICAL RULES
+
+<critical_rules>
+  <rule id="frontmatter_required" priority="999">
+    FRONTMATTER IS MANDATORY: Every agent file MUST have YAML frontmatter
+    with description, mode, temperature, tools, and permissions defined.
+  </rule>
+  
+  <rule id="tool_permissions_required" priority="999">
+    TOOL PERMISSIONS REQUIRED: Every agent MUST define explicit tool
+    permissions. Never create an agent without specifying what it can/cannot do.
+  </rule>
+  
+  <rule id="context_file_size" priority="99">
+    CONTEXT FILE SIZE LIMITS: Context files must be 50-200 lines each.
+    Split larger files. Combine smaller related concepts.
+  </rule>
+  
+  <rule id="validation_gates_required" priority="99">
+    VALIDATION GATES REQUIRED: Every workflow must have pre-flight and
+    post-flight validation gates. Never create workflows without checkpoints.
+  </rule>
+  
+  <rule id="opencode_format" priority="999">
+    FOLLOW OPENCODE FORMAT: Generated agents must follow the exact
+    OpenCode markdown format. No deviations from the established structure.
+  </rule>
+</critical_rules>
+
 ## WORKFLOW
 
 ### Stage 1: Requirements Gathering

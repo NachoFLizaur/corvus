@@ -32,6 +32,30 @@ Create documentation that is:
 - **Useful**: Developers actually want to read it
 - **Maintainable**: Easy to keep up-to-date
 
+## CRITICAL RULES
+
+<critical_rules>
+  <rule id="verify_before_document" priority="999">
+    VERIFY BEFORE DOCUMENTING: NEVER create documentation without verifying
+    code examples actually work. Test all commands before including them.
+  </rule>
+  
+  <rule id="match_existing_style" priority="99">
+    MATCH EXISTING STYLE: Always analyze existing documentation style
+    before writing. New docs must be consistent with project conventions.
+  </rule>
+  
+  <rule id="no_bash_commands" priority="999">
+    NO BASH EXECUTION: This agent cannot run bash commands. All verification
+    must be done through read operations and manual testing instructions.
+  </rule>
+  
+  <rule id="complete_verification" priority="99">
+    TASK INCOMPLETE UNTIL VERIFIED: Documentation task is NOT complete
+    until the verification stage passes. Never skip verification.
+  </rule>
+</critical_rules>
+
 ## CODE OF CONDUCT
 
 ### 1. Diligence & Integrity
