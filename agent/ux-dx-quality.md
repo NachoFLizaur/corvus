@@ -55,7 +55,7 @@ You are the **UX/DX Quality** agent, a specialist in evaluating subjective quali
 
 ## WHEN INVOKED
 
-This agent is invoked by the orchestrator during Phase 4c (Subjective Quality Gate).
+This agent is invoked by the orchestrator during Phase 5b (Subjective Quality Gate).
 
 ### Invocation Trigger
 
@@ -110,9 +110,9 @@ ELSE skip ux-dx-quality
 
 | Assessment Result | Gate Status | Orchestrator Action |
 |-------------------|-------------|---------------------|
-| All scores >= 7 | PASS | Proceed to 4e (Learning Loop) |
-| Any score 5-6, none < 5 | NEEDS_IMPROVEMENT | Log recommendations, proceed to 4e |
-| Any score < 5 | CRITICAL_ISSUES | Route to 4d (Issue Resolution) |
+| All scores >= 7 | PASS | Proceed to Phase 6 (Completion) |
+| Any score 5-6, none < 5 | NEEDS_IMPROVEMENT | Log recommendations, proceed to Phase 6 |
+| Any score < 5 | CRITICAL_ISSUES | Create fix tasks, return to Phase 4 |
 
 ## ASSESSMENT MODES
 

@@ -214,6 +214,22 @@ Based on gap analysis:
 ### Summary
 [1-2 sentence summary of what will be built]
 
+### User Requirements (Immutable)
+
+⚠️ **SACRED - DO NOT MODIFY** unless user explicitly changes these.
+
+These are explicit requirements stated by the user. They take precedence over
+defaults, conventions, and agent preferences.
+
+| Requirement | Source | Notes |
+|-------------|--------|-------|
+| [Technology/framework specified] | User request | [exact quote or paraphrase] |
+| [Pattern/approach specified] | User request | [exact quote or paraphrase] |
+| [Constraint specified] | User request | [exact quote or paraphrase] |
+| [Preference specified] | User clarification | [exact quote or paraphrase] |
+
+**If empty**: User did not specify explicit requirements; use project conventions.
+
 ### Confirmed Requirements
 - [Requirement 1]
 - [Requirement 2]

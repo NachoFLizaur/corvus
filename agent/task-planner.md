@@ -73,6 +73,17 @@ Transform complex, multi-step work into:
     EFFORT ESTIMATES REQUIRED: Every task and phase MUST have effort
     estimates. Plans without time estimates are incomplete.
   </rule>
+  
+  <rule id="user_requirements_sacred" priority="9999">
+    USER REQUIREMENTS ARE SACRED: When the orchestrator provides "User Requirements"
+    from requirements-analyst, these MUST be incorporated into task files.
+    
+    - Task files MUST reference user requirements in their Context section
+    - Implementation steps MUST align with user-specified technologies/patterns
+    - NEVER substitute user requirements with alternatives unless explicitly approved
+    - If a user requirement conflicts with best practices, document the conflict
+      but still follow the user requirement
+  </rule>
 </critical_rules>
 
 ---
@@ -170,6 +181,31 @@ tasks/{feature}/
 ├── 02-{task-name}.md     # Second task
 └── ...
 ```
+
+---
+
+## PARALLEL FILE GENERATION
+
+<parallel_writes priority="high">
+  After completing analysis and determining ALL task content,
+  issue ALL Write tool calls in a SINGLE response:
+  
+  DO:
+  - Analyze feature completely FIRST
+  - Determine ALL task files and their full content
+  - Write ALL files in ONE response (parallel writes):
+    - MASTER_PLAN.md
+    - 01-task.md
+    - 02-task.md
+    - ...
+  
+  DO NOT:
+  - Write files one at a time sequentially
+  - Write a file, wait for confirmation, then write the next
+  - Split file creation across multiple responses
+  
+  WHY: Parallel writes reduce round-trips and improve efficiency.
+</parallel_writes>
 
 ---
 
