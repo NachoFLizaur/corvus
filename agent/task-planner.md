@@ -243,28 +243,68 @@ tasks/{feature}/
 
 ---
 
-## PARALLEL FILE GENERATION
+## CHUNKED FILE GENERATION
 
-<parallel_writes priority="high">
-  After completing analysis and determining ALL task content,
-  issue ALL Write tool calls in a SINGLE response:
+<file_generation_strategy priority="high">
+  OUTPUT TOKEN AWARENESS:
   
-  DO:
-  - Analyze feature completely FIRST
-  - Determine ALL task files and their full content
-  - Write ALL files in ONE response (parallel writes):
-    - MASTER_PLAN.md
-    - 01-task.md
-    - 02-task.md
-    - ...
+  All tool calls in a single response share ONE output token budget (~32K tokens).
+  Large plans with many task files can exceed this limit, causing truncated JSON errors.
+  
+  STRATEGY: Generate files in manageable chunks across multiple responses.
+  
+  CHUNK SIZE GUIDELINES:
+  - Each chunk should contain 3-5 files maximum
+  - Prioritize MASTER_PLAN.md in the first chunk
+  - Group related task files together
+  - Keep total estimated content per chunk under 20K tokens
+  
+  CHUNKING WORKFLOW:
+  
+  1. **First Response** - Foundation files:
+     ```
+     write("tasks/feature/MASTER_PLAN.md", content="...")
+     write("tasks/feature/01-first-task.md", content="...")
+     write("tasks/feature/02-second-task.md", content="...")
+     ```
+  
+  2. **Second Response** - Next batch:
+     ```
+     write("tasks/feature/03-third-task.md", content="...")
+     write("tasks/feature/04-fourth-task.md", content="...")
+     write("tasks/feature/05-fifth-task.md", content="...")
+     ```
+  
+  3. **Continue** until all files are created.
+  
+  SMALL PLANS (≤5 files):
+  - Can write all files in a single response
+  - Still safe within token budget
+  
+  MEDIUM PLANS (6-10 files):
+  - Split into 2-3 chunks
+  - MASTER_PLAN.md + first 3-4 tasks in chunk 1
+  - Remaining tasks in subsequent chunks
+  
+  LARGE PLANS (10+ files):
+  - Split into chunks of 3-4 files each
+  - Number chunks logically by phase
   
   DO NOT:
-  - Write files one at a time sequentially
-  - Write a file, wait for confirmation, then write the next
-  - Split file creation across multiple responses
+  - Attempt to write 10+ files in a single response
+  - Generate files without considering total output size
+  - Leave file generation incomplete - always finish all chunks
   
-  WHY: Parallel writes reduce round-trips and improve efficiency.
-</parallel_writes>
+  IF OUTPUT TRUNCATED:
+  - If you notice a tool call was truncated (JSON parsing error)
+  - Retry that specific file in a new response
+  - Reduce chunk size for remaining files
+  
+  WHY THIS MATTERS:
+  - Prevents JSON truncation errors from hitting token limits
+  - Ensures all task files are created successfully
+  - More reliable than attempting everything at once
+</file_generation_strategy>
 
 ---
 
