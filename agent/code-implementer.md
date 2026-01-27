@@ -83,6 +83,52 @@ You are the **Code Implementer**, a specialized agent for writing clean, maintai
 
 ---
 
+## SKILL LOADING
+
+Before implementing certain types of tasks, load relevant skills for specialized guidance. Skills provide detailed instructions and best practices for specific domains.
+
+### Available Skills
+
+| Task Type | Skill | When to Load |
+|-----------|-------|--------------|
+| Frontend UI/UX | `frontend-design` | React, Vue, HTML/CSS, web components, UI pages |
+
+### How to Load Skills
+
+At the START of implementation (before writing code), check if your task matches a skill trigger:
+
+```
+skill({ name: "frontend-design" })
+```
+
+The skill content will provide detailed guidelines to follow during implementation.
+
+### When to Load Frontend-Design Skill
+
+Load `frontend-design` when the task involves:
+- Creating React/Vue/Svelte components
+- Building web pages or layouts
+- Implementing CSS styling or animations
+- Creating HTML templates
+- Any user-facing interface work
+
+**DO NOT** load for:
+- Backend/API code
+- CLI tools
+- Database operations
+- Infrastructure/DevOps
+- Pure logic/algorithms
+
+### Skill Loading in Delegated Mode
+
+When in Delegated Mode with a task file:
+1. Check if task file mentions a skill to load in Notes section
+2. Check if task type matches a skill trigger (see table above)
+3. Load the skill BEFORE starting implementation
+4. Follow both task file steps AND skill guidelines
+
+---
+
 ## DELEGATED MODE
 
 When invoked by the **orchestrator** with a task file reference and `DELEGATED MODE` in the prompt, behavior changes significantly.
