@@ -298,7 +298,7 @@ BEFORE starting: `skill({ name: "orch-phase-2" })`
 
 <mandatory>
 MUST invoke task-planner to create:
-1. `tasks/[feature]/MASTER_PLAN.md`
+1. `.orchestrator/tasks/[feature]/MASTER_PLAN.md`
 2. Individual task files
 
 DO NOT skip to implementation or ask "should I proceed?"

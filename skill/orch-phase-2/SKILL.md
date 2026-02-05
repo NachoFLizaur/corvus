@@ -9,7 +9,7 @@ description: Planning (Phase 2) and User Approval (Phase 3)
 
 <mandatory>
 This phase is NOT optional. You MUST invoke the task-planner subagent to create:
-1. `tasks/[feature-name]/MASTER_PLAN.md` - The execution tracking document
+1. `.orchestrator/tasks/[feature-name]/MASTER_PLAN.md` - The execution tracking document
 2. Individual task files with detailed implementation steps
 
 DO NOT:
@@ -30,8 +30,8 @@ Invoke **task-planner** with combined context from Phase 1:
 **TASK**: Create master plan for [feature description]
 
 **EXPECTED OUTCOME**:
-- Master plan document at `tasks/[feature-name]/MASTER_PLAN.md`
-- Individual task files at `tasks/[feature-name]/NN-task-name.md`
+- Master plan document at `.orchestrator/tasks/[feature-name]/MASTER_PLAN.md`
+- Individual task files at `.orchestrator/tasks/[feature-name]/NN-task-name.md`
 
 **USER REQUIREMENTS (IMMUTABLE)**:
 [Paste the "User Requirements (Immutable)" section from requirements-analyst output]
@@ -85,8 +85,8 @@ Invoke **task-planner** with combined context from Phase 1:
 
 **Prerequisites** (verify before proceeding):
 - [ ] Phase 2 is complete
-- [ ] `tasks/[feature]/MASTER_PLAN.md` file exists
-- [ ] Individual task files exist in `tasks/[feature]/`
+- [ ] `.orchestrator/tasks/[feature]/MASTER_PLAN.md` file exists
+- [ ] Individual task files exist in `.orchestrator/tasks/[feature]/`
 
 If prerequisites are NOT met, go back to Phase 2 and invoke task-planner.
 
@@ -120,7 +120,7 @@ Present the created plan to the user in this format:
 - [Risk 2] - [Mitigation]
 
 ### Master Plan Location
-`tasks/[feature-name]/MASTER_PLAN.md`
+`.orchestrator/tasks/[feature-name]/MASTER_PLAN.md`
 
 ---
 

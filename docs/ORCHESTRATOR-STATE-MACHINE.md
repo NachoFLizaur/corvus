@@ -95,7 +95,7 @@ stateDiagram-v2
 
 | From | To | Condition |
 |------|-----|-----------|
-| Phase 2 | Phase 3 | MASTER_PLAN.md exists AND task files created |
+| Phase 2 | Phase 3 | MASTER_PLAN.md exists in .orchestrator/tasks/ AND task files created |
 | Phase 3 | Phase 4 | User approves plan |
 | Phase 3 | Phase 2 | User requests changes to plan |
 
@@ -550,7 +550,7 @@ flowchart TD
 ```mermaid
 flowchart TD
     A[5a or 5b FAIL] --> B[Create fix tasks]
-    B --> C[Add to MASTER_PLAN.md as new phase]
+    B --> C[Add to MASTER_PLAN.md in .orchestrator/tasks/ as new phase]
     C --> D[Return to Phase 4]
     D --> E[Execute fix phase]
     E --> F[Return to Phase 5]

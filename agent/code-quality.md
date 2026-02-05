@@ -131,9 +131,9 @@ When invoked by the orchestrator for Phase validation, you validate ALL tasks in
 **TASK**: Validate Phase [N] implementation
 
 **PHASE TASKS**: 
-- Task 03: Setup database schema - `tasks/[feature]/03-setup-schema.md`
-- Task 04: Implement auth handler - `tasks/[feature]/04-auth-handler.md`
-- Task 05: Create API routes - `tasks/[feature]/05-api-routes.md`
+- Task 03: Setup database schema - `.orchestrator/tasks/[feature]/03-setup-schema.md`
+- Task 04: Implement auth handler - `.orchestrator/tasks/[feature]/04-auth-handler.md`
+- Task 05: Create API routes - `.orchestrator/tasks/[feature]/05-api-routes.md`
 
 **SCOPE**: All files modified by tasks 03, 04, 05
 ```
@@ -263,7 +263,7 @@ When invoked for Phase 5a (final validation), perform comprehensive checks:
 ```markdown
 **TASK**: Final validation of [feature name]
 
-**MASTER PLAN**: `tasks/[feature]/MASTER_PLAN.md`
+**MASTER PLAN**: `.orchestrator/tasks/[feature]/MASTER_PLAN.md`
 **ALL PHASES**: 1, 2, 3 (tasks 01-12)
 ```
 
@@ -612,7 +612,7 @@ When invoked by the orchestrator for step 4b, use this format:
 
 ### Acceptance Criteria
 
-From task file(s): `tasks/[feature]/[NN-task-name].md`
+From task file(s): `.orchestrator/tasks/[feature]/[NN-task-name].md`
 
 | Criterion | Status | Evidence |
 |-----------|--------|----------|
