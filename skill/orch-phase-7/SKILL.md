@@ -52,7 +52,7 @@ For small, clearly-scoped changes (< 3 files) to the just-completed work:
    ```markdown
    **TASK**: Update existing master plan with follow-up task
    
-   **MASTER PLAN**: `tasks/[feature]/MASTER_PLAN.md`
+   **MASTER PLAN**: `.orchestrator/tasks/[feature]/MASTER_PLAN.md`
    
    **NEW TASK TO ADD**:
    - Description: [what needs to be done]
@@ -70,10 +70,10 @@ For small, clearly-scoped changes (< 3 files) to the just-completed work:
    ```markdown
    **TASK**: [description of the fix/change]
    
-   **TASK FILE**: `tasks/[feature]/[NN-task].md` (if created)
+   **TASK FILE**: `.orchestrator/tasks/[feature]/[NN-task].md` (if created)
    
    **CONTEXT**:
-   - Follow-up to: `tasks/[feature]/MASTER_PLAN.md`
+   - Follow-up to: `.orchestrator/tasks/[feature]/MASTER_PLAN.md`
    - Related to task(s): [list if applicable]
    
    **DELEGATED MODE**: Yes (continuation of approved work)
@@ -106,7 +106,7 @@ For unrelated work:
 
 1. Acknowledge the previous work is complete
 2. Start fresh from Phase 0 with the new feature
-3. Create new `tasks/[new-feature]/` directory
+3. Create new `.orchestrator/tasks/[new-feature]/` directory
 4. Follow complete workflow
 
 ### Key Principles for Follow-ups

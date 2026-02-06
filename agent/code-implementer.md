@@ -199,7 +199,7 @@ If an error is truly blocking (cannot continue):
 ```markdown
 ## Task Complete (Delegated Mode)
 
-**Task File**: `tasks/[feature]/[NN-task-name].md`
+**Task File**: `.orchestrator/tasks/[feature]/[NN-task-name].md`
 **Status**: Complete / Partial (with explanation)
 
 ### Files Changed

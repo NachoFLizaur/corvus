@@ -75,8 +75,8 @@ Present final summary to user:
 - [x] All acceptance criteria met
 
 ### Task Documentation
-- Master plan: `tasks/[feature]/MASTER_PLAN.md`
-- Task files: `tasks/[feature]/*.md`
+- Master plan: `.orchestrator/tasks/[feature]/MASTER_PLAN.md`
+- Task files: `.orchestrator/tasks/[feature]/*.md`
 
 ### Follow-up Suggestions (optional)
 - [Suggestion 1]
