@@ -2,40 +2,43 @@
 
 Custom agents, commands, and MCP servers for [OpenCode](https://opencode.ai).
 
-## Installation
+## About Corvus
 
-Copy to your OpenCode config directory:
+> *In Norse mythology, Odin's ravens Huginn (thought) and Muninn (memory) fly across the world each day, gathering information and reporting back. Corvus works the same way — sending specialized agents out to research, explore, implement, and validate, then synthesizing their findings into a coherent whole.*
 
-```bash
-cp -r agent/ ~/.config/opencode/agent/
-cp -r command/ ~/.config/opencode/command/
-cp -r skill/ ~/.config/opencode/skill/
-cp AGENTS.md ~/.config/opencode/
-```
+## What Corvus Does
 
-Or symlink for easy updates:
+One agent to drive your entire workflow. Describe what you need, and Corvus handles the rest — clarifying requirements, exploring the codebase, planning, implementing, testing, and validating.
 
-```bash
-ln -s $(pwd)/agent ~/.config/opencode/agent
-ln -s $(pwd)/command ~/.config/opencode/command
-ln -s $(pwd)/skill ~/.config/opencode/skill
-```
+- **Single point of entry** — no need to pick the right agent or remember who does what
+- **Full lifecycle management** — from requirements through implementation to validation
+- **Context across phases** — maintains coherence across a complex, multi-step task
+- **Quality gates at every boundary** — objective and subjective validation before moving on
 
 ## Usage
 
-Invoke agents via `@` mentions:
+Have a complex task in mind? Tell `@corvus` what you need. It handles clarification, planning, implementation, and validation automatically.
 
 ```
-@code-explorer find all authentication files
-@researcher how does JWT refresh rotation work?
-@code-implementer add validation to the login endpoint
-@code-quality write tests for the auth module
+@corvus add a dark mode toggle with tests
+@corvus refactor the payment module to use the new API
 ```
 
-## Agents
+Need something quick? Talk to `@corvus` directly, it'll know which specialists to involve:
+
+```
+@corvus find all auth files
+@corvus review the login endpoint
+@corvus how does JWT refresh rotation work?
+```
+
+## The Agent System
+
+Corvus coordinates a team of specialized agents. Each handles a specific domain.
 
 | Agent | Purpose |
 |-------|---------|
+| `@corvus` | **Coordinator** — orchestrates complex multi-step workflows |
 | `@code-explorer` | Find files, understand architecture, discover patterns |
 | `@code-implementer` | Write production code with plan-approve workflow |
 | `@code-quality` | Test, review, validate, security audit |
@@ -44,22 +47,12 @@ Invoke agents via `@` mentions:
 | `@researcher` | Technical questions, best practices |
 | `@agent-generator` | Create new custom agents |
 | `@media-processor` | Analyze images, PDFs, diagrams |
-| `@orchestrator` | Orchestrate complex multi-step workflows |
 | `@requirements-analyst` | Analyze requests, identify gaps, clarify requirements |
 | `@ux-dx-quality` | Subjective quality: UX, DX, docs, architecture |
 
-## Commands
+## How Corvus Works
 
-| Command | Purpose |
-|---------|---------|
-| `/cleanup-subagents` | Clean up subagent sessions |
-| `/git-commit` | Smart git commit with conventional commit message generation |
-| `/readme` | Analyze commits and update README with relevant changes |
-| `/summary` | Generate summary of current conversation for portability |
-
-## Orchestrator Workflow
-
-The `@orchestrator` agent coordinates complex multi-step tasks through a structured workflow optimized for efficiency:
+Under the hood, Corvus follows a structured multi-phase workflow:
 
 ```
 User Request
@@ -103,25 +96,45 @@ Key features:
 - **Failure attribution**: Quality gate identifies exactly which task(s) failed
 - **Learning loops**: Analyze failures before fixing, extract learnings after success
 
-> 📖 **Detailed Documentation**: See [docs/ORCHESTRATOR-STATE-MACHINE.md](./docs/ORCHESTRATOR-STATE-MACHINE.md) for complete state machine diagrams, parallel execution rules, and constraint tables.
+> 📖 **Detailed Documentation**: See [docs/CORVUS-STATE-MACHINE.md](./docs/CORVUS-STATE-MACHINE.md) for complete state machine diagrams, parallel execution rules, and constraint tables.
 
-## Orchestrator Skills
+## Commands
 
-The orchestrator uses **on-demand skill loading** to minimize initial context size:
+| Command | Purpose |
+|---------|---------|
+| `/cleanup-subagents` | Clean up subagent sessions |
+| `/git-commit` | Smart git commit with conventional commit message generation |
+| `/readme` | Analyze commits and update README with relevant changes |
+| `/summary` | Generate summary of current conversation for portability |
 
-- **Skills are loaded per-phase**: Each orchestrator phase has a dedicated skill that's loaded only when entering that phase
+## Installation
+
+Copy to your OpenCode config directory:
+
+```bash
+cp -r agent/ ~/.config/opencode/agent/
+cp -r command/ ~/.config/opencode/command/
+cp -r skill/ ~/.config/opencode/skill/
+cp AGENTS.md ~/.config/opencode/
+```
+
+Or symlink for easy updates:
+
+```bash
+ln -s $(pwd)/agent ~/.config/opencode/agent
+ln -s $(pwd)/command ~/.config/opencode/command
+ln -s $(pwd)/skill ~/.config/opencode/skill
+```
+
+> Opencode Supported plugin in the works!
+
+## Corvus Skills
+
+Corvus uses **on-demand skill loading** to minimize initial context size:
+
+- **Skills are loaded per-phase**: Each Corvus phase has a dedicated skill that's loaded only when entering that phase
 - **Reduced initial prompt**: Initial context drops from ~16k tokens to ~3k tokens
 - **Better context utilization**: More room for actual task content and code
-
-Skills are stored in `skill/` and should be copied to `~/.config/opencode/skill/`. They include:
-- `orch-phase-0/` - Requirements analysis
-- `orch-phase-1/` - Discovery
-- `orch-phase-2/` - Planning + Approval
-- `orch-phase-4/` - Implementation loop
-- `orch-phase-5/` - Final validation
-- `orch-phase-6/` - Completion
-- `orch-phase-7/` - Follow-up triage
-- `orch-extras/` - Utilities
 
 ## Structure
 
@@ -129,19 +142,25 @@ Skills are stored in `skill/` and should be copied to `~/.config/opencode/skill/
 .
 ├── agent/              # Custom agent definitions
 ├── command/            # Custom slash commands
-├── skill/              # Orchestrator phase skills (loaded on-demand)
-│   ├── orch-phase-0/   # Requirements analysis
-│   ├── orch-phase-1/   # Discovery
-│   ├── orch-phase-2/   # Planning + Approval
-│   ├── orch-phase-4/   # Implementation loop
-│   ├── orch-phase-5/   # Final validation
-│   ├── orch-phase-6/   # Completion
-│   ├── orch-phase-7/   # Follow-up triage
-│   └── orch-extras/    # Utilities
+├── skill/              # Corvus phase skills (loaded on-demand)
+│   ├── corvus-phase-0/ # Requirements analysis
+│   ├── corvus-phase-1/ # Discovery
+│   ├── corvus-phase-2/ # Planning + Approval
+│   ├── corvus-phase-4/ # Implementation loop
+│   ├── corvus-phase-5/ # Final validation
+│   ├── corvus-phase-6/ # Completion
+│   ├── corvus-phase-7/ # Follow-up triage
+│   └── corvus-extras/  # Utilities
 ├── docs/               # Detailed documentation
-│   └── ORCHESTRATOR-STATE-MACHINE.md
+│   └── CORVUS-STATE-MACHINE.md
 ├── AGENTS.md           # Delegation guidelines for agents
 └── README.md
 ```
 
-See [AGENTS.md](./AGENTS.md) for delegation instructions and [docs/ORCHESTRATOR-STATE-MACHINE.md](./docs/ORCHESTRATOR-STATE-MACHINE.md) for detailed workflow documentation.
+See [AGENTS.md](./AGENTS.md) for delegation instructions and [docs/CORVUS-STATE-MACHINE.md](./docs/CORVUS-STATE-MACHINE.md) for detailed workflow documentation.
+
+---
+
+## License
+
+[MIT](LICENSE) © Nacho F. Lizaur
