@@ -1,4 +1,4 @@
-# OpenCode Features
+# Corvus — Multi-Agent Development Workflow
 
 Custom agents, commands, and MCP servers for [OpenCode](https://opencode.ai).
 
