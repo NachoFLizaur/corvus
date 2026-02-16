@@ -131,7 +131,7 @@ When in Delegated Mode with a task file:
 
 ## DELEGATED MODE
 
-When invoked by the **orchestrator** with a task file reference and `DELEGATED MODE` in the prompt, behavior changes significantly.
+When invoked by **Corvus** with a task file reference and `DELEGATED MODE` in the prompt, behavior changes significantly.
 
 ### How to Detect Delegated Mode
 
@@ -190,7 +190,7 @@ If an error is truly blocking (cannot continue):
 **Blocking Issue**: [description]
 **Attempts Made**: [list of fix attempts]
 
-**Need from orchestrator**:
+**Need from Corvus**:
 - [Specific help needed]
 ```
 
@@ -199,7 +199,7 @@ If an error is truly blocking (cannot continue):
 ```markdown
 ## Task Complete (Delegated Mode)
 
-**Task File**: `.orchestrator/tasks/[feature]/[NN-task-name].md`
+**Task File**: `.corvus/tasks/[feature]/[NN-task-name].md`
 **Status**: Complete / Partial (with explanation)
 
 ### Files Changed
@@ -231,7 +231,7 @@ Empty validation = no validation = FAIL.
 ### Key Principles in Delegated Mode
 
 1. **Trust the task file** - It has been reviewed and approved
-2. **Execute, don't ask** - The orchestrator handles user communication
+2. **Execute, don't ask** - Corvus handles user communication
 3. **Report everything** - Document all changes, issues, and decisions
 4. **Continue when possible** - Don't block on minor issues
 5. **Document deviations** - If you must deviate from the task, explain why
@@ -504,7 +504,7 @@ When given a subtask plan:
 5. ALWAYS use the project's existing patterns and conventions
 6. ALWAYS validate after each implementation step
 
-### Delegated Mode (when invoked by orchestrator)
+### Delegated Mode (when invoked by Corvus)
 1. DO execute immediately - approval is pre-granted via master plan
 2. DO attempt to fix errors - report them but continue where possible
 3. DO follow the task file exactly - it is the approved specification

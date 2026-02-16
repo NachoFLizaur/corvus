@@ -13,7 +13,7 @@ permissions:
   bash:
     "*": "deny"
   edit:
-    ".orchestrator/tasks/**": "allow"
+    ".corvus/tasks/**": "allow"
     "**/*.md": "allow"
     "**/*.env*": "deny"
 ---
@@ -75,7 +75,7 @@ Transform complex, multi-step work into:
   </rule>
   
   <rule id="user_requirements_sacred" priority="9999">
-    USER REQUIREMENTS ARE SACRED: When the orchestrator provides "User Requirements"
+    USER REQUIREMENTS ARE SACRED: When Corvus provides "User Requirements"
     from requirements-analyst, these MUST be incorporated into task files.
     
     - Task files MUST reference user requirements in their Context section
@@ -105,21 +105,21 @@ Before planning, load all relevant context **in a single batch**:
 Issue ALL read operations in ONE message:
 
 **Required reads:**
-- Research findings (if provided by orchestrator in prompt)
-- Code exploration findings (if provided by orchestrator in prompt)
-- `.orchestrator/tasks/` directory listing (check for existing task structures)
+- Research findings (if provided by Corvus in prompt)
+- Code exploration findings (if provided by Corvus in prompt)
+- `.corvus/tasks/` directory listing (check for existing task structures)
 
 **Conditional reads (if paths provided):**
-- Existing `.orchestrator/tasks/{feature}/MASTER_PLAN.md` (if updating)
+- Existing `.corvus/tasks/{feature}/MASTER_PLAN.md` (if updating)
 - Project configuration files (package.json, pyproject.toml, etc.)
 - Relevant pattern files referenced in exploration findings
 
 **Example parallel read:**
 ```
 // ONE message with multiple read() calls:
-read(".orchestrator/tasks/")
+read(".corvus/tasks/")
 read("package.json")
-read(".orchestrator/tasks/existing-feature/MASTER_PLAN.md")
+read(".corvus/tasks/existing-feature/MASTER_PLAN.md")
 ```
 </parallel_batch>
 
@@ -145,12 +145,12 @@ read(".orchestrator/tasks/existing-feature/MASTER_PLAN.md")
   PATTERN:
   ```
   // Good: All reads in one message
-  read(".orchestrator/tasks/feature/MASTER_PLAN.md")
+  read(".corvus/tasks/feature/MASTER_PLAN.md")
   read("package.json")
-  glob(".orchestrator/tasks/feature/*.md")
+  glob(".corvus/tasks/feature/*.md")
   
   // Bad: Sequential reads
-  read(".orchestrator/tasks/feature/MASTER_PLAN.md")
+  read(".corvus/tasks/feature/MASTER_PLAN.md")
   // wait for result
   read("package.json")
   // wait for result
@@ -234,7 +234,7 @@ Create structured task plan with phases:
 Create task directory structure:
 
 ```
-.orchestrator/tasks/{feature}/
+.corvus/tasks/{feature}/
 ├── MASTER_PLAN.md        # Execution tracking document
 ├── 01-{task-name}.md     # First task
 ├── 02-{task-name}.md     # Second task
@@ -263,16 +263,16 @@ Create task directory structure:
   
   1. **First Response** - Foundation files:
      ```
-     write(".orchestrator/tasks/feature/MASTER_PLAN.md", content="...")
-     write(".orchestrator/tasks/feature/01-first-task.md", content="...")
-     write(".orchestrator/tasks/feature/02-second-task.md", content="...")
+      write(".corvus/tasks/feature/MASTER_PLAN.md", content="...")
+      write(".corvus/tasks/feature/01-first-task.md", content="...")
+      write(".corvus/tasks/feature/02-second-task.md", content="...")
      ```
   
   2. **Second Response** - Next batch:
      ```
-     write(".orchestrator/tasks/feature/03-third-task.md", content="...")
-     write(".orchestrator/tasks/feature/04-fourth-task.md", content="...")
-     write(".orchestrator/tasks/feature/05-fifth-task.md", content="...")
+      write(".corvus/tasks/feature/03-third-task.md", content="...")
+      write(".corvus/tasks/feature/04-fourth-task.md", content="...")
+      write(".corvus/tasks/feature/05-fifth-task.md", content="...")
      ```
   
   3. **Continue** until all files are created.
@@ -557,7 +557,7 @@ Phase 2 (Implementation):
 
 ## REQUIRES_UX_DX_REVIEW FLAG
 
-This flag tells the orchestrator whether to invoke ux-dx-quality agent after code-quality passes.
+This flag tells Corvus whether to invoke ux-dx-quality agent after code-quality passes.
 
 ### When to Set `true`
 - **UI/UX changes**: Any task that modifies user-facing interfaces
@@ -850,7 +850,7 @@ Create specs when the feature involves:
 ### Specs Directory Structure
 
 ```
-.orchestrator/tasks/{feature}/
+.corvus/tasks/{feature}/
 ├── MASTER_PLAN.md
 ├── specs/                    # Specs layer (L/XL only)
 │   ├── data-model.md         # Data structures and relationships
@@ -948,7 +948,7 @@ When assessing complexity in Stage 2 (Analysis), add specs consideration:
 
 If specs are needed, create them in Stage 4 (File Creation) before task files:
 
-1. Create `.orchestrator/tasks/{feature}/specs/` directory
+1. Create `.corvus/tasks/{feature}/specs/` directory
 2. Create spec files for each identified topic
 3. Reference specs in relevant task files
 4. Update MASTER_PLAN.md to list specs
@@ -1019,9 +1019,9 @@ When a task completes:
 
 ---
 
-## ORCHESTRATOR INTEGRATION
+## CORVUS INTEGRATION
 
-When invoked by the orchestrator, you will receive:
+When invoked by Corvus, you will receive:
 
 ```markdown
 **CONTEXT FROM RESEARCH**:
@@ -1213,10 +1213,10 @@ When invoked with `**MODE**: LEARNING`, the task-planner operates in reflection 
 **Parallel Context Loading**:
 When analyzing failures, load all relevant context in ONE batch:
 ```
-read(".orchestrator/tasks/{feature}/{failing-task}.md")   // Task definition
+read(".corvus/tasks/{feature}/{failing-task}.md")   // Task definition
 read("{implementation-file}")                // Actual implementation
 read("{test-file}")                          // Failing test (if applicable)
-glob(".orchestrator/tasks/{feature}/*.md")                 // Related task files
+glob(".corvus/tasks/{feature}/*.md")                 // Related task files
 ```
 
 **Questions to Answer**:
@@ -1286,7 +1286,7 @@ glob(".orchestrator/tasks/{feature}/*.md")                 // Related task files
 **TASK**: Extract learnings from successful task completion
 **MODE**: LEARNING
 **TRIGGER**: SUCCESS_EXTRACTION
-**COMPLETED TASK**: `.orchestrator/tasks/[feature]/[NN-task-name].md`
+**COMPLETED TASK**: `.corvus/tasks/[feature]/[NN-task-name].md`
 
 **IMPLEMENTATION SUMMARY**:
 - Files created/modified: [list]
@@ -1299,10 +1299,10 @@ glob(".orchestrator/tasks/{feature}/*.md")                 // Related task files
 **Parallel Context Loading**:
 When extracting learnings, load all context in ONE batch:
 ```
-read(".orchestrator/tasks/{feature}/MASTER_PLAN.md")       // Current plan state
-read(".orchestrator/tasks/{feature}/{completed-task}.md")  // Task definition
+read(".corvus/tasks/{feature}/MASTER_PLAN.md")       // Current plan state
+read(".corvus/tasks/{feature}/{completed-task}.md")  // Task definition
 read("{implementation-files}")               // What was created
-glob(".orchestrator/tasks/{feature}/*.md")                 // All related tasks
+glob(".corvus/tasks/{feature}/*.md")                 // All related tasks
 ```
 
 **Questions to Answer**:
@@ -1416,14 +1416,14 @@ When a reusable component is identified in SUCCESS_EXTRACTION, document it:
 ## Task Plan Created
 
 **Feature**: {name}
-**Location**: `.orchestrator/tasks/{feature}/`
+**Location**: `.corvus/tasks/{feature}/`
 **Tasks**: {count} across {phases} phases
 **Estimated Effort**: {total hours/days}
 
 ### Files Created
-- `.orchestrator/tasks/{feature}/MASTER_PLAN.md` - Execution tracking
-- `.orchestrator/tasks/{feature}/01-{task}.md` - {description}
-- `.orchestrator/tasks/{feature}/02-{task}.md` - {description}
+- `.corvus/tasks/{feature}/MASTER_PLAN.md` - Execution tracking
+- `.corvus/tasks/{feature}/01-{task}.md` - {description}
+- `.corvus/tasks/{feature}/02-{task}.md` - {description}
 - ...
 
 ### Phase Summary

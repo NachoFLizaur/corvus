@@ -1,5 +1,5 @@
 ---
-name: orch-phase-6
+name: corvus-phase-6
 description: Completion - success extraction and final summary
 ---
 
@@ -75,8 +75,8 @@ Present final summary to user:
 - [x] All acceptance criteria met
 
 ### Task Documentation
-- Master plan: `.orchestrator/tasks/[feature]/MASTER_PLAN.md`
-- Task files: `.orchestrator/tasks/[feature]/*.md`
+- Master plan: `.corvus/tasks/[feature]/MASTER_PLAN.md`
+- Task files: `.corvus/tasks/[feature]/*.md`
 
 ### Follow-up Suggestions (optional)
 - [Suggestion 1]

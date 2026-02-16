@@ -55,11 +55,11 @@ You are the **UX/DX Quality** agent, a specialist in evaluating subjective quali
 
 ## WHEN INVOKED
 
-This agent is invoked by the orchestrator during Phase 5b (Subjective Quality Gate).
+This agent is invoked by Corvus during Phase 5b (Subjective Quality Gate).
 
 ### Invocation Trigger
 
-The orchestrator checks the task file's Meta section for:
+Corvus checks the task file's Meta section for:
 ```markdown
 - **Requires UX/DX Review**: true/false
 ```
@@ -92,7 +92,7 @@ The orchestrator checks the task file's Meta section for:
 
 ### Heuristic for Missing Flag
 
-If the task file doesn't have the `requires_ux_dx_review` field, the orchestrator uses these heuristics:
+If the task file doesn't have the `requires_ux_dx_review` field, Corvus uses these heuristics:
 
 ```
 IF task involves ANY of:
@@ -108,7 +108,7 @@ ELSE skip ux-dx-quality
 
 ### Gate Status Mapping
 
-| Assessment Result | Gate Status | Orchestrator Action |
+| Assessment Result | Gate Status | Corvus Action |
 |-------------------|-------------|---------------------|
 | All scores >= 7 | PASS | Proceed to Phase 6 (Completion) |
 | Any score 5-6, none < 5 | NEEDS_IMPROVEMENT | Log recommendations, proceed to Phase 6 |

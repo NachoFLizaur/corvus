@@ -1,5 +1,5 @@
 ---
-name: orch-extras
+name: corvus-extras
 description: Extra utilities - subagent reference, todo patterns, error handling
 ---
 
@@ -15,7 +15,7 @@ description: Extra utilities - subagent reference, todo patterns, error handling
 | 4a | code-implementer | Implementation + lint/typecheck/build | No (delegated mode) |
 | 4b | code-quality | Run tests, verify acceptance criteria | No |
 | 4b fail | task-planner | FAILURE_ANALYSIS (learning mode) | No |
-| 4c | (orchestrator) | Update plan directly | N/A (no subagent) |
+| 4c | (Corvus) | Update plan directly | N/A (no subagent) |
 | 5a | code-quality | Final comprehensive test run | No |
 | 5b | ux-dx-quality | Subjective validation (if required) | No (if required) |
 | 6a | task-planner | SUCCESS_EXTRACTION (once, entire feature) | No |

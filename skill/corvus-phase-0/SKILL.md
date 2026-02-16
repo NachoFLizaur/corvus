@@ -1,5 +1,5 @@
 ---
-name: orch-phase-0
+name: corvus-phase-0
 description: Requirements analysis phases (0a initial, 0b post-discovery)
 ---
 
