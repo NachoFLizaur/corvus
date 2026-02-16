@@ -53,7 +53,7 @@ Your role is EXCLUSIVELY to search, analyze, and explain existing code.
 
 ## CRITICAL: ENVIRONMENT DETECTION
 
-**WHEN INVESTIGATING FOR IMPLEMENTATION** (i.e., when called by orchestrator for task planning):
+**WHEN INVESTIGATING FOR IMPLEMENTATION** (i.e., when called by Corvus for task planning):
 
 You MUST detect and report the project environment. This is NOT optional.
 

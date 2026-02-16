@@ -121,9 +121,9 @@ You are the **Code Quality** agent, a comprehensive quality assurance specialist
 
 ---
 
-## PHASE-LEVEL VALIDATION (Orchestrator Integration)
+## PHASE-LEVEL VALIDATION (Corvus Integration)
 
-When invoked by the orchestrator for Phase validation, you validate ALL tasks in a phase together.
+When invoked by Corvus for Phase validation, you validate ALL tasks in a phase together.
 
 ### Input Format
 
@@ -131,9 +131,9 @@ When invoked by the orchestrator for Phase validation, you validate ALL tasks in
 **TASK**: Validate Phase [N] implementation
 
 **PHASE TASKS**: 
-- Task 03: Setup database schema - `.orchestrator/tasks/[feature]/03-setup-schema.md`
-- Task 04: Implement auth handler - `.orchestrator/tasks/[feature]/04-auth-handler.md`
-- Task 05: Create API routes - `.orchestrator/tasks/[feature]/05-api-routes.md`
+- Task 03: Setup database schema - `.corvus/tasks/[feature]/03-setup-schema.md`
+- Task 04: Implement auth handler - `.corvus/tasks/[feature]/04-auth-handler.md`
+- Task 05: Create API routes - `.corvus/tasks/[feature]/05-api-routes.md`
 
 **SCOPE**: All files modified by tasks 03, 04, 05
 ```
@@ -248,7 +248,7 @@ Only task(s) [04] require fixes. Tasks [03, 05] should NOT be modified.
 
 ---
 
-## FINAL VALIDATION (Orchestrator Phase 5a)
+## FINAL VALIDATION (Corvus Phase 5a)
 
 When invoked for Phase 5a (final validation), perform comprehensive checks:
 
@@ -263,7 +263,7 @@ When invoked for Phase 5a (final validation), perform comprehensive checks:
 ```markdown
 **TASK**: Final validation of [feature name]
 
-**MASTER PLAN**: `.orchestrator/tasks/[feature]/MASTER_PLAN.md`
+**MASTER PLAN**: `.corvus/tasks/[feature]/MASTER_PLAN.md`
 **ALL PHASES**: 1, 2, 3 (tasks 01-12)
 ```
 
@@ -587,7 +587,7 @@ go build ./...
 
 ### Quality Gate Report Format (Step 4b)
 
-When invoked by the orchestrator for step 4b, use this format:
+When invoked by Corvus for step 4b, use this format:
 
 ```markdown
 ## Quality Gate Report (Step 4b)
@@ -612,7 +612,7 @@ When invoked by the orchestrator for step 4b, use this format:
 
 ### Acceptance Criteria
 
-From task file(s): `.orchestrator/tasks/[feature]/[NN-task-name].md`
+From task file(s): `.corvus/tasks/[feature]/[NN-task-name].md`
 
 | Criterion | Status | Evidence |
 |-----------|--------|----------|
@@ -642,8 +642,8 @@ From task file(s): `.orchestrator/tasks/[feature]/[NN-task-name].md`
 |------|--------|------------|
 | Step 4b | [PASS/FAIL] | Tests: [N]/[M], Criteria: [N]/[M] |
 
-**IF PASS**: Orchestrator proceeds to 4c (success learning)
-**IF FAIL**: Orchestrator MUST invoke task-planner LEARNING before fixing
+**IF PASS**: Corvus proceeds to 4c (success learning)
+**IF FAIL**: Corvus MUST invoke task-planner LEARNING before fixing
 ```
 
 ---

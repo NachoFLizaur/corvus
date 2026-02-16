@@ -112,7 +112,7 @@ Design the complete system:
 ## Architecture Plan
 
 ### Agents
-- **Orchestrator**: [name]-orchestrator
+- **Corvus**: [name]-corvus
   - Purpose: Main coordinator
   - Workflows: [list]
   
@@ -355,7 +355,7 @@ Present completed system:
 ```
 .opencode/
 ├── agent/
-│   ├── [orchestrator].md
+│   ├── [corvus].md
 │   └── subagents/
 │       └── [subagent].md
 ├── context/
@@ -369,7 +369,7 @@ Present completed system:
 
 ### Quick Start
 ```bash
-# Use the main orchestrator
+# Use the main corvus
 [Example command]
 
 # Run a specific workflow
@@ -377,7 +377,7 @@ Present completed system:
 ```
 
 ### Testing Checklist
-- [ ] Test orchestrator with simple request
+- [ ] Test Corvus with simple request
 - [ ] Test each subagent independently
 - [ ] Verify context files load
 - [ ] Run each workflow
@@ -386,7 +386,7 @@ Present completed system:
 
 ## AGENT DESIGN PATTERNS
 
-### Orchestrator Pattern
+### Corvus Pattern
 - Routes to specialists based on request analysis
 - Manages 3-level context allocation
 - Coordinates multi-stage workflows

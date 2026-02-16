@@ -1,5 +1,5 @@
 ---
-name: orch-phase-5
+name: corvus-phase-5
 description: Final validation - comprehensive objective and subjective checks
 ---
 
@@ -18,9 +18,9 @@ Phase 5 has two steps:
 ```markdown
 **TASK**: Final comprehensive validation of [feature name] implementation
 
-**MASTER PLAN**: `.orchestrator/tasks/[feature]/MASTER_PLAN.md`
+**MASTER PLAN**: `.corvus/tasks/[feature]/MASTER_PLAN.md`
 
-**ALL TASK FILES**: `.orchestrator/tasks/[feature]/*.md`
+**ALL TASK FILES**: `.corvus/tasks/[feature]/*.md`
 
 **MUST DO**:
 - Run FULL test suite (not just affected tests)
@@ -55,7 +55,7 @@ This aggregates all UX/DX review requirements from individual tasks into a singl
 ```markdown
 **TASK**: Final UX/DX review of [feature name] implementation
 
-**MASTER PLAN**: `.orchestrator/tasks/[feature]/MASTER_PLAN.md`
+**MASTER PLAN**: `.corvus/tasks/[feature]/MASTER_PLAN.md`
 
 **TASKS REQUIRING UX/DX REVIEW**:
 - Task NN: [name] - [focus area: UI/API/docs/architecture]

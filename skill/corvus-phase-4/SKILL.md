@@ -1,5 +1,5 @@
 ---
-name: orch-phase-4
+name: corvus-phase-4
 description: Implementation loop - per-phase execution with quality gates
 ---
 
@@ -13,8 +13,8 @@ description: Implementation loop - per-phase execution with quality gates
   Get task list from MASTER_PLAN.md, then delegate to code-implementer with file paths.
   Code-implementer reads the task files - you just pass paths.
   
-  WRONG: "Let me read the task files to understand..." → Read .orchestrator/tasks/feature/01-foo.md
-  CORRECT: "Delegating task 01 to code-implementer" → task(prompt: "TASK FILE: .orchestrator/tasks/feature/01-foo.md")
+  WRONG: "Let me read the task files to understand..." → Read .corvus/tasks/feature/01-foo.md
+  CORRECT: "Delegating task 01 to code-implementer" → task(prompt: "TASK FILE: .corvus/tasks/feature/01-foo.md")
   
   This saves your context for coordination.
 </critical_rule>
@@ -42,7 +42,7 @@ Phase 4 operates at the **phase level**, not per-task. Tasks within a phase are 
     │
     ▼
 4c: Update master plan → Next Phase (or Phase 5 if all complete)
-    (Orchestrator updates plan directly - no subagent needed)
+    (Corvus updates plan directly - no subagent needed)
 ```
 
 ### KEY RULES
@@ -64,7 +64,7 @@ Phase 4 operates at the **phase level**, not per-task. Tasks within a phase are 
   </rule>
   
   <rule id="direct_plan_update">
-    **Direct plan update on success**: When 4b passes, orchestrator updates
+    **Direct plan update on success**: When 4b passes, Corvus updates
     MASTER_PLAN.md directly (mark tasks complete, update progress). No subagent
     needed for success path - saves tokens and latency.
   </rule>
@@ -111,13 +111,13 @@ Use this template for EACH task. Every code-implementer invocation handles exact
 ```markdown
 **TASK**: Implement task [NN] - [Task Name]
 
-**TASK FILE**: `.orchestrator/tasks/[feature]/[NN-task-name].md`
+**TASK FILE**: `.corvus/tasks/[feature]/[NN-task-name].md`
 ⚠️ READ THIS FILE FIRST - It contains detailed steps, examples, and acceptance criteria.
 
 **DELEGATED MODE**: Pre-approved via master plan. Do NOT ask for approval.
 
 **MUST DO**:
-- Read `.orchestrator/tasks/[feature]/[NN-task-name].md` completely before starting
+- Read `.corvus/tasks/[feature]/[NN-task-name].md` completely before starting
 - Follow the Implementation Steps exactly
 - Use code examples from the task file as patterns
 - Validate after changes (type check, lint, tests)
@@ -161,7 +161,7 @@ task(
   subagent_type: "code-implementer", 
   description: "Task 03: Setup types", 
   prompt: `**TASK**: Implement task 03 - Setup types
-**TASK FILE**: \`.orchestrator/tasks/feature-x/03-setup-types.md\`
+**TASK FILE**: \`.corvus/tasks/feature-x/03-setup-types.md\`
 ⚠️ READ THIS FILE FIRST...
 [rest of single task template for task 03]`
 )
@@ -170,7 +170,7 @@ task(
   subagent_type: "code-implementer", 
   description: "Task 04: Add config", 
   prompt: `**TASK**: Implement task 04 - Add config
-**TASK FILE**: \`.orchestrator/tasks/feature-x/04-add-config.md\`
+**TASK FILE**: \`.corvus/tasks/feature-x/04-add-config.md\`
 ⚠️ READ THIS FILE FIRST...
 [rest of single task template for task 04]`
 )
@@ -179,7 +179,7 @@ task(
   subagent_type: "code-implementer", 
   description: "Task 05: Create utils", 
   prompt: `**TASK**: Implement task 05 - Create utils
-**TASK FILE**: \`.orchestrator/tasks/feature-x/05-create-utils.md\`
+**TASK FILE**: \`.corvus/tasks/feature-x/05-create-utils.md\`
 ⚠️ READ THIS FILE FIRST...
 [rest of single task template for task 05]`
 )
@@ -188,7 +188,7 @@ task(
   subagent_type: "code-implementer", 
   description: "Task 06: Base module", 
   prompt: `**TASK**: Implement task 06 - Base module
-**TASK FILE**: \`.orchestrator/tasks/feature-x/06-base-module.md\`
+**TASK FILE**: \`.corvus/tasks/feature-x/06-base-module.md\`
 ⚠️ READ THIS FILE FIRST...
 [rest of single task template for task 06]`
 )
@@ -204,7 +204,7 @@ task(
   subagent_type: "code-implementer", 
   description: "Task 07: Core logic", 
   prompt: `**TASK**: Implement task 07 - Core logic
-**TASK FILE**: \`.orchestrator/tasks/feature-x/07-core-logic.md\`
+**TASK FILE**: \`.corvus/tasks/feature-x/07-core-logic.md\`
 ⚠️ READ THIS FILE FIRST...
 [rest of single task template for task 07]`
 )
@@ -216,7 +216,7 @@ task(
   subagent_type: "code-implementer", 
   description: "Task 08: API endpoint", 
   prompt: `**TASK**: Implement task 08 - API endpoint
-**TASK FILE**: \`.orchestrator/tasks/feature-x/08-api-endpoint.md\`
+**TASK FILE**: \`.corvus/tasks/feature-x/08-api-endpoint.md\`
 ⚠️ READ THIS FILE FIRST...
 [rest of single task template for task 08]`
 )
@@ -228,7 +228,7 @@ task(
   subagent_type: "code-implementer", 
   description: "Task 09: Integration", 
   prompt: `**TASK**: Implement task 09 - Integration
-**TASK FILE**: \`.orchestrator/tasks/feature-x/09-integration.md\`
+**TASK FILE**: \`.corvus/tasks/feature-x/09-integration.md\`
 ⚠️ READ THIS FILE FIRST...
 [rest of single task template for task 09]`
 )
@@ -244,7 +244,7 @@ task(
   subagent_type: "code-implementer", 
   description: "Task 03: Types", 
   prompt: `**TASK**: Implement task 03 - Types
-**TASK FILE**: \`.orchestrator/tasks/feature-x/03-types.md\`
+**TASK FILE**: \`.corvus/tasks/feature-x/03-types.md\`
 ⚠️ READ THIS FILE FIRST...
 [rest of single task template for task 03]`
 )
@@ -253,7 +253,7 @@ task(
   subagent_type: "code-implementer", 
   description: "Task 04: Config", 
   prompt: `**TASK**: Implement task 04 - Config
-**TASK FILE**: \`.orchestrator/tasks/feature-x/04-config.md\`
+**TASK FILE**: \`.corvus/tasks/feature-x/04-config.md\`
 ⚠️ READ THIS FILE FIRST...
 [rest of single task template for task 04]`
 )
@@ -265,7 +265,7 @@ task(
   subagent_type: "code-implementer", 
   description: "Task 05: Combined module", 
   prompt: `**TASK**: Implement task 05 - Combined module
-**TASK FILE**: \`.orchestrator/tasks/feature-x/05-combined-module.md\`
+**TASK FILE**: \`.corvus/tasks/feature-x/05-combined-module.md\`
 ⚠️ READ THIS FILE FIRST...
 [rest of single task template for task 05]`
 )
@@ -342,9 +342,9 @@ Phase 5 UX/DX Required: [YES if ANY task is true / NO if all false]
 **TASK**: Validate Phase [N] implementation
 
 **PHASE TASKS**: 
-- Task NN: [name] - `.orchestrator/tasks/[feature]/NN-task.md`
-- Task NN: [name] - `.orchestrator/tasks/[feature]/NN-task.md`
-- Task NN: [name] - `.orchestrator/tasks/[feature]/NN-task.md`
+- Task NN: [name] - `.corvus/tasks/[feature]/NN-task.md`
+- Task NN: [name] - `.corvus/tasks/[feature]/NN-task.md`
+- Task NN: [name] - `.corvus/tasks/[feature]/NN-task.md`
 
 **SCOPE**: All files created/modified in 4a for this phase
 
@@ -511,7 +511,7 @@ This ensures fixes don't break other tasks in the phase.
 
 After the phase quality gate passes, update the master plan directly (no subagent needed).
 
-**Actions** (orchestrator does this directly):
+**Actions** (Corvus does this directly):
 1. **Mark ALL phase tasks as complete**: `[ ]` → `[x]`
 2. **Update progress count** at bottom of document
 3. **Update phase status**: `[ ]` → `[x]`

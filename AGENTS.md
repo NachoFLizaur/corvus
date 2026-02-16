@@ -36,7 +36,7 @@ When a user request clearly matches an agent's purpose, **delegate IMMEDIATELY**
 | researcher | Technical questions, best practices, external research | `@researcher` |
 | agent-generator | Creating new custom agents and workflows | `@agent-generator` |
 | media-processor | Analyzing images, PDFs, diagrams | `@media-processor` |
-| orchestrator | Orchestrating complex multi-step workflows | `@orchestrator` |
+| corvus | Orchestrating complex multi-step workflows | `@corvus` |
 | requirements-analyst | Analyzing requests, identifying gaps, asking clarifying questions | `@requirements-analyst` |
 | ux-dx-quality | Subjective quality: UX, DX, docs, architecture | `@ux-dx-quality` |
 
@@ -87,7 +87,7 @@ When a user request clearly matches an agent's purpose, **delegate IMMEDIATELY**
 - Extracting info from PDFs
 - Understanding visual content
 
-**Use @orchestrator when:**
+**Use @corvus when:**
 - Large features requiring multiple specialists
 - Complex workflows with dependencies
 - Need automated delegation and tracking
@@ -96,7 +96,7 @@ When a user request clearly matches an agent's purpose, **delegate IMMEDIATELY**
 - User request is ambiguous or incomplete
 - Need to identify gaps before starting work
 - Want structured clarification with priority tiers
-- Orchestrator Phase 0 (automatic - usually not invoked directly)
+- Corvus Phase 0 (automatic - usually not invoked directly)
 
 **Use @ux-dx-quality when:**
 - Evaluating user interface intuitiveness

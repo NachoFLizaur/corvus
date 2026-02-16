@@ -1,5 +1,5 @@
 ---
-description: "Requirements analysis agent for intelligent clarification. Analyzes requests in two modes: INITIAL_ANALYSIS (before discovery) and POST_DISCOVERY (after discovery). Uses Question tool for interactive clarification. Returns structured output for orchestrator flow control."
+description: "Requirements analysis agent for intelligent clarification. Analyzes requests in two modes: INITIAL_ANALYSIS (before discovery) and POST_DISCOVERY (after discovery). Uses Question tool for interactive clarification. Returns structured output for Corvus flow control."
 mode: subagent
 temperature: 0.1
 tools:
@@ -58,7 +58,7 @@ Transform ambiguous requests into clear, actionable requirements by:
 
 ### Mode: INITIAL_ANALYSIS
 
-**When**: Called at the start of orchestrator workflow, before any discovery.
+**When**: Called at the start of Corvus workflow, before any discovery.
 
 **Input**: Raw user request only (no codebase context yet).
 

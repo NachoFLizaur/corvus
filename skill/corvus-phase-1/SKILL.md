@@ -1,5 +1,5 @@
 ---
-name: orch-phase-1
+name: corvus-phase-1
 description: Discovery phase - research and codebase exploration
 ---
 

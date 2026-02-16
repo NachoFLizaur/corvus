@@ -1,10 +1,10 @@
-# Orchestrator State Machine
+# Corvus State Machine
 
-Complete state machine documentation for the orchestrator workflow, including phase transitions, parallel execution rules, and gate enforcement.
+Complete state machine documentation for the Corvus workflow, including phase transitions, parallel execution rules, and gate enforcement.
 
 ## Overview
 
-The orchestrator coordinates complex multi-step workflows through 8 phases (0-7), with Phase 4 containing an implementation loop and Phase 5 containing a two-step validation process. The state machine ensures correctness through mandatory gates, iteration limits, and structured error recovery.
+Corvus coordinates complex multi-step workflows through 8 phases (0-7), with Phase 4 containing an implementation loop and Phase 5 containing a two-step validation process. The state machine ensures correctness through mandatory gates, iteration limits, and structured error recovery.
 
 **Key Principles**:
 - **Correctness over speed**: Every phase must complete properly before proceeding
@@ -61,7 +61,7 @@ stateDiagram-v2
 | 4 | Implementation Loop | Execute phases with quality gates | @code-implementer + @code-quality |
 | 5 | Final Validation | Comprehensive objective + subjective checks | @code-quality + @ux-dx-quality |
 | 6 | Completion | Extract learnings, summarize | @task-planner |
-| 7 | Follow-up Triage | Route follow-up requests | Orchestrator decision |
+| 7 | Follow-up Triage | Route follow-up requests | Corvus decision |
 
 ---
 
@@ -95,7 +95,7 @@ stateDiagram-v2
 
 | From | To | Condition |
 |------|-----|-----------|
-| Phase 2 | Phase 3 | MASTER_PLAN.md exists in .orchestrator/tasks/ AND task files created |
+| Phase 2 | Phase 3 | MASTER_PLAN.md exists in .corvus/tasks/ AND task files created |
 | Phase 3 | Phase 4 | User approves plan |
 | Phase 3 | Phase 2 | User requests changes to plan |
 
@@ -154,7 +154,7 @@ stateDiagram-v2
 
     Step4c --> ReadPlan: More phases remain
     Step4c --> [*]: All phases complete
-    note right of Step4c: Update MASTER_PLAN.md\n(orchestrator direct)
+    note right of Step4c: Update MASTER_PLAN.md\n(corvus direct)
 
     FixTasks --> Escalate: iterations >= 3
     Escalate --> [*]: User intervention
@@ -259,7 +259,7 @@ F3: Loop back to 4b (full phase revalidation)
 
 ### 4c: Plan Update Step
 
-**Agent**: Orchestrator (direct, no subagent)
+**Agent**: Corvus (direct, no subagent)
 
 **Actions**:
 1. Mark all phase tasks as complete: `[ ]` → `[x]`
@@ -550,7 +550,7 @@ flowchart TD
 ```mermaid
 flowchart TD
     A[5a or 5b FAIL] --> B[Create fix tasks]
-    B --> C[Add to MASTER_PLAN.md in .orchestrator/tasks/ as new phase]
+    B --> C[Add to MASTER_PLAN.md in .corvus/tasks/ as new phase]
     C --> D[Return to Phase 4]
     D --> E[Execute fix phase]
     E --> F[Return to Phase 5]
