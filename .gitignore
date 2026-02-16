@@ -10,6 +10,10 @@ __pycache__/
 # Local config
 .env
 .env.local
+
+# Generated artifacts
 tasks
+.orchestrator/
+.corvus/
 .claude
-.kiro  
+.kiro
