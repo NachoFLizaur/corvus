@@ -6,6 +6,9 @@
   "main": "dist/index.js",
   "module": "dist/index.js",
   "types": "dist/index.d.ts",
+  "bin": {
+    "corvus-ai": "bin/cli.mjs"
+  },
   "exports": {
     ".": {
       "import": "./dist/index.js",
@@ -14,6 +17,7 @@
   },
   "files": [
     "dist",
+    "bin",
     "agent",
     "command",
     "skill",
