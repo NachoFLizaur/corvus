@@ -17,3 +17,9 @@ tasks
 .corvus/
 .claude
 .kiro
+
+# Build output
+dist/
+
+# Bun
+bun.lock
