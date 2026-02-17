@@ -1,6 +1,6 @@
-# OpenCode Features
+# Corvus — Multi-Agent Development Workflow
 
-Custom agents, commands, and MCP servers for [OpenCode](https://opencode.ai).
+Custom agents, commands, and skills for [OpenCode](https://opencode.ai).
 
 ## About Corvus
 
@@ -32,9 +32,9 @@ Need something quick? Talk to `@corvus` directly, it'll know which specialists t
 @corvus how does JWT refresh rotation work?
 ```
 
-## The Agent System
+## What's Included
 
-Corvus coordinates a team of specialized agents. Each handles a specific domain.
+### Agents (11)
 
 | Agent | Purpose |
 |-------|---------|
@@ -45,10 +45,91 @@ Corvus coordinates a team of specialized agents. Each handles a specific domain.
 | `@documentation` | README, API docs, architecture docs |
 | `@task-planner` | Break complex features into subtasks |
 | `@researcher` | Technical questions, best practices |
-| `@agent-generator` | Create new custom agents |
-| `@media-processor` | Analyze images, PDFs, diagrams |
 | `@requirements-analyst` | Analyze requests, identify gaps, clarify requirements |
 | `@ux-dx-quality` | Subjective quality: UX, DX, docs, architecture |
+| `@agent-generator` | Create new custom agents |
+| `@media-processor` | Analyze images, PDFs, diagrams |
+
+### Commands (4)
+
+| Command | Purpose |
+|---------|---------|
+| `/git-commit` | Smart git commit with conventional commit message generation |
+| `/readme` | Analyze commits and update README with relevant changes |
+| `/summary` | Generate summary of current conversation for portability |
+| `/cleanup-subagents` | Clean up subagent sessions |
+
+### Skills (9)
+
+Skills are loaded on-demand to minimize initial context size. Each Corvus phase has a dedicated skill that's loaded only when entering that phase.
+
+| Skill | Purpose |
+|-------|---------|
+| `corvus-phase-0` | Requirements analysis |
+| `corvus-phase-1` | Discovery and research |
+| `corvus-phase-2` | Planning and user approval |
+| `corvus-phase-4` | Implementation loop |
+| `corvus-phase-5` | Final validation |
+| `corvus-phase-6` | Completion and summary |
+| `corvus-phase-7` | Follow-up triage |
+| `corvus-extras` | Utilities (subagent reference, todo patterns, error handling) |
+| `frontend-design` | Frontend UI/UX design guidelines |
+
+## Installation
+
+### Plugin Install (Recommended)
+
+```bash
+npx corvus-ai
+# or for a global install
+npx corvus-ai --global
+```
+
+This adds `corvus-ai@latest` to your OpenCode plugin config. All agents, commands, and skills are loaded automatically.
+
+### Manual Install
+
+Clone the repo and symlink the directories into your OpenCode config:
+
+```bash
+git clone https://github.com/NachoFLizaur/corvus.git
+cd corvus
+
+ln -s $(pwd)/agent ~/.config/opencode/agent
+ln -s $(pwd)/command ~/.config/opencode/command
+ln -s $(pwd)/skill ~/.config/opencode/skill
+```
+
+Or copy instead of symlinking:
+
+```bash
+cp -r agent/ ~/.config/opencode/agent/
+cp -r command/ ~/.config/opencode/command/
+cp -r skill/ ~/.config/opencode/skill/
+```
+
+### Customizing Models
+
+Corvus agents work with whichever model you've set up as default in opencode, but you can assign specific models per agent in your OpenCode config if you wish to:
+
+```json
+{
+  "plugin": ["corvus-ai"],
+  "agent": {
+    "corvus": {
+      "model": "anthropic/claude-opus-4"
+    },
+    "code-implementer": {
+      "model": "anthropic/claude-sonnet-4"
+    },
+    "code-explorer": {
+      "model": "anthropic/claude-haiku-4"
+    }
+  }
+}
+```
+
+Any agent field (`model`, `temperature`, `tools`, etc.) can be overridden this way. Your config takes precedence over the plugin defaults.
 
 ## How Corvus Works
 
@@ -98,51 +179,13 @@ Key features:
 
 > 📖 **Detailed Documentation**: See [docs/CORVUS-STATE-MACHINE.md](./docs/CORVUS-STATE-MACHINE.md) for complete state machine diagrams, parallel execution rules, and constraint tables.
 
-## Commands
-
-| Command | Purpose |
-|---------|---------|
-| `/cleanup-subagents` | Clean up subagent sessions |
-| `/git-commit` | Smart git commit with conventional commit message generation |
-| `/readme` | Analyze commits and update README with relevant changes |
-| `/summary` | Generate summary of current conversation for portability |
-
-## Installation
-
-Copy to your OpenCode config directory:
-
-```bash
-cp -r agent/ ~/.config/opencode/agent/
-cp -r command/ ~/.config/opencode/command/
-cp -r skill/ ~/.config/opencode/skill/
-cp AGENTS.md ~/.config/opencode/
-```
-
-Or symlink for easy updates:
-
-```bash
-ln -s $(pwd)/agent ~/.config/opencode/agent
-ln -s $(pwd)/command ~/.config/opencode/command
-ln -s $(pwd)/skill ~/.config/opencode/skill
-```
-
-> Opencode Supported plugin in the works!
-
-## Corvus Skills
-
-Corvus uses **on-demand skill loading** to minimize initial context size:
-
-- **Skills are loaded per-phase**: Each Corvus phase has a dedicated skill that's loaded only when entering that phase
-- **Reduced initial prompt**: Initial context drops from ~16k tokens to ~3k tokens
-- **Better context utilization**: More room for actual task content and code
-
-## Structure
+## Project Structure
 
 ```
 .
-├── agent/              # Custom agent definitions
-├── command/            # Custom slash commands
-├── skill/              # Corvus phase skills (loaded on-demand)
+├── agent/              # Custom agent definitions (11 agents)
+├── command/            # Custom slash commands (4 commands)
+├── skill/              # On-demand skills (9 skills)
 │   ├── corvus-phase-0/ # Requirements analysis
 │   ├── corvus-phase-1/ # Discovery
 │   ├── corvus-phase-2/ # Planning + Approval
@@ -150,7 +193,9 @@ Corvus uses **on-demand skill loading** to minimize initial context size:
 │   ├── corvus-phase-5/ # Final validation
 │   ├── corvus-phase-6/ # Completion
 │   ├── corvus-phase-7/ # Follow-up triage
-│   └── corvus-extras/  # Utilities
+│   ├── corvus-extras/  # Utilities
+│   └── frontend-design/# Frontend design guidelines
+├── src/                # Plugin source code
 ├── docs/               # Detailed documentation
 │   └── CORVUS-STATE-MACHINE.md
 ├── AGENTS.md           # Delegation guidelines for agents
@@ -158,6 +203,32 @@ Corvus uses **on-demand skill loading** to minimize initial context size:
 ```
 
 See [AGENTS.md](./AGENTS.md) for delegation instructions and [docs/CORVUS-STATE-MACHINE.md](./docs/CORVUS-STATE-MACHINE.md) for detailed workflow documentation.
+
+## Development
+
+```bash
+# Install dependencies
+bun install
+
+# Run tests
+bun test
+
+# Build
+bun run build
+
+# Type check
+bun x tsc --noEmit
+```
+
+## Troubleshooting
+
+**Plugin not loading** — Verify your OpenCode config (`~/.config/opencode/config.json` or `.opencode/config.json`) has `"corvus-ai": true` under `plugins`.
+
+**Agents not appearing** — Make sure `bun install` or `npm install` completed successfully. The package must be present in `node_modules` with its `agent/`, `command/`, and `skill/` directories.
+
+**Skills not found** — Skills are loaded from the package's `skill/` directory at runtime. If you used the manual install method, verify your symlinks point to the correct location (`ls -la ~/.config/opencode/skill/`).
+
+**Duplicate agents** — If you have both the plugin install and manual symlinks active, agents may appear twice. Pick one installation method and remove the other.
 
 ---
 
