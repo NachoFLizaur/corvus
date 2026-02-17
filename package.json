@@ -42,7 +42,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/NachoFLizaur/corvus.git"
+    "url": "git+https://github.com/NachoFLizaur/corvus.git"
   },
   "homepage": "https://github.com/NachoFLizaur/corvus",
   "peerDependencies": {
