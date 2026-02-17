@@ -1,10 +1,45 @@
-# Corvus — Multi-Agent Development Workflow
+<div align="center">
 
-Custom agents, commands, and skills for [OpenCode](https://opencode.ai).
+# Corvus
+
+**Multi-agent development workflow for [OpenCode](https://opencode.ai).**
+
+Structured planning. Delegated execution. Quality gates at every boundary.
+
+[![npm](https://img.shields.io/npm/v/corvus-ai)](https://www.npmjs.com/package/corvus-ai)
+[![Bun](https://img.shields.io/badge/Bun-compatible-pink.svg)](https://bun.sh)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
+</div>
+
+---
+
+## Table of Contents
+
+- [About Corvus](#about-corvus)
+- [What Corvus Does](#what-corvus-does)
+  - [Usage](#usage)
+- [Installation](#installation)
+  - [Plugin Install (Recommended)](#plugin-install-recommended)
+  - [Manual Install](#manual-install)
+  - [Customizing Models](#customizing-models)
+- [What's Included](#whats-included)
+  - [Agents (8)](#agents-8)
+  - [Commands (4)](#commands-4)
+  - [Skills (9)](#skills-9)
+- [How Corvus Works](#how-corvus-works)
+- [Project Structure](#project-structure)
+- [Development](#development)
+- [Troubleshooting](#troubleshooting)
+- [License](#license)
+
+---
 
 ## About Corvus
 
 > *In Norse mythology, Odin's ravens Huginn (thought) and Muninn (memory) fly across the world each day, gathering information and reporting back. Corvus works the same way — sending specialized agents out to research, explore, implement, and validate, then synthesizing their findings into a coherent whole.*
+
+---
 
 ## What Corvus Does
 
@@ -15,7 +50,7 @@ One agent to drive your entire workflow. Describe what you need, and Corvus hand
 - **Context across phases** — maintains coherence across a complex, multi-step task
 - **Quality gates at every boundary** — objective and subjective validation before moving on
 
-## Usage
+### Usage
 
 Have a complex task in mind? Tell `@corvus` what you need. It handles clarification, planning, implementation, and validation automatically.
 
@@ -32,45 +67,7 @@ Need something quick? Talk to `@corvus` directly, it'll know which specialists t
 @corvus how does JWT refresh rotation work?
 ```
 
-## What's Included
-
-### Agents (8)
-
-| Agent | Purpose |
-|-------|---------|
-| `@corvus` | **Coordinator** — orchestrates complex multi-step workflows |
-| `@code-explorer` | Find files, understand architecture, discover patterns |
-| `@code-implementer` | Write production code with plan-approve workflow |
-| `@code-quality` | Test, review, validate, security audit |
-| `@task-planner` | Break complex features into subtasks |
-| `@researcher` | Technical questions, best practices |
-| `@requirements-analyst` | Analyze requests, identify gaps, clarify requirements |
-| `@ux-dx-quality` | Subjective quality: UX, DX, docs, architecture |
-
-### Commands (4)
-
-| Command | Purpose |
-|---------|---------|
-| `/git-commit` | Smart git commit with conventional commit message generation |
-| `/readme` | Analyze commits and update README with relevant changes |
-| `/summary` | Generate summary of current conversation for portability |
-| `/cleanup-subagents` | Clean up subagent sessions |
-
-### Skills (9)
-
-Skills are loaded on-demand to minimize initial context size. Each Corvus phase has a dedicated skill that's loaded only when entering that phase.
-
-| Skill | Purpose |
-|-------|---------|
-| `corvus-phase-0` | Requirements analysis |
-| `corvus-phase-1` | Discovery and research |
-| `corvus-phase-2` | Planning and user approval |
-| `corvus-phase-4` | Implementation loop |
-| `corvus-phase-5` | Final validation |
-| `corvus-phase-6` | Completion and summary |
-| `corvus-phase-7` | Follow-up triage |
-| `corvus-extras` | Utilities (subagent reference, todo patterns, error handling) |
-| `frontend-design` | Frontend UI/UX design guidelines |
+---
 
 ## Installation
 
@@ -128,6 +125,50 @@ Corvus agents work with whichever model you've set up as default in opencode, bu
 
 Any agent field (`model`, `temperature`, `tools`, etc.) can be overridden this way. Your config takes precedence over the plugin defaults.
 
+---
+
+## What's Included
+
+### Agents (8)
+
+| Agent | Purpose |
+|-------|---------|
+| `@corvus` | **Coordinator** — orchestrates complex multi-step workflows |
+| `@code-explorer` | Find files, understand architecture, discover patterns |
+| `@code-implementer` | Write production code with plan-approve workflow |
+| `@code-quality` | Test, review, validate, security audit |
+| `@task-planner` | Break complex features into subtasks |
+| `@researcher` | Technical questions, best practices |
+| `@requirements-analyst` | Analyze requests, identify gaps, clarify requirements |
+| `@ux-dx-quality` | Subjective quality: UX, DX, docs, architecture |
+
+### Commands (4)
+
+| Command | Purpose |
+|---------|---------|
+| `/git-commit` | Smart git commit with conventional commit message generation |
+| `/readme` | Analyze commits and update README with relevant changes |
+| `/summary` | Generate summary of current conversation for portability |
+| `/cleanup-subagents` | Clean up subagent sessions |
+
+### Skills (9)
+
+Skills are loaded on-demand to minimize initial context size. Each Corvus phase has a dedicated skill that's loaded only when entering that phase.
+
+| Skill | Purpose |
+|-------|---------|
+| `corvus-phase-0` | Requirements analysis |
+| `corvus-phase-1` | Discovery and research |
+| `corvus-phase-2` | Planning and user approval |
+| `corvus-phase-4` | Implementation loop |
+| `corvus-phase-5` | Final validation |
+| `corvus-phase-6` | Completion and summary |
+| `corvus-phase-7` | Follow-up triage |
+| `corvus-extras` | Utilities (subagent reference, todo patterns, error handling) |
+| `frontend-design` | Frontend UI/UX design guidelines |
+
+---
+
 ## How Corvus Works
 
 Under the hood, Corvus follows a structured multi-phase workflow:
@@ -176,6 +217,8 @@ Key features:
 
 > 📖 **Detailed Documentation**: See [docs/CORVUS-STATE-MACHINE.md](./docs/CORVUS-STATE-MACHINE.md) for complete state machine diagrams, parallel execution rules, and constraint tables.
 
+---
+
 ## Project Structure
 
 ```
@@ -201,6 +244,8 @@ Key features:
 
 See [AGENTS.md](./AGENTS.md) for delegation instructions and [docs/CORVUS-STATE-MACHINE.md](./docs/CORVUS-STATE-MACHINE.md) for detailed workflow documentation.
 
+---
+
 ## Development
 
 ```bash
@@ -216,6 +261,8 @@ bun run build
 # Type check
 bun x tsc --noEmit
 ```
+
+---
 
 ## Troubleshooting
 

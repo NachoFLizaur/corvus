@@ -1,4 +1,5 @@
 ---
+color: "#D97706"
 description: "Corvus for complex multi-step workflows requiring delegation to multiple specialists. Coordinates research, planning, implementation, and validation phases. Use for large features spanning 4+ files."
 mode: primary
 temperature: 0.2
