@@ -5,11 +5,15 @@ __pycache__/
 
 # Editor/OS
 .DS_Store
+Thumbs.db
 *.swp
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
 
-# Local config
-.env
-.env.local
+# Environment
+.env*
 
 # Generated artifacts
 tasks
@@ -20,6 +24,11 @@ tasks
 
 # Build output
 dist/
+*.tgz
+
+# Logs
+*.log
+npm-debug.log*
 
 # Bun
 bun.lock
