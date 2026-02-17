@@ -41,7 +41,6 @@ const CORVUS_AGENTS = [
   'researcher.md',
   'documentation.md',
   'media-processor.md',
-  'agent-generator.md',
 ];
 
 const CORVUS_COMMANDS = [

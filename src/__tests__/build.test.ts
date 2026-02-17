@@ -31,7 +31,7 @@ describe("built plugin", () => {
     const config = { agent: {}, command: {}, skills: { paths: [] } } as any
     const hooks = await plugin({})
     await hooks.config(config)
-    expect(Object.keys(config.agent).length).toBe(11)
+    expect(Object.keys(config.agent).length).toBe(10)
   })
 
   test("config hook loads commands", async () => {

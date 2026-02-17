@@ -34,7 +34,6 @@ When a user request clearly matches an agent's purpose, **delegate IMMEDIATELY**
 | documentation | README, API docs, architecture docs, user guides | `@documentation` |
 | task-planner | Breaking down complex features into subtasks | `@task-planner` |
 | researcher | Technical questions, best practices, external research | `@researcher` |
-| agent-generator | Creating new custom agents and workflows | `@agent-generator` |
 | media-processor | Analyzing images, PDFs, diagrams | `@media-processor` |
 | corvus | Orchestrating complex multi-step workflows | `@corvus` |
 | requirements-analyst | Analyzing requests, identifying gaps, asking clarifying questions | `@requirements-analyst` |
@@ -76,11 +75,6 @@ When a user request clearly matches an agent's purpose, **delegate IMMEDIATELY**
 - Best practice recommendations
 - Comparing approaches
 - External library/API questions
-
-**Use @agent-generator when:**
-- Creating new custom agents
-- Building workflow definitions
-- Setting up context files
 
 **Use @media-processor when:**
 - Analyzing screenshots or diagrams
