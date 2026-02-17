@@ -39,8 +39,6 @@ const CORVUS_AGENTS = [
   'requirements-analyst.md',
   'ux-dx-quality.md',
   'researcher.md',
-  'documentation.md',
-  'media-processor.md',
 ];
 
 const CORVUS_COMMANDS = [

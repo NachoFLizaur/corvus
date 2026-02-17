@@ -31,10 +31,8 @@ When a user request clearly matches an agent's purpose, **delegate IMMEDIATELY**
 | code-explorer | Finding files, understanding architecture, discovering patterns | `@code-explorer` |
 | code-implementer | Writing/modifying production code | `@code-implementer` |
 | code-quality | Testing, code review, security audits, build validation | `@code-quality` |
-| documentation | README, API docs, architecture docs, user guides | `@documentation` |
 | task-planner | Breaking down complex features into subtasks | `@task-planner` |
 | researcher | Technical questions, best practices, external research | `@researcher` |
-| media-processor | Analyzing images, PDFs, diagrams | `@media-processor` |
 | corvus | Orchestrating complex multi-step workflows | `@corvus` |
 | requirements-analyst | Analyzing requests, identifying gaps, asking clarifying questions | `@requirements-analyst` |
 | ux-dx-quality | Subjective quality: UX, DX, docs, architecture | `@ux-dx-quality` |
@@ -59,12 +57,6 @@ When a user request clearly matches an agent's purpose, **delegate IMMEDIATELY**
 - Security audits
 - Validating builds pass
 
-**Use @documentation when:**
-- Creating or updating README
-- Writing API documentation
-- Architecture documentation
-- User guides or tutorials
-
 **Use @task-planner when:**
 - Complex features requiring multiple steps
 - Work spanning 4+ files
@@ -75,11 +67,6 @@ When a user request clearly matches an agent's purpose, **delegate IMMEDIATELY**
 - Best practice recommendations
 - Comparing approaches
 - External library/API questions
-
-**Use @media-processor when:**
-- Analyzing screenshots or diagrams
-- Extracting info from PDFs
-- Understanding visual content
 
 **Use @corvus when:**
 - Large features requiring multiple specialists

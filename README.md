@@ -34,7 +34,7 @@ Need something quick? Talk to `@corvus` directly, it'll know which specialists t
 
 ## What's Included
 
-### Agents (10)
+### Agents (8)
 
 | Agent | Purpose |
 |-------|---------|
@@ -42,12 +42,10 @@ Need something quick? Talk to `@corvus` directly, it'll know which specialists t
 | `@code-explorer` | Find files, understand architecture, discover patterns |
 | `@code-implementer` | Write production code with plan-approve workflow |
 | `@code-quality` | Test, review, validate, security audit |
-| `@documentation` | README, API docs, architecture docs |
 | `@task-planner` | Break complex features into subtasks |
 | `@researcher` | Technical questions, best practices |
 | `@requirements-analyst` | Analyze requests, identify gaps, clarify requirements |
 | `@ux-dx-quality` | Subjective quality: UX, DX, docs, architecture |
-| `@media-processor` | Analyze images, PDFs, diagrams |
 
 ### Commands (4)
 

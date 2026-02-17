@@ -11,7 +11,7 @@ describe("loadAgents", () => {
   test("loads all agent files", () => {
     const agents = loadAgents(AGENT_DIR)
 
-    expect(Object.keys(agents)).toHaveLength(10)
+    expect(Object.keys(agents)).toHaveLength(8)
   })
 
   test("agent names from filenames", () => {
