@@ -66,6 +66,16 @@ const plugin: Plugin = async (_input) => {
         }
         cfg.skills.paths.push(skillDir)
       }
+
+      // Register web-research MCP server (always enabled, no API key required)
+      if (!config.mcp) {
+        config.mcp = {}
+      }
+      config.mcp["web-research"] = {
+        type: "local",
+        command: ["npx", "-y", "web-research-mcp"],
+        enabled: true,
+      }
     },
   }
 }

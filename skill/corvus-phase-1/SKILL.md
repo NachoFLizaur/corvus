@@ -23,6 +23,9 @@ Use when the task involves technologies, patterns, or best practices that benefi
 - Effort estimate (S/M/L/XL)
 
 **MUST DO**:
+- Use web-research MCP tools (`web-research_multi_search`, `web-research_fetch_pages`) for web research
+- Use complexity router: quick search for factual lookups, deep research for comparative/architectural questions
+- Follow three-tier fallback: MCP tools → webfetch → curl
 - Cite all sources with links
 - Focus on [specific technology/pattern]
 - Provide actionable recommendations
@@ -31,6 +34,7 @@ Use when the task involves technologies, patterns, or best practices that benefi
 **MUST NOT DO**:
 - Make changes to any files
 - Provide generic advice without evidence
+- Skip the fallback chain if MCP tools fail
 
 **REPORT BACK**:
 - TL;DR (1-3 sentences)

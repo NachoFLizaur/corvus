@@ -68,4 +68,29 @@ describe("plugin entry point", () => {
     expect(config.skills).toBeDefined()
     expect(config.skills.paths).toHaveLength(1)
   })
+
+  test("config hook registers web-research MCP server", async () => {
+    const { config: hook } = await plugin({} as any)
+    const config: Record<string, any> = { agent: {}, command: {}, skills: { paths: [] } }
+
+    await hook!(config as any)
+
+    expect(config.mcp).toBeDefined()
+    expect(config.mcp["web-research"]).toEqual({
+      type: "local",
+      command: ["npx", "-y", "web-research-mcp"],
+      enabled: true,
+    })
+  })
+
+  test("handles missing config.mcp gracefully", async () => {
+    const { config: hook } = await plugin({} as any)
+    const config: Record<string, any> = { agent: {}, command: {} }
+
+    // Should not throw even without mcp key
+    await hook!(config as any)
+
+    expect(config.mcp).toBeDefined()
+    expect(config.mcp["web-research"]).toBeDefined()
+  })
 })
