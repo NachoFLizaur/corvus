@@ -8,6 +8,7 @@ interface AgentFrontmatter {
   temperature?: number
   tools?: Record<string, boolean>
   permissions?: Record<string, unknown>
+  color?: string
 }
 
 interface AgentConfig {
@@ -17,6 +18,7 @@ interface AgentConfig {
   temperature?: number
   tools?: Record<string, boolean>
   permission?: Record<string, unknown>
+  color?: string
   [key: string]: unknown
 }
 
@@ -51,6 +53,8 @@ export function loadAgents(agentDir: string): Record<string, AgentConfig> {
       // Note: frontmatter uses "permissions" (plural), config uses "permission" (singular)
       if (frontmatter.permissions !== undefined)
         config.permission = frontmatter.permissions
+      if (frontmatter.color !== undefined)
+        config.color = frontmatter.color
 
       if (body) {
         config.prompt = body
