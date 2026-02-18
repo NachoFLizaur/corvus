@@ -2,15 +2,12 @@
 description: "Ultimate codebase exploration agent combining file search, pattern analysis, multi-repo research, and semantic code understanding. Use for finding files, understanding code architecture, discovering patterns, and tracing code flow."
 mode: subagent
 temperature: 0.1
-tools:
-  write: false
-  edit: false
-  bash: true
-  read: true
-  glob: true
-  grep: true
-  task: false
 permissions:
+  read: "allow"
+  glob: "allow"
+  grep: "allow"
+  edit: "deny"
+  task: "deny"
   bash:
     "git *": "allow"
     "gh *": "allow"

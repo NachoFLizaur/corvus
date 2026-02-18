@@ -24,7 +24,7 @@ Structured planning. Delegated execution. Quality gates at every boundary.
   - [Manual Install](#manual-install)
   - [Customizing Models](#customizing-models)
 - [What's Included](#whats-included)
-  - [Agents (8)](#agents-8)
+  - [Agents (9)](#agents-9)
   - [Commands (4)](#commands-4)
   - [Skills (9)](#skills-9)
 - [How Corvus Works](#how-corvus-works)
@@ -129,7 +129,7 @@ Any agent field (`model`, `temperature`, `tools`, etc.) can be overridden this w
 
 ## What's Included
 
-### Agents (8)
+### Agents (9)
 
 | Agent | Purpose |
 |-------|---------|
@@ -138,6 +138,7 @@ Any agent field (`model`, `temperature`, `tools`, etc.) can be overridden this w
 | `@code-implementer` | Write production code with plan-approve workflow |
 | `@code-quality` | Test, review, validate, security audit |
 | `@task-planner` | Break complex features into subtasks |
+| `@plan-reviewer` | High-accuracy plan review before implementation |
 | `@researcher` | Technical questions, best practices |
 | `@requirements-analyst` | Analyze requests, identify gaps, clarify requirements |
 | `@ux-dx-quality` | Subjective quality: UX, DX, docs, architecture |
@@ -192,6 +193,15 @@ Phase 2: Planning (@task-planner creates MASTER_PLAN.md)
 Phase 3: User Approval (single approval gate)
     │
     ▼
+User Choice: "Start Implementation" → Phase 4
+             "High Accuracy Review" → Phase 3.5
+    │
+    ▼
+Phase 3.5: Plan Review (@plan-reviewer) [optional]
+    │   OKAY → Phase 4
+    │   REJECT → @task-planner fixes → User chooses: re-review or proceed
+    │
+    ▼
 Phase 4: Implementation Loop (per-PHASE, not per-task)
     │   4a: @code-implementer (all phase tasks, parallel where possible)
     │   4b: @code-quality (entire phase, with failure attribution)
@@ -214,6 +224,7 @@ Key features:
 - **Two-tier quality gates**: Objective (@code-quality) at phase boundaries + Subjective (@ux-dx-quality) at feature completion
 - **Failure attribution**: Quality gate identifies exactly which task(s) failed
 - **Learning loops**: Analyze failures before fixing, extract learnings after success
+- **Optional plan review**: Phase 3.5 validates plan quality before implementation begins
 
 > 📖 **Detailed Documentation**: See [docs/CORVUS-STATE-MACHINE.md](./docs/CORVUS-STATE-MACHINE.md) for complete state machine diagrams, parallel execution rules, and constraint tables.
 
@@ -223,7 +234,7 @@ Key features:
 
 ```
 .
-├── agent/              # Custom agent definitions (11 agents)
+├── agent/              # Custom agent definitions (9 agents)
 ├── command/            # Custom slash commands (4 commands)
 ├── skill/              # On-demand skills (9 skills)
 │   ├── corvus-phase-0/ # Requirements analysis

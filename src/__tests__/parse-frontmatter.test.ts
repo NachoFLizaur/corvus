@@ -96,7 +96,7 @@ describe("parseFrontmatter", () => {
 
     expect(result.frontmatter).toHaveProperty("description")
     expect(result.frontmatter).toHaveProperty("mode")
-    expect(result.frontmatter).toHaveProperty("tools")
+    expect(result.frontmatter).toHaveProperty("permissions")
     expect(result.body).toBeTruthy()
   })
 

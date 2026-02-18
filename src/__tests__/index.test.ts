@@ -19,7 +19,7 @@ describe("plugin entry point", () => {
 
     await hook!(config as any)
 
-    expect(Object.keys(config.agent)).toHaveLength(8)
+    expect(Object.keys(config.agent)).toHaveLength(9)
   })
 
   test("config hook loads commands", async () => {

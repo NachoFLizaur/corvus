@@ -2,17 +2,13 @@
 description: "Expert research agent for technical questions, documentation lookup, and knowledge synthesis. Combines web search, deep research, page fetching and GitHub search via web-research MCP. Use for answering complex technical questions."
 mode: subagent
 temperature: 0.1
-tools:
-  write: false
-  edit: false
-  bash: true
-  read: true
-  glob: true
-  grep: true
-  webfetch: true
-  web-research_multi_search: true
-  web-research_fetch_pages: true
 permissions:
+  read: "allow"
+  glob: "allow"
+  grep: "allow"
+  webfetch: "allow"
+  web-research_multi_search: "allow"
+  web-research_fetch_pages: "allow"
   bash:
     "gh *": "allow"
     "curl *": "allow"
