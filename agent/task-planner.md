@@ -96,6 +96,20 @@ Transform complex, multi-step work into:
 
 ---
 
+## PLAN TYPE HANDLING
+
+When Corvus provides a `PLAN_TYPE` parameter, adjust planning output accordingly:
+
+| Plan Type | Template | Phases | Tasks | Specs |
+|-----------|----------|--------|-------|-------|
+| `LIGHTWEIGHT` | Simplified | 1 | 3-6 | Never |
+| `STANDARD` | Full (current) | 2-4 | 6-15 | Optional (L/XL) |
+| `SPEC_DRIVEN` | Full + specs | 2-4 | 10+ | Mandatory |
+
+If no PLAN_TYPE is provided, default to STANDARD.
+
+---
+
 ## WORKFLOW
 
 ### Stage 1: Context Loading (PARALLEL)
@@ -176,6 +190,12 @@ Analyze the feature/request:
 - Risks: [potential blockers]
 - Estimated effort: [S/M/L/XL]
 - Specs needed: [No / Yes - list topics]
+- **Plan type**: [LIGHTWEIGHT / STANDARD / SPEC_DRIVEN] (from Corvus)
+
+**Plan-type calibration**:
+- LIGHTWEIGHT: Target 3-6 tasks, 1 phase, simplified templates
+- STANDARD: Target 6-15 tasks, 2-4 phases, full templates
+- SPEC_DRIVEN: Target 10+ tasks, 2-4 phases + spec phase, full templates with specs
 
 ### Natural Task Boundaries
 1. [First logical unit]
@@ -468,6 +488,63 @@ Phase 2 (Implementation):
 - {Link to research findings}
 ```
 
+### Lightweight MASTER_PLAN.md Template
+
+Used when `PLAN_TYPE: LIGHTWEIGHT`. Simplified single-phase structure.
+
+```markdown
+# {Feature Name} - Master Plan (Lightweight)
+
+**Objective**: {One-line description}
+**Status**: [ ] Planning | [~] In Progress | [x] Complete
+**Plan Type**: Lightweight
+**Created**: {YYYY-MM-DD}
+**Total Tasks**: {3-6}
+**Estimated Effort**: {X hours}
+
+---
+
+## Tasks
+
+| Order | Task ID | File | Description | Type | Status |
+|-------|---------|------|-------------|------|--------|
+| 1 | {feature}-01 | `01-{task}.md` | {Description} | impl | [ ] |
+| 2 | {feature}-02 | `02-{task}.md` | {Description} | impl | [ ] |
+| 3 | {feature}-03 | `03-{task}.md` | {Description} | impl | [ ] |
+| 4 | {feature}-04 | `04-tests.md` | Tests | **test** | [ ] |
+
+**Milestone**: {What's true when complete}
+
+---
+
+## Files Summary
+
+| File | Task | Action | Purpose |
+|------|------|--------|---------|
+| `{path}` | 01 | Create/Modify | {purpose} |
+
+---
+
+## Quick Reference
+
+```
+ 1. {feature}-01  {Task name}  [ ]
+ 2. {feature}-02  {Task name}  [ ]
+ 3. {feature}-03  {Task name}  [ ]
+ 4. {feature}-04  Tests         [ ]
+```
+
+**Progress**: 0/{N} tasks complete (0%)
+
+---
+
+## Exit Criteria
+
+- [ ] All tasks marked complete
+- [ ] Tests passing
+- [ ] Build succeeds
+```
+
 ---
 
 ## Individual Task Files
@@ -535,10 +612,19 @@ Phase 2 (Implementation):
 - **Validation**: {how to verify}
 
 ## Acceptance Criteria
+
+**For STANDARD plans** (checkbox format):
 - [ ] {Observable, binary criterion 1}
 - [ ] {Observable, binary criterion 2}
 - [ ] {Observable, binary criterion 3}
 - [ ] All validation commands pass
+
+**For SPEC_DRIVEN plans** (Given/When/Then format):
+### Scenario: {Name}
+- **Given** {precondition}
+- **When** {action}
+- **Then** {expected outcome}
+- **And** {additional outcome}
 
 ## Validation Commands
 
@@ -563,6 +649,53 @@ Phase 2 (Implementation):
 - {Relevant documentation links}
 - {Gotchas to watch for}
 - {Patterns from codebase to follow}
+```
+
+### Lightweight Task File Template
+
+Used when `PLAN_TYPE: LIGHTWEIGHT`. Fewer sections, less ceremony.
+
+```markdown
+# {Seq}. {Title}
+
+## Meta
+- **ID**: {feature}-{seq}
+- **Feature**: {feature}
+- **Priority**: P1
+- **Depends On**: [{dependency-ids}]
+- **Effort**: {S/M} ({hours estimate})
+- **Requires UX/DX Review**: false
+
+## Objective
+{Clear, single outcome for this task - one sentence}
+
+## Context
+{Brief context — 1-2 sentences}
+
+## Implementation Steps
+
+### Step 1: {Name}
+{Instructions}
+
+### Step 2: {Name}
+{Instructions}
+
+## Files to Change
+
+| File | Action | Changes |
+|------|--------|---------|
+| `{path}` | Create/Modify | {description} |
+
+## Acceptance Criteria
+- [ ] {Criterion 1}
+- [ ] {Criterion 2}
+- [ ] All validation commands pass
+
+## Validation Commands
+
+```bash
+{project-specific commands}
+```
 ```
 
 ---
@@ -851,6 +984,7 @@ For features assessed as **L (Large)** or **XL (Extra Large)** complexity, consi
 | M (Medium) | 3-5 | No |
 | L (Large) | 6-10 | Consider for complex topics |
 | XL (Extra Large) | 10+ | Yes, for each major concern |
+| **SPEC_DRIVEN plan** | **Any** | **Always — mandatory regardless of size** |
 
 ### Decision Criteria
 
@@ -983,6 +1117,118 @@ Add to MASTER_PLAN.md when specs exist:
 | `specs/api-contract.md` | Draft | REST API endpoints |
 
 **Note**: Review specs before starting related tasks.
+**Note**: For SPEC_DRIVEN plans, this section is MANDATORY. All specs must be
+created before task files. Specs use RFC 2119 language (SHALL/MUST/SHOULD/MAY).
+```
+
+---
+
+## SPEC-DRIVEN PLANS
+
+When `PLAN_TYPE: SPEC_DRIVEN`, the planning process changes:
+
+### Mandatory Specs Phase
+1. Create `specs/` directory BEFORE task files
+2. Create spec files for each major concern (data model, API contract, architecture, etc.)
+3. Specs are the source of truth — task files reference specs
+4. Specs are reviewed alongside MASTER_PLAN.md in Phase 3
+
+### Formal Language Requirements
+Spec files MUST use RFC 2119 language:
+- **SHALL** / **SHALL NOT**: Absolute requirements
+- **MUST** / **MUST NOT**: Equivalent to SHALL (used interchangeably)
+- **SHOULD** / **SHOULD NOT**: Strong recommendations (may be deviated from with justification)
+- **MAY**: Optional features
+
+Example:
+```markdown
+### Authentication
+- The system SHALL authenticate users via JWT tokens
+- Tokens MUST expire after 24 hours
+- The system SHOULD support token refresh
+- The system MAY support OAuth2 providers
+```
+
+### Given/When/Then Acceptance Criteria
+Task files in Spec-Driven plans use Gherkin-style acceptance criteria instead of checkbox format:
+
+**Standard format** (checkbox):
+```markdown
+## Acceptance Criteria
+- [ ] Login endpoint returns JWT on valid credentials
+- [ ] Login endpoint returns 401 on invalid password
+```
+
+**Spec-Driven format** (Given/When/Then):
+```markdown
+## Acceptance Criteria
+
+### Scenario: Successful login
+- **Given** a registered user with email "user@test.com" and password "valid123"
+- **When** they POST to /api/auth/login with valid credentials
+- **Then** the response status SHALL be 200
+- **And** the response body SHALL contain a valid JWT token
+
+### Scenario: Invalid password
+- **Given** a registered user with email "user@test.com"
+- **When** they POST to /api/auth/login with an incorrect password
+- **Then** the response status SHALL be 401
+- **And** the response body SHALL contain error code "INVALID_CREDENTIALS"
+```
+
+### Spec-Driven Spec File Template
+
+Enhanced version of the existing spec template with formal language:
+
+```markdown
+# {Topic} Specification
+
+## Overview
+{Brief description of what this spec covers}
+
+## Status
+- [ ] Draft
+- [ ] Review
+- [x] Approved
+
+## Terminology
+Key terms used in this specification follow RFC 2119:
+- **SHALL/MUST**: Absolute requirement
+- **SHOULD**: Recommended (deviation requires justification)
+- **MAY**: Optional
+
+## Specification
+
+### {Section 1}
+
+#### Requirements
+1. The system SHALL {requirement}
+2. The system MUST {requirement}
+3. The system SHOULD {recommendation}
+4. The system MAY {optional feature}
+
+#### Constraints
+- {Constraint using SHALL NOT / MUST NOT}
+
+### {Section 2}
+{Same structure}
+
+## Acceptance Scenarios
+
+### Scenario: {Name}
+- **Given** {precondition}
+- **When** {action}
+- **Then** {expected outcome}
+- **And** {additional outcome}
+
+## Decisions
+
+| Decision | Options Considered | Choice | Rationale |
+|----------|-------------------|--------|-----------|
+| {Decision} | {Options} | {Choice} | {Why} |
+
+## References
+- {Link to related documentation}
 ```
 
 ---

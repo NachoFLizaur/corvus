@@ -41,9 +41,21 @@ description: Requirements analysis phases (0a initial, 0b post-discovery)
 
 | Status | Action |
 |--------|--------|
-| `REQUIREMENTS_CLEAR` | **Skip Phase 0b and Phase 1** - Proceed directly to Phase 2 (Planning) |
+| `REQUIREMENTS_CLEAR` | **→ Plan-Type Selection** — Present recommendation via Question tool, then route by selection |
 | `QUESTIONS_NEEDED` | Present questions to user, then re-invoke Phase 0a with answers |
 | `DISCOVERY_NEEDED` | Proceed to Phase 1 with targeted discovery scope, then Phase 0b |
+
+**Plan-Type Selection**: After REQUIREMENTS_CLEAR, Corvus extracts the "Plan-Type Recommendation" 
+from requirements-analyst output and presents it to the user via the Question tool. 
+See `agent/corvus.md` "Plan-Type Selection" section for the full interaction flow.
+
+**Routing by Plan Type**:
+| Plan Type | Next Phase |
+|-----------|------------|
+| No Plan | Direct delegation (skip workflow) |
+| Lightweight | Phase 2 with `PLAN_TYPE: LIGHTWEIGHT` (skip Phase 1) |
+| Standard | Phase 1 (if DISCOVERY_NEEDED) → Phase 2 with `PLAN_TYPE: STANDARD` |
+| Spec-Driven | Phase 1 → Phase 2 with `PLAN_TYPE: SPEC_DRIVEN` |
 
 ### Round Tracking
 
@@ -105,7 +117,7 @@ Track clarification rounds across Phase 0a invocations:
 
 | Status | Action |
 |--------|--------|
-| `REQUIREMENTS_CLEAR` | Proceed to Phase 2 (Planning) |
+| `REQUIREMENTS_CLEAR` | **→ Plan-Type Selection** — Present recommendation via Question tool, then route by selection |
 | `QUESTIONS_NEEDED` | Present questions to user, then re-invoke Phase 0b with answers |
 | `DISCOVERY_NEEDED` | Return to Phase 1 for additional targeted discovery |
 
