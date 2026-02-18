@@ -46,17 +46,20 @@ Structured planning. Delegated execution. Quality gates at every boundary.
 One agent to drive your entire workflow. Describe what you need, and Corvus handles the rest — clarifying requirements, exploring the codebase, planning, implementing, testing, and validating.
 
 - **Single point of entry** — no need to pick the right agent or remember who does what
+- **Adaptive planning depth** — automatically scales from zero-ceremony quick fixes to spec-driven workflows based on task complexity
 - **Full lifecycle management** — from requirements through implementation to validation
 - **Context across phases** — maintains coherence across a complex, multi-step task
 - **Quality gates at every boundary** — objective and subjective validation before moving on
 
 ### Usage
 
-Have a complex task in mind? Tell `@corvus` what you need. It handles clarification, planning, implementation, and validation automatically.
+Have a complex task in mind? Tell `@corvus` what you need. It handles clarification, planning, implementation, and validation automatically — scaling its process to match the task:
 
 ```
-@corvus add a dark mode toggle with tests
-@corvus refactor the payment module to use the new API
+@corvus fix the typo in the footer              # no plan — direct delegation
+@corvus add a dark mode toggle with tests        # lightweight plan — minimal ceremony
+@corvus refactor the payment module to use the new API  # standard plan — full workflow
+@corvus redesign the plugin architecture         # spec-driven — formal specs + full workflow
 ```
 
 Need something quick? Talk to `@corvus` directly, it'll know which specialists to involve:
@@ -180,11 +183,19 @@ User Request
     ▼
 Phase 0a: Requirements Clarification (@requirements-analyst)
     │
-    ├─── CLEAR ──────────────────────────────────► Phase 2
-    └─── DISCOVERY_NEEDED ──► Phase 1 ──► Phase 0b
+    ├─── CLEAR ──────────────────────────────────► Plan-Type Selection
+    └─── DISCOVERY_NEEDED ──► Phase 1 ──► Phase 0b ──► Plan-Type Selection
     │
     ▼
 Phase 1: Discovery (@researcher + @code-explorer) [parallel]
+    │
+    ▼
+Plan-Type Selection (complexity heuristic → user override)
+    │
+    ├─── No Plan ────────► Direct delegation (single task, done)
+    ├─── Lightweight ────► Phase 2 (1 phase, 3-6 tasks, skip discovery + final validation)
+    ├─── Standard ───────► Phase 2 (full workflow, unchanged)
+    └─── Spec-Driven ───► Formal specs → Phase 2 (full workflow)
     │
     ▼
 Phase 2: Planning (@task-planner creates MASTER_PLAN.md)
@@ -218,6 +229,7 @@ Phase 6: Completion
 ```
 
 Key features:
+- **Adaptive plan-type selection**: Scores task complexity across 6 dimensions, recommends one of 4 tiers (No Plan → Lightweight → Standard → Spec-Driven), user can override
 - **Phase-level validation**: Quality checks run once per phase (~70% fewer subagent invocations)
 - **Parallel execution**: Independent tasks within a phase run simultaneously
 - **Conditional clarification**: Phase 0b skipped when requirements are already clear
