@@ -70,9 +70,15 @@ Present final summary to user:
 - `[file1]` - [purpose]
 
 ### Validation Results
+
+When `tests_enabled: true`:
 - [x] All tests passing ([N] tests)
 - [x] Build successful
 - [x] All acceptance criteria met
+
+When `tests_enabled: false`:
+- [x] All acceptance criteria verified (acceptance-only mode)
+- [x] Build successful
 
 ### Task Documentation
 - Master plan: `.corvus/tasks/[feature]/MASTER_PLAN.md`

@@ -80,14 +80,14 @@ For small, clearly-scoped changes (< 3 files) to the just-completed work:
    
    **MUST DO**:
    - [specific requirements]
-   - Validate changes (type check, lint, tests)
+   - Validate changes (type check, lint, and tests if `tests_enabled: true`)
    
    **REPORT BACK**:
    - Files changed
    - Validation results
    ```
 
-3. **Validate with code-quality** (if significant changes)
+3. **Validate with code-quality** (if significant changes — tests or acceptance-only based on `tests_enabled`)
 
 4. **Update MASTER_PLAN.md**: Mark task complete via task-planner
 

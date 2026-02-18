@@ -82,10 +82,15 @@ Transform complex, multi-step work into:
   </rule>
   
   <rule id="phase_test_task_required" priority="999">
-    PHASE TEST TASK REQUIRED: Every phase MUST end with a test task.
+    PHASE TEST TASK REQUIRED (when `tests_enabled: true`):
+    Every phase MUST end with a test task.
     Test tasks write tests for all implementation tasks in that phase.
     Test specifications MUST be derived from acceptance criteria, not implementation.
     NEVER skip the test task. NEVER merge test tasks across phases.
+    
+    When `tests_enabled: false`: Do NOT generate test tasks for any phase.
+    Phases end with the last implementation task. Quality gates will run in
+    "acceptance-only" mode (verifying criteria without test execution).
   </rule>
 </critical_rules>
 
@@ -215,6 +220,9 @@ Create structured task plan with phases:
 | 07 | 07-error-handling.md | Add error handling | 2 | impl | 05, 06 |
 | 08 | 08-integration.md | Wire up components | 2 | impl | 07 |
 | 09 | 09-phase-2-tests.md | Phase 2 tests | 2 | **test** | 05, 06, 07, 08 |
+
+> **When `tests_enabled: false`**: Omit all rows with Type = **test** from the Tasks table.
+> Phase task counts and effort estimates should reflect the absence of test tasks.
 
 ### Exit Criteria
 - [ ] All tasks marked complete
@@ -356,6 +364,7 @@ Create task directory structure:
 
 **Milestone**: {What's true when this phase completes}
 **Test Coverage**: Tasks 01, 02, 03
+> Include "Test Coverage" line only when `tests_enabled: true`.
 
 **Files Created/Modified**:
 - `{file1}` - {purpose}
@@ -373,6 +382,7 @@ Create task directory structure:
 
 **Milestone**: {What's true when this phase completes}
 **Test Coverage**: Tasks 05, 06
+> Include "Test Coverage" line only when `tests_enabled: true`.
 
 **Files Created/Modified**:
 - `{file1}` - {purpose}
@@ -400,7 +410,8 @@ Phase 2 (Implementation):
 ## Exit Criteria
 
 - [ ] All tasks marked complete
-- [ ] All tests passing
+- [ ] All tests passing *(only when `tests_enabled: true`)*
+- [ ] All acceptance criteria verified *(always — this is the primary gate when `tests_enabled: false`)*
 - [ ] Build succeeds
 - [ ] {Feature-specific criterion 1}
 - [ ] {Feature-specific criterion 2}
@@ -510,6 +521,9 @@ Phase 2 (Implementation):
 
 ## Tests
 
+> **Conditional**: Include this section only when `tests_enabled: true`.
+> When `tests_enabled: false`, omit the entire Tests section from task files.
+
 ### Unit Tests
 - **File**: `{test-file-path}`
 - **Test**: {what to test}
@@ -535,12 +549,14 @@ Phase 2 (Implementation):
 # Lint
 {project-specific lint command}
 
-# Run specific tests
+# Run specific tests (only when tests_enabled: true)
 {project-specific test command}
 
 # Build
 {project-specific build command}
 ```
+
+> When `tests_enabled: false`, omit the "Run specific tests" line from validation commands.
 
 ## Notes
 - {Assumptions made}
@@ -637,9 +653,12 @@ This flag tells Corvus whether to invoke ux-dx-quality agent after code-quality 
 
 ---
 
-## PHASE TEST TASKS (MANDATORY)
+## PHASE TEST TASKS (CONDITIONAL)
 
-Every phase MUST end with a **test task** that writes tests for all implementation tasks in that phase.
+> This entire section applies only when `tests_enabled: true`.
+> When `tests_enabled: false`, do NOT generate phase test tasks. Phases end with the last implementation task.
+
+When `tests_enabled: true`, every phase MUST end with a **test task** that writes tests for all implementation tasks in that phase.
 
 ### Why Phase Test Tasks?
 
@@ -1076,6 +1095,39 @@ cd frontend && pnpm test
 ```
 
 **IMPORTANT**: Never use generic commands like `python`, `pytest`, `npm` without checking the project environment first. Always use the venv path or activate the environment.
+
+---
+
+## TEST PREFERENCE FLAG
+
+The `tests_enabled` flag controls whether test-related artifacts are generated.
+
+### Flag Source
+- Captured by requirements-analyst during Phase 0
+- Passed to task-planner via Corvus Phase 2 delegation
+- Default: `true`
+
+### When `tests_enabled: true` (Default)
+- All existing behavior is preserved exactly as-is
+- Phase test tasks are generated (MANDATORY)
+- `## Tests` section included in task files
+- Test validation commands included
+- MASTER_PLAN.md includes test coverage fields and test exit criteria
+
+### When `tests_enabled: false`
+- Phase test tasks are NOT generated
+- `## Tests` section is omitted from task files
+- Test validation commands are omitted
+- MASTER_PLAN.md omits test coverage fields
+- Exit criteria uses "All acceptance criteria verified" instead of "All tests passing"
+- Quality gates (code-quality) run in "acceptance-only" mode
+
+### Propagation
+The flag appears in:
+1. requirements-analyst output → "User Requirements (Immutable)" section
+2. Corvus Phase 2 delegation → passed to task-planner
+3. MASTER_PLAN.md → documented for downstream phases
+4. Individual task files → conditional sections based on flag
 
 ---
 

@@ -7,6 +7,26 @@ description: Planning (Phase 2), User Approval (Phase 3), and optional High Accu
 
 **Goal**: Create comprehensive master plan with task files.
 
+### Step 1: Ask Test Preference (MANDATORY)
+
+<critical_rule priority="9999">
+BEFORE invoking task-planner, you MUST call the `question()` tool to ask the user
+about test preference. Do NOT skip this step. Do NOT assume a default.
+This is the FIRST thing you do when this skill is loaded.
+</critical_rule>
+
+Invoke the `question()` tool with these exact parameters:
+
+- question: "Should I generate and run tests for this feature?"
+- options:
+  1. label: "Yes (recommended)", description: "Generate test tasks and run tests in quality gates"
+  2. label: "No — skip tests", description: "Skip test generation, quality gates use acceptance-only mode"
+
+Store the result as `tests_enabled: true` (if "Yes") or `tests_enabled: false` (if "No").
+Pass this to task-planner via the `**TEST PREFERENCE**` field in the delegation template below.
+
+### Step 2: Create Master Plan
+
 <mandatory>
 This phase is NOT optional. You MUST invoke the task-planner subagent to create:
 1. `.corvus/tasks/[feature-name]/MASTER_PLAN.md` - The execution tracking document
@@ -38,6 +58,10 @@ Invoke **task-planner** with combined context from Phase 1:
 ⚠️ These MUST be incorporated into MASTER_PLAN.md and all relevant task files.
 ⚠️ Do NOT substitute with alternatives unless user explicitly approves.
 
+**TEST PREFERENCE**: `tests_enabled: [true/false]` (from Corvus question() tool — see "Test Preference" step)
+- When `true`: Generate test tasks, include test sections in task files (default behavior)
+- When `false`: Do NOT generate test tasks, omit test sections from task files
+
 **CONTEXT FROM RESEARCH**:
 [Paste summary of researcher findings, or "N/A - no external research needed"]
 
@@ -60,6 +84,7 @@ Invoke **task-planner** with combined context from Phase 1:
 - Include validation commands for each task using correct environment (venv, package manager)
 - Estimate effort for each task and phase
 - Group related tasks into logical phases
+- Respect `tests_enabled` flag: generate test tasks only when `true`
 
 **MUST NOT DO**:
 - Skip the master plan document

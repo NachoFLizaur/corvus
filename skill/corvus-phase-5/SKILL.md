@@ -23,6 +23,8 @@ Phase 5 has two steps:
 **ALL TASK FILES**: `.corvus/tasks/[feature]/*.md`
 
 **MUST DO**:
+
+When `tests_enabled: true` (default):
 - Run FULL test suite (not just affected tests)
 - Run production build
 - Verify ALL acceptance criteria from ALL task files
@@ -30,12 +32,30 @@ Phase 5 has two steps:
 - Look for any regressions
 - Verify no breaking changes to existing functionality
 
+When `tests_enabled: false` (acceptance-only mode):
+- Run production build
+- Verify ALL acceptance criteria from ALL task files (with concrete evidence)
+- Check for consistency across all changes
+- Look for any regressions via code review
+- Verify no breaking changes to existing functionality
+- Do NOT attempt to run tests or report missing tests as a gap
+
 **REPORT BACK**:
+
+When `tests_enabled: true`:
 - **5a OBJECTIVE GATE STATUS**: PASS / FAIL
 - Test results: [N]/[M] passing
 - Build status: PASS/FAIL
 - Acceptance criteria: [N]/[M] met (list any failures)
 - Regressions found: [list or none]
+- Any remaining issues (with severity)
+
+When `tests_enabled: false`:
+- **5a OBJECTIVE GATE STATUS**: PASS / FAIL
+- **Mode**: ACCEPTANCE-ONLY
+- Build status: PASS/FAIL
+- Acceptance criteria: [N]/[M] met (list any failures with evidence)
+- Regressions found: [list or none] (via code review)
 - Any remaining issues (with severity)
 ```
 
@@ -43,6 +63,8 @@ Phase 5 has two steps:
 - 5a PASS + UX/DX required → Proceed to 5b
 - 5a PASS + No UX/DX required → Proceed to Phase 6
 - 5a FAIL → Create fix tasks, return to Phase 4
+
+> Note: Decision logic is identical regardless of `tests_enabled`. The gate always produces PASS/FAIL; only the evidence model differs.
 
 ### 5b. Comprehensive Subjective Check (IF REQUIRED)
 

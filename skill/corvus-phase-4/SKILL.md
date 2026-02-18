@@ -27,7 +27,9 @@ Phase 4 operates at the **phase level**, not per-task. Tasks within a phase are 
 4a: code-implementer (ALL tasks in phase, parallel where possible)
          │
          ▼
-4b: code-quality (tests + acceptance criteria - MANDATORY)
+4b: code-quality (MANDATORY)
+    ├── tests_enabled: true  → tests + acceptance criteria
+    └── tests_enabled: false → acceptance criteria only
          │
     ┌────┴────┐
   PASS      FAIL
@@ -316,12 +318,19 @@ Phase 5 UX/DX Required: [YES if ANY task is true / NO if all false]
 <quality_gate id="objective" priority="9999">
   <rule>
     MANDATORY OBJECTIVE QUALITY GATE: You CANNOT proceed until
-    code-quality returns PASS for the ENTIRE PHASE:
+    code-quality returns PASS for the ENTIRE PHASE.
+    
+    When `tests_enabled: true`:
     - Tests: PASS (for all affected code)
     - Acceptance criteria: ALL tasks in phase PASS
     
+    When `tests_enabled: false` (acceptance-only mode):
+    - Acceptance criteria: ALL tasks in phase PASS (verified via file inspection, code review, command output)
+    - Tests are NOT run and NOT required
+    
     NOTE: code-implementer already validated lint, type check, and build.
-    code-quality focuses on TESTS and acceptance criteria verification.
+    code-quality focuses on TESTS and acceptance criteria verification
+    (or acceptance criteria only when tests_enabled: false).
     
     If ANY check returns FAIL:
     1. FIRST: Invoke task-planner LEARNING MODE (FAILURE_ANALYSIS)
@@ -336,7 +345,13 @@ Phase 5 UX/DX Required: [YES if ANY task is true / NO if all false]
   </rule>
 </quality_gate>
 
+**Template Selection for 4b**:
+- If `tests_enabled: true` (default): Use the standard delegation template below
+- If `tests_enabled: false`: Use the "Acceptance-Only Mode" delegation template
+
 **DELEGATE TO**: @code-quality
+
+#### 4b Delegation: Standard Mode (when `tests_enabled: true`)
 
 ```markdown
 **TASK**: Validate Phase [N] implementation
@@ -399,6 +414,66 @@ Tests: [N] run, [N] passed, [N] failed
 | Task | Tests | Criteria | Status |
 |------|-------|----------|--------|
 | NN | [N/M] | [N/M] | PASS/FAIL |
+
+### Fix Scope (if FAIL)
+Only tasks [NN] require fixes. Tasks [NN] should NOT be modified.
+```
+```
+
+#### 4b Delegation: Acceptance-Only Mode (when `tests_enabled: false`)
+
+```markdown
+**TASK**: Validate Phase [N] implementation (acceptance-only mode)
+
+**PHASE TASKS**: 
+- Task NN: [name] - `.corvus/tasks/[feature]/NN-task.md`
+- Task NN: [name] - `.corvus/tasks/[feature]/NN-task.md`
+
+**SCOPE**: All files created/modified in 4a for this phase
+
+**MODE**: ACCEPTANCE-ONLY (`tests_enabled: false`)
+
+**PRIMARY JOB**: VERIFY ACCEPTANCE CRITERIA
+
+Code-implementer already validated:
+- ✅ Lint passed
+- ✅ Type check passed  
+- ✅ Build succeeded
+
+Your job is to verify acceptance criteria from task files WITHOUT running tests.
+
+**CHECKS REQUIRED**:
+1. Verify acceptance criteria from ALL task files (with evidence)
+2. Evidence must be concrete: file inspection, code review, or command output
+3. Check for regressions via code review (if existing code was modified)
+
+**MUST DO**:
+- Read all task files for the phase
+- For each acceptance criterion, provide concrete evidence
+- Attribute any failures to specific task(s)
+- Report PASS/FAIL with evidence type for each criterion
+
+**MUST NOT DO**:
+- Attempt to run tests
+- Report "NO TESTS FOUND" as a gap
+- Recommend test creation
+- Just read files and check boxes without evidence
+- Report failures without task attribution
+
+**REPORT FORMAT**:
+```
+**PHASE GATE STATUS**: PASS / FAIL
+**MODE**: ACCEPTANCE-ONLY
+
+### Acceptance Criteria Verification (PRIMARY)
+| Task | Criterion | Status | Evidence |
+|------|-----------|--------|----------|
+| NN | [criterion] | ✅/❌/⚠️ | [file inspection / code review / command output] |
+
+### Task Attribution
+| Task | Criteria | Status |
+|------|----------|--------|
+| NN | [N/M] | PASS/FAIL |
 
 ### Fix Scope (if FAIL)
 Only tasks [NN] require fixes. Tasks [NN] should NOT be modified.
