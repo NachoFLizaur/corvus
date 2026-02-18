@@ -221,14 +221,15 @@ Load phase-specific skills before starting each phase.
 
 ## VALIDATION RESPONSIBILITY DIVISION
 
-| Validation | When | Who |
-|------------|------|-----|
-| Lint, Type check | After each file | code-implementer |
-| Build | After implementation | code-implementer |
-| **Tests** | End of phase | **code-quality** |
-| **Acceptance criteria** | End of phase | **code-quality** |
+| Validation | When | Who | Condition |
+|------------|------|-----|-----------|
+| Lint, Type check | After each file | code-implementer | Always |
+| Build | After implementation | code-implementer | Always |
+| **Tests** | End of phase | **code-quality** | `tests_enabled: true` only |
+| **Acceptance criteria** | End of phase | **code-quality** | Always |
 
-code-quality reports: Test results, acceptance verification, task attribution for failures.
+When `tests_enabled: true`: code-quality reports test results, acceptance verification, task attribution for failures.
+When `tests_enabled: false`: code-quality reports acceptance verification and task attribution only (acceptance-only mode).
 code-quality does NOT re-run: Lint, type check (already validated).
 
 ---
@@ -256,7 +257,7 @@ User Request
     ▼
 [Phase 0a] ──► @requirements-analyst (INITIAL_ANALYSIS)
     │
-    ├─ REQUIREMENTS_CLEAR ──► Phase 2 (skip 0b, 1)
+    ├─ REQUIREMENTS_CLEAR ──► Test Preference → Phase 2 (skip 0b, 1)
     ├─ QUESTIONS_NEEDED ────► Present to user → Loop (max 3)
     └─ DISCOVERY_NEEDED ────► Phase 1
     │
@@ -265,6 +266,9 @@ User Request
     │
     ▼
 [Phase 0b] ──► @requirements-analyst (POST_DISCOVERY) [only if 0a→DISCOVERY_NEEDED]
+    │
+    ▼
+Corvus asks: "Generate tests?" (via question() tool)
     │
     ▼
 [Phase 2] ──► task-planner creates MASTER_PLAN.md
@@ -321,6 +325,25 @@ Launch researcher + code-explorer **IN PARALLEL**.
 
 ---
 
+## Test Preference (After Phase 0 / Phase 1)
+
+**Goal**: Ask user whether tests should be generated and run.
+
+**When**: After requirements are clear (Phase 0a returns REQUIREMENTS_CLEAR, or after Phase 0b/Phase 1 complete).
+
+Invoke the `question()` tool:
+- question: "Should I generate and run tests for this feature?"
+- options:
+  1. label: "Yes (recommended)", description: "Generate test tasks and run tests in quality gates (default)"
+  2. label: "No — skip tests", description: "Skip test generation, quality gates use acceptance-only mode"
+
+Store the result as `tests_enabled: true` (if "Yes") or `tests_enabled: false` (if "No").
+Pass this to Phase 2 (task-planner) via the delegation template's `**TEST PREFERENCE**` field.
+
+> **Note**: This is a lightweight step — just a question tool call, no subagent delegation needed.
+
+---
+
 ## Phase 2: PLANNING (MANDATORY)
 
 **Goal**: Create master plan with task files.
@@ -333,6 +356,8 @@ BEFORE starting: `skill({ name: "corvus-phase-2" })`
 MUST invoke task-planner to create:
 1. `.corvus/tasks/[feature]/MASTER_PLAN.md`
 2. Individual task files
+
+Pass `tests_enabled` (from the Test Preference question() step) to task-planner via the `**TEST PREFERENCE**` field. This controls whether test tasks are generated and whether quality gates run in full or acceptance-only mode.
 
 DO NOT skip to implementation or ask "should I proceed?"
 </mandatory>
@@ -413,7 +438,9 @@ BEFORE starting: `skill({ name: "corvus-phase-4" })`
 4a: code-implementer (ALL phase tasks, parallel where possible)
     │
     ▼
-4b: code-quality (tests + acceptance - MANDATORY)
+4b: code-quality (MANDATORY)
+    ├── tests_enabled: true  → tests + acceptance criteria
+    └── tests_enabled: false → acceptance criteria only (acceptance-only mode)
     │
   PASS → 4c: Update plan → Next Phase
   FAIL → FAILURE_ANALYSIS → fix failing tasks → 4b
@@ -435,7 +462,7 @@ BEFORE starting: `skill({ name: "corvus-phase-4" })`
 BEFORE starting: `skill({ name: "corvus-phase-5" })`
 </skill_gate>
 
-- **5a**: code-quality (ALWAYS)
+- **5a**: code-quality (ALWAYS — tests + acceptance when `tests_enabled: true`, acceptance-only when `tests_enabled: false`)
 - **5b**: ux-dx-quality (ONLY if ANY task had `requires_ux_dx_review: true`)
 
 ---
@@ -491,5 +518,6 @@ Routes to: LIGHTWEIGHT (< 3 files) | PARTIAL RESTART (3+ files) | FULL RESTART (
 15. Phase 0b conditional (only if 0a→DISCOVERY_NEEDED)
 16. UX/DX flags aggregate to Phase 5b
 17. Load skills before phases
+18. `tests_enabled` flag controls test generation and execution mode
 
 > **Note**: For state machine diagrams, see `docs/CORVUS-STATE-MACHINE.md`

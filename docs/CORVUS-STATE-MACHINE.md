@@ -69,8 +69,8 @@ stateDiagram-v2
 | 2 | Planning | Create master plan and task files | @task-planner |
 | 3 | User Approval | Single approval gate | User |
 | 3.5 | High Accuracy Plan Review | Optional plan quality validation | @plan-reviewer |
-| 4 | Implementation Loop | Execute phases with quality gates | @code-implementer + @code-quality |
-| 5 | Final Validation | Comprehensive objective + subjective checks | @code-quality + @ux-dx-quality |
+| 4 | Implementation Loop | Execute phases with quality gates (tests or acceptance-only based on `tests_enabled`) | @code-implementer + @code-quality |
+| 5 | Final Validation | Comprehensive objective + subjective checks (acceptance-only when `tests_enabled: false`) | @code-quality + @ux-dx-quality |
 | 6 | Completion | Extract learnings, summarize | @task-planner |
 | 7 | Follow-up Triage | Route follow-up requests | Corvus decision |
 
@@ -168,7 +168,7 @@ stateDiagram-v2
 
     Step4b --> Step4c: PASS
     Step4b --> FailureAnalysis: FAIL
-    note right of Step4b: code-quality\n(tests + acceptance)
+    note right of Step4b: code-quality\n(tests + acceptance OR\nacceptance-only)
 
     FailureAnalysis --> FixTasks: Analysis complete
     note right of FailureAnalysis: task-planner\nFAILURE_ANALYSIS
@@ -230,10 +230,15 @@ Phase 5 UX/DX Required: [YES if ANY true / NO if all false]
 
 **Agent**: @code-quality
 
-**Checks**:
+**Checks** (when `tests_enabled: true`):
 1. Run test suite (targeting phase's code)
 2. Verify acceptance criteria from ALL task files
 3. Check for regressions
+
+**Checks** (when `tests_enabled: false` — acceptance-only mode):
+1. Verify acceptance criteria from ALL task files (with concrete evidence)
+2. Check for regressions via code review
+3. Do NOT run tests or report missing tests
 
 **NOT checked** (already done by code-implementer):
 - Lint
@@ -242,11 +247,11 @@ Phase 5 UX/DX Required: [YES if ANY true / NO if all false]
 
 ### 4b to 4c Transition (PASS)
 
-| Condition | Action |
-|-----------|--------|
-| PHASE GATE STATUS = PASS | Proceed to 4c |
-| All tests pass | Continue |
-| All acceptance criteria met | Continue |
+| Condition | Action | When |
+|-----------|--------|------|
+| PHASE GATE STATUS = PASS | Proceed to 4c | Always |
+| All tests pass | Continue | `tests_enabled: true` only |
+| All acceptance criteria met | Continue | Always |
 
 ### 4b to Fix Cycle (FAIL)
 
@@ -327,14 +332,21 @@ stateDiagram-v2
 
 **Agent**: @code-quality
 
-**Scope**: FULL test suite, production build, ALL acceptance criteria
+**Scope** (when `tests_enabled: true`): FULL test suite, production build, ALL acceptance criteria
+**Scope** (when `tests_enabled: false`): Production build, ALL acceptance criteria (acceptance-only mode)
 
-**Checks**:
+**Checks** (when `tests_enabled: true`):
 - Run FULL test suite (not just affected tests)
 - Run production build
 - Verify ALL acceptance criteria from ALL task files
 - Check for consistency across all changes
 - Look for regressions
+
+**Checks** (when `tests_enabled: false`):
+- Run production build
+- Verify ALL acceptance criteria from ALL task files (with evidence)
+- Check for consistency across all changes
+- Look for regressions via code review
 
 ### 5a Decision Point
 
@@ -659,12 +671,13 @@ Examples:
 
 ### Validation Responsibility
 
-| Check | When | Agent |
-|-------|------|-------|
-| Lint | After each file | code-implementer |
-| Type check | After each file | code-implementer |
-| Build | After implementation | code-implementer |
-| **Tests** | End of phase (4b) | **code-quality** |
-| **Acceptance** | End of phase (4b) | **code-quality** |
-| Full suite | Phase 5a | code-quality |
-| UX/DX | Phase 5b | ux-dx-quality |
+| Check | When | Agent | Condition |
+|-------|------|-------|-----------|
+| Lint | After each file | code-implementer | Always |
+| Type check | After each file | code-implementer | Always |
+| Build | After implementation | code-implementer | Always |
+| **Tests** | End of phase (4b) | **code-quality** | `tests_enabled: true` only |
+| **Acceptance** | End of phase (4b) | **code-quality** | Always |
+| Full suite | Phase 5a | code-quality | `tests_enabled: true` only |
+| Acceptance (all) | Phase 5a | code-quality | Always |
+| UX/DX | Phase 5b | ux-dx-quality | If required |
