@@ -11,7 +11,7 @@ describe("loadAgents", () => {
   test("loads all agent files", () => {
     const agents = loadAgents(AGENT_DIR)
 
-    expect(Object.keys(agents)).toHaveLength(8)
+    expect(Object.keys(agents)).toHaveLength(9)
   })
 
   test("agent names from filenames", () => {
@@ -44,16 +44,12 @@ describe("loadAgents", () => {
     expect(agents["corvus"].temperature).toBe(0.2)
   })
 
-  test("maps tools field", () => {
+  test("maps permissions to permission", () => {
     const agents = loadAgents(AGENT_DIR)
-    const tools = agents["corvus"].tools
+    const permission = agents["corvus"].permission
 
-    expect(tools).toBeDefined()
-    expect(typeof tools).toBe("object")
-    // All tool values should be booleans
-    for (const value of Object.values(tools!)) {
-      expect(typeof value).toBe("boolean")
-    }
+    expect(permission).toBeDefined()
+    expect(typeof permission).toBe("object")
   })
 
   test("renames permissions to permission", () => {

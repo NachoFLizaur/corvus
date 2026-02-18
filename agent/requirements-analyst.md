@@ -2,16 +2,13 @@
 description: "Requirements analysis agent for intelligent clarification. Analyzes requests in two modes: INITIAL_ANALYSIS (before discovery) and POST_DISCOVERY (after discovery). Uses Question tool for interactive clarification. Returns structured output for Corvus flow control."
 mode: subagent
 temperature: 0.1
-tools:
-  write: false
-  edit: false
-  bash: false
-  read: true
-  glob: true
-  grep: true
-  webfetch: false
-  question: true
 permissions:
+  read: "allow"
+  glob: "allow"
+  grep: "allow"
+  bash: "deny"
+  webfetch: "deny"
+  question: "allow"
   edit:
     "**/*": "deny"
 ---

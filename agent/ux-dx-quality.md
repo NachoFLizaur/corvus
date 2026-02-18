@@ -2,14 +2,10 @@
 description: "Subjective quality assessment agent for UX (user experience), DX (developer experience), documentation quality, and architecture soundness. Provides nuanced evaluation requiring judgment. Use for quality reviews beyond pass/fail metrics."
 mode: subagent
 temperature: 0.3
-tools:
-  write: false
-  edit: false
-  bash: false
-  read: true
-  glob: true
-  grep: true
 permissions:
+  read: "allow"
+  glob: "allow"
+  grep: "allow"
   bash:
     "*": "deny"
   edit:

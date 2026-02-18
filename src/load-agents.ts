@@ -6,7 +6,6 @@ interface AgentFrontmatter {
   description?: string
   mode?: "primary" | "subagent" | "all"
   temperature?: number
-  tools?: Record<string, boolean>
   permissions?: Record<string, unknown>
   color?: string
 }
@@ -16,7 +15,6 @@ interface AgentConfig {
   mode?: "primary" | "subagent" | "all"
   prompt?: string
   temperature?: number
-  tools?: Record<string, boolean>
   permission?: Record<string, unknown>
   color?: string
   [key: string]: unknown
@@ -48,8 +46,6 @@ export function loadAgents(agentDir: string): Record<string, AgentConfig> {
         config.mode = frontmatter.mode
       if (frontmatter.temperature !== undefined)
         config.temperature = frontmatter.temperature
-      if (frontmatter.tools !== undefined)
-        config.tools = frontmatter.tools
       // Note: frontmatter uses "permissions" (plural), config uses "permission" (singular)
       if (frontmatter.permissions !== undefined)
         config.permission = frontmatter.permissions

@@ -2,14 +2,10 @@
 description: "Task breakdown and project planning specialist. Transforms complex features into atomic, trackable subtasks with dependencies. Creates MASTER_PLAN.md for execution tracking. Use for planning multi-step work."
 mode: subagent
 temperature: 0.1
-tools:
-  write: true
-  edit: true
-  bash: false
-  read: true
-  glob: true
-  grep: true
 permissions:
+  read: "allow"
+  glob: "allow"
+  grep: "allow"
   bash:
     "*": "deny"
   edit:

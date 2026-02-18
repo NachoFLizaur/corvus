@@ -2,14 +2,10 @@
 description: "Comprehensive code quality agent for testing, reviewing, and build validation. Handles TDD, code reviews, security audits, and CI/CD validation. Use for ensuring code quality before merge."
 mode: subagent
 temperature: 0.1
-tools:
-  write: true
-  edit: true
-  bash: true
-  read: true
-  glob: true
-  grep: true
 permissions:
+  read: "allow"
+  glob: "allow"
+  grep: "allow"
   bash:
     "npm test*": "allow"
     "yarn test*": "allow"

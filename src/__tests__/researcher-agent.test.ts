@@ -21,14 +21,14 @@ describe("Researcher Agent", () => {
     expect(content).not.toMatch(/exa_web_search|websearch_exa/i)
   })
 
-  test("frontmatter has web-research_multi_search tool", () => {
+  test("permissions has web-research_multi_search", () => {
     // Assert
-    expect(frontmatter.tools["web-research_multi_search"]).toBe(true)
+    expect(frontmatter.permissions["web-research_multi_search"]).toBe("allow")
   })
 
-  test("frontmatter has web-research_fetch_pages tool", () => {
+  test("permissions has web-research_fetch_pages", () => {
     // Assert
-    expect(frontmatter.tools["web-research_fetch_pages"]).toBe(true)
+    expect(frontmatter.permissions["web-research_fetch_pages"]).toBe("allow")
   })
 
   test("curl permission is allow", () => {
@@ -82,7 +82,6 @@ describe("Researcher Agent", () => {
     expect(frontmatter).toBeDefined()
     expect(frontmatter.description).toBeDefined()
     expect(frontmatter.mode).toBe("subagent")
-    expect(frontmatter.tools).toBeDefined()
     expect(frontmatter.permissions).toBeDefined()
   })
 
@@ -125,10 +124,10 @@ describe("Researcher Agent", () => {
     expect(frontmatter.permissions.bash["gh *"]).toBe("allow")
   })
 
-  test("read/glob/grep tools preserved", () => {
+  test("read/glob/grep permissions preserved", () => {
     // Assert - still needed for quick context checks (e.g., reading package.json)
-    expect(frontmatter.tools.read).toBe(true)
-    expect(frontmatter.tools.glob).toBe(true)
-    expect(frontmatter.tools.grep).toBe(true)
+    expect(frontmatter.permissions.read).toBe("allow")
+    expect(frontmatter.permissions.glob).toBe("allow")
+    expect(frontmatter.permissions.grep).toBe("allow")
   })
 })

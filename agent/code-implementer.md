@@ -2,15 +2,10 @@
 description: "Multi-language code implementation agent with plan-approve-execute workflow. Handles feature development, bug fixes, and refactoring with modular, functional patterns. Use for writing production code."
 mode: subagent
 temperature: 0.1
-tools:
-  write: true
-  edit: true
-  bash: true
-  read: true
-  glob: true
-  grep: true
-  patch: true
 permissions:
+  read: "allow"
+  glob: "allow"
+  grep: "allow"
   bash:
     "rm -rf *": "deny"
     "sudo *": "deny"
