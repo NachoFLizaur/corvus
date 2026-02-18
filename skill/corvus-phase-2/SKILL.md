@@ -1,6 +1,6 @@
 ---
 name: corvus-phase-2
-description: Planning (Phase 2) and User Approval (Phase 3)
+description: Planning (Phase 2), User Approval (Phase 3), and optional High Accuracy Plan Review (Phase 3.5)
 ---
 
 ## Phase 2: PLANNING (MANDATORY)
@@ -122,15 +122,137 @@ Present the created plan to the user in this format:
 ### Master Plan Location
 `.corvus/tasks/[feature-name]/MASTER_PLAN.md`
 
----
-
-**Approve to begin implementation?**
-(After approval, I will execute all phases autonomously and report back when complete.)
 ```
 
-**Decision Point**:
-- User approves -> Proceed to Phase 4
-- User requests changes -> Return to Phase 2 with feedback
-- User rejects -> Stop and ask for guidance
+<critical_rule priority="9999">
+AFTER presenting the plan summary above, you MUST call the question tool. 
+Do NOT write the options as text. Do NOT ask the user to type a response.
+You MUST invoke the question tool directly with these exact parameters:
 
-**Exit Criteria**: Explicit user approval received.
+- question: "Ready to proceed with this plan?"
+- header: "Implementation Plan"
+- options:
+  1. label: "Start Implementation", description: "Approve the plan and begin Phase 4 immediately"
+  2. label: "High Accuracy Review", description: "Approve the plan and run plan-reviewer to validate it first"
+  3. label: "Request Changes", description: "Go back to planning with feedback"
+</critical_rule>
+
+**Decision Point** (based on user's selection):
+- "Start Implementation" → Proceed to Phase 4
+- "High Accuracy Review" → Proceed to Phase 3.5
+- "Request Changes" → Return to Phase 2 with feedback
+
+**Exit Criteria**: User selects an option via the question tool.
+
+---
+
+## Phase 3.5: HIGH ACCURACY PLAN REVIEW (Optional)
+
+**Goal**: Validate plan quality before implementation begins.
+
+**When**: User chose "High Accuracy Review" after Phase 3 approval.
+
+**Prerequisites**: Phase 3 complete (user approved plan).
+
+### Invoke plan-reviewer
+
+**DELEGATE TO**: @plan-reviewer
+
+```markdown
+**TASK**: Review implementation plan for [feature name]
+
+**MASTER PLAN**: `.corvus/tasks/[feature]/MASTER_PLAN.md`
+**TASK FILES**: `.corvus/tasks/[feature]/*.md`
+
+**MUST DO**:
+- Review all task files for executability
+- Verify file references exist in codebase
+- Check dependency graph for issues
+- Verify acceptance criteria are binary
+- Render binary OKAY/REJECT verdict
+
+**MUST NOT DO**:
+- Modify any files
+- Suggest alternative approaches (unless current approach is broken)
+- Reject for style preferences
+- Cite more than 3 blocking issues
+
+**REPORT BACK**:
+- **PLAN REVIEW GATE STATUS**: OKAY / REJECT
+- Review summary (4 criteria)
+- Blocking issues (if REJECT, max 3)
+- Non-blocking notes (optional)
+```
+
+### Decision Point after Phase 3.5
+
+**If OKAY**:
+→ Present review results to user and ask for confirmation before proceeding.
+
+Report the review summary to the user:
+```markdown
+## Plan Review: OKAY ✅
+
+The plan passed high-accuracy review. All criteria met.
+
+**Review Summary**:
+[Paste plan-reviewer's summary of the 4 criteria here]
+
+**Non-blocking Notes** (if any):
+[Paste any non-blocking notes from plan-reviewer]
+```
+
+Then you MUST call the question tool (do NOT write the options as text):
+
+- question: "Plan review passed. Ready to begin implementation?"
+- header: "Review Complete"
+- options:
+  1. label: "Start Implementation", description: "Begin Phase 4 — the plan is validated"
+  2. label: "Re-run Review", description: "Run the high accuracy review again"
+
+**User chooses "Start Implementation"** → Proceed to Phase 4
+**User chooses "Re-run Review"** → Phase 3.5 again
+
+**If REJECT**:
+1. Invoke task-planner with rejection feedback:
+```markdown
+**TASK**: Fix plan based on plan-reviewer feedback
+**MODE**: LEARNING
+**TRIGGER**: FAILURE_ANALYSIS
+
+**REJECTION FEEDBACK**:
+[Paste plan-reviewer's blocking issues here]
+
+**MASTER PLAN**: `.corvus/tasks/[feature]/MASTER_PLAN.md`
+**TASK FILES**: `.corvus/tasks/[feature]/*.md`
+
+**MUST DO**:
+- Address each blocking issue cited by plan-reviewer
+- Update affected task files
+- Update MASTER_PLAN.md if needed
+
+**MUST NOT DO**:
+- Change completed task statuses
+- Rewrite the entire plan (targeted fixes only)
+```
+
+2. Present updated plan to user with choice using the `question()` tool:
+```markdown
+## Plan Updated After Review
+
+The plan-reviewer found [N] blocking issue(s). Task-planner has addressed them:
+
+### Issues Fixed
+1. **[Issue title]**: [How it was fixed]
+```
+
+Then you MUST call the question tool (do NOT write the options as text):
+
+- question: "Plan has been updated based on review feedback. How would you like to proceed?"
+- header: "Next Step"
+- options:
+  1. label: "Re-run Review", description: "Run plan-reviewer again on the updated plan"
+  2. label: "Start Implementation", description: "Begin Phase 4 with the current plan"
+
+**User chooses "Re-run Review"** → Phase 3.5 again
+**User chooses "Start Implementation"** → Phase 4

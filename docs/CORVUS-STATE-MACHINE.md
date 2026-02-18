@@ -4,7 +4,7 @@ Complete state machine documentation for the Corvus workflow, including phase tr
 
 ## Overview
 
-Corvus coordinates complex multi-step workflows through 8 phases (0-7), with Phase 4 containing an implementation loop and Phase 5 containing a two-step validation process. The state machine ensures correctness through mandatory gates, iteration limits, and structured error recovery.
+Corvus coordinates complex multi-step workflows through 8 phases (0-7, plus optional Phase 3.5), with Phase 3.5 providing an optional high-accuracy plan review, Phase 4 containing an implementation loop, and Phase 5 containing a two-step validation process. The state machine ensures correctness through mandatory gates, iteration limits, and structured error recovery.
 
 **Key Principles**:
 - **Correctness over speed**: Every phase must complete properly before proceeding
@@ -32,8 +32,18 @@ stateDiagram-v2
 
     Phase2 --> Phase3: MASTER_PLAN.md Created
 
-    Phase3 --> Phase4: User Approves
+    Phase3 --> UserChoice3: User Approves
     Phase3 --> Phase2: User Requests Changes
+
+    UserChoice3 --> Phase4: Start Implementation
+    UserChoice3 --> Phase3_5: High Accuracy Review
+
+    Phase3_5 --> Phase4: OKAY
+    Phase3_5 --> PlanFix: REJECT
+
+    PlanFix --> UserChoice3_5: Plan Updated
+    UserChoice3_5 --> Phase3_5: Re-run Review
+    UserChoice3_5 --> Phase4: Start Implementation
 
     Phase4 --> Phase5: All Phases Complete
     Phase4 --> Phase4: More Phases Remain
@@ -58,6 +68,7 @@ stateDiagram-v2
 | 1 | Discovery | Gather context for planning | @researcher + @code-explorer (parallel) |
 | 2 | Planning | Create master plan and task files | @task-planner |
 | 3 | User Approval | Single approval gate | User |
+| 3.5 | High Accuracy Plan Review | Optional plan quality validation | @plan-reviewer |
 | 4 | Implementation Loop | Execute phases with quality gates | @code-implementer + @code-quality |
 | 5 | Final Validation | Comprehensive objective + subjective checks | @code-quality + @ux-dx-quality |
 | 6 | Completion | Extract learnings, summarize | @task-planner |
@@ -96,8 +107,21 @@ stateDiagram-v2
 | From | To | Condition |
 |------|-----|-----------|
 | Phase 2 | Phase 3 | MASTER_PLAN.md exists in .corvus/tasks/ AND task files created |
-| Phase 3 | Phase 4 | User approves plan |
+| Phase 3 | User Choice | User approves plan |
 | Phase 3 | Phase 2 | User requests changes to plan |
+
+### Phase 3 → Phase 3.5/4 Transitions
+
+| From | To | Condition |
+|------|-----|-----------|
+| Phase 3 | User Choice | User approves plan |
+| User Choice | Phase 4 | User chooses "Start Implementation" |
+| User Choice | Phase 3.5 | User chooses "High Accuracy Review" |
+| Phase 3.5 | Phase 4 | plan-reviewer returns OKAY |
+| Phase 3.5 | Plan Fix | plan-reviewer returns REJECT |
+| Plan Fix | User Choice | task-planner fixes plan |
+| User Choice (post-fix) | Phase 3.5 | User chooses "Re-run Review" |
+| User Choice (post-fix) | Phase 4 | User chooses "Start Implementation" |
 
 ### Phase 4 Transitions
 
@@ -404,7 +428,22 @@ task({ subagent: "code-implementer", prompt: "Task 05..." })
 
 ## Gate Enforcement
 
-Seven hard gates that MUST be respected.
+Seven hard gates plus two Phase 3.5 gates that MUST be respected.
+
+### Gate 0: After Phase 3 (User Approval)
+
+| Allowed | Forbidden |
+|---------|-----------|
+| Present user choice: "Start Implementation" or "High Accuracy Review" | Skip to Phase 4 without choice |
+| | Auto-run Phase 3.5 without user choosing |
+
+### Gate 0.5: After Phase 3.5 (plan-reviewer returns)
+
+| Allowed | Forbidden |
+|---------|-----------|
+| IF OKAY → Proceed to Phase 4 | Auto-proceed after REJECT |
+| IF REJECT → task-planner fixes → user choice | Skip user choice after fix |
+| User chooses: "Re-run Review" or "Start Implementation" | |
 
 ### Gate 1: After 4a (code-implementer returns)
 
@@ -586,8 +625,14 @@ Examples:
                                ├─ QUESTIONS ► 0b
                                └─ DISCOVERY ► 1
 
-2 ──► 3 (approval) ──► 4 ──┬──► 4 (next phase)
-                           └──► 5 (all complete)
+2 ──► 3 (approval) ──► User Choice ─┬─► 4 (implement)
+                                    └─► 3.5 (review) ─┬─ OKAY ──► 4
+                                                       └─ REJECT ─► fix ──► User Choice
+                                                                             ├─► 3.5 (re-review)
+                                                                             └─► 4 (implement)
+
+4 ──┬──► 4 (next phase)
+    └──► 5 (all complete)
 
 5a ─┬─ PASS + UX/DX ──► 5b ─┬─ PASS ──► 6
     ├─ PASS ──────────────────────────► 6
@@ -602,6 +647,8 @@ Examples:
 
 | Gate | After | Allowed | Forbidden |
 |------|-------|---------|-----------|
+| 0 | Phase 3 approve | User choice: impl or review | Skip choice |
+| 0.5 | Phase 3.5 | Phase 4 if OKAY, fix+choice if REJECT | Auto-proceed after REJECT |
 | 1 | 4a | 4b | Skip, fix, other phase |
 | 2 | 4b PASS | Update plan, next | SUCCESS_EXTRACTION |
 | 3 | 4b FAIL | FAILURE_ANALYSIS, fix failing only | Fix without analysis |

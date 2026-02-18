@@ -12,6 +12,8 @@ description: Extra utilities - subagent reference, todo patterns, error handling
 | 1a | researcher | External docs, best practices | No |
 | 1b | code-explorer | Codebase analysis | No |
 | 2 | task-planner | Create master plan + task files | No (creates plan) |
+| 3.5 | plan-reviewer | High accuracy plan review (if user chose) | No (optional) |
+| 3.5 fail | task-planner | Fix plan based on review feedback | No |
 | 4a | code-implementer | Implementation + lint/typecheck/build | No (delegated mode) |
 | 4b | code-quality | Run tests, verify acceptance criteria | No |
 | 4b fail | task-planner | FAILURE_ANALYSIS (learning mode) | No |
