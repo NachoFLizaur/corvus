@@ -4,7 +4,7 @@ Complete state machine documentation for the Corvus workflow, including phase tr
 
 ## Overview
 
-Corvus coordinates complex multi-step workflows through 8 phases (0-7, plus optional Phase 3.5), with Phase 3.5 providing an optional high-accuracy plan review, Phase 4 containing an implementation loop, and Phase 5 containing a two-step validation process. The state machine ensures correctness through mandatory gates, iteration limits, and structured error recovery.
+Corvus coordinates complex multi-step workflows through 8 phases (0-7, plus optional Phase 3.5), with a plan-type selection step between Phase 0 and Phase 2 that adapts planning depth to task complexity. Phase 3.5 provides an optional high-accuracy plan review, Phase 4 contains an implementation loop, and Phase 5 contains a two-step validation process. The state machine ensures correctness through mandatory gates, iteration limits, and structured error recovery. Plan types (No Plan, Lightweight, Standard, Spec-Driven) determine which phases are executed and which templates are used.
 
 **Key Principles**:
 - **Correctness over speed**: Every phase must complete properly before proceeding
@@ -20,17 +20,30 @@ Corvus coordinates complex multi-step workflows through 8 phases (0-7, plus opti
 stateDiagram-v2
     [*] --> Phase0a: User Request
 
-    Phase0a --> Phase2: REQUIREMENTS_CLEAR
+    Phase0a --> PlanTypeSelection: REQUIREMENTS_CLEAR
     Phase0a --> Phase0a: QUESTIONS_NEEDED (max 3 rounds)
-    Phase0a --> Phase1: DISCOVERY_NEEDED
+    Phase0a --> Phase1_pre0b: DISCOVERY_NEEDED
 
-    Phase1 --> Phase0b: Discovery Complete
+    Phase1_pre0b --> Phase0b: Discovery Complete
 
-    Phase0b --> Phase2: REQUIREMENTS_CLEAR
+    Phase0b --> PlanTypeSelection: REQUIREMENTS_CLEAR
     Phase0b --> Phase0b: QUESTIONS_NEEDED
-    Phase0b --> Phase1: DISCOVERY_NEEDED (max 2 loops)
+    Phase0b --> Phase1_pre0b: DISCOVERY_NEEDED (max 2 loops)
 
+    PlanTypeSelection --> DirectDelegation: No Plan
+    PlanTypeSelection --> Phase2L: Lightweight
+    PlanTypeSelection --> Phase1_std: Standard (if DISCOVERY_NEEDED)
+    PlanTypeSelection --> Phase2: Standard (if REQUIREMENTS_CLEAR)
+    PlanTypeSelection --> Phase1_spec: Spec-Driven
+
+    Phase1_std --> Phase2: Discovery Complete
+    Phase1_spec --> Phase2S: Discovery Complete
+
+    Phase2L --> Phase3: Lightweight MASTER_PLAN.md Created
     Phase2 --> Phase3: MASTER_PLAN.md Created
+    Phase2S --> Phase3: MASTER_PLAN.md + Specs Created
+
+    DirectDelegation --> [*]: Complete
 
     Phase3 --> UserChoice3: User Approves
     Phase3 --> Phase2: User Requests Changes
@@ -45,7 +58,8 @@ stateDiagram-v2
     UserChoice3_5 --> Phase3_5: Re-run Review
     UserChoice3_5 --> Phase4: Start Implementation
 
-    Phase4 --> Phase5: All Phases Complete
+    Phase4 --> Phase5: All Phases Complete (Standard/Spec-Driven)
+    Phase4 --> Phase6: All Phases Complete (Lightweight)
     Phase4 --> Phase4: More Phases Remain
 
     Phase5 --> Phase6: Validation PASS
@@ -65,8 +79,11 @@ stateDiagram-v2
 |-------|------|---------|----------|
 | 0a | Initial Clarification | Analyze request completeness | @requirements-analyst |
 | 0b | Post-Discovery Clarification | Analyze discovery findings | @requirements-analyst |
+| PTS | Plan-Type Selection | Choose planning depth based on complexity | Corvus + User (Question tool) |
 | 1 | Discovery | Gather context for planning | @researcher + @code-explorer (parallel) |
 | 2 | Planning | Create master plan and task files | @task-planner |
+| 2L | Lightweight Planning | Create simplified master plan (1 phase, 3-6 tasks) | @task-planner |
+| 2S | Spec-Driven Planning | Create master plan with mandatory specs | @task-planner |
 | 3 | User Approval | Single approval gate | User |
 | 3.5 | High Accuracy Plan Review | Optional plan quality validation | @plan-reviewer |
 | 4 | Implementation Loop | Execute phases with quality gates (tests or acceptance-only based on `tests_enabled`) | @code-implementer + @code-quality |
@@ -83,7 +100,7 @@ stateDiagram-v2
 | From | To | Condition |
 |------|-----|-----------|
 | 0a | 0a | `QUESTIONS_NEEDED` AND round < 3 |
-| 0a | Phase 2 | `REQUIREMENTS_CLEAR` OR round = 3 |
+| 0a | Plan-Type Selection | `REQUIREMENTS_CLEAR` OR round = 3 |
 | 0a | Phase 1 | `DISCOVERY_NEEDED` |
 
 ### Phase 0b Transitions
@@ -91,9 +108,21 @@ stateDiagram-v2
 | From | To | Condition |
 |------|-----|-----------|
 | 0b | 0b | `QUESTIONS_NEEDED` AND total rounds < 3 |
-| 0b | Phase 2 | `REQUIREMENTS_CLEAR` |
+| 0b | Plan-Type Selection | `REQUIREMENTS_CLEAR` |
 | 0b | Phase 1 | `DISCOVERY_NEEDED` AND discovery iterations < 2 |
 | 0b | Phase 2 | `DISCOVERY_NEEDED` AND discovery iterations >= 2 (forced) |
+
+### Plan-Type Selection Transitions
+
+After Phase 0a or 0b returns `REQUIREMENTS_CLEAR`, Corvus presents the plan-type recommendation (from requirements-analyst's heuristic scoring) to the user via the Question tool. The user selects one of four plan types, which determines the subsequent workflow.
+
+| From | To | Condition |
+|------|-----|-----------|
+| Plan-Type Selection | Direct delegation | User selects "No Plan" |
+| Plan-Type Selection | Phase 2L (Lightweight) | User selects "Lightweight" |
+| Plan-Type Selection | Phase 1 | User selects "Standard" AND 0a returned DISCOVERY_NEEDED |
+| Plan-Type Selection | Phase 2 | User selects "Standard" AND 0a returned REQUIREMENTS_CLEAR |
+| Plan-Type Selection | Phase 1 | User selects "Spec-Driven" |
 
 ### Phase 1 Transitions
 
@@ -102,11 +131,13 @@ stateDiagram-v2
 | Phase 1 | Phase 0b | Discovery complete AND came from 0a with `DISCOVERY_NEEDED` |
 | Phase 1 | Phase 0b | Additional discovery complete (from 0b loop) |
 
-### Phase 2-3 Transitions
+### Phase 2/2L/2S to Phase 3 Transitions
 
 | From | To | Condition |
 |------|-----|-----------|
 | Phase 2 | Phase 3 | MASTER_PLAN.md exists in .corvus/tasks/ AND task files created |
+| Phase 2L | Phase 3 | Lightweight MASTER_PLAN.md exists AND task files created |
+| Phase 2S | Phase 3 | MASTER_PLAN.md + specs/ exist AND task files created |
 | Phase 3 | User Choice | User approves plan |
 | Phase 3 | Phase 2 | User requests changes to plan |
 
@@ -631,20 +662,20 @@ Examples:
 ### Phase Flow Summary
 
 ```
-0a ─┬─ CLEAR ──────────────────────────────► 2
-    ├─ QUESTIONS ──► 0a (loop max 3)
-    └─ DISCOVERY ──► 1 ──► 0b ─┬─ CLEAR ──► 2
-                               ├─ QUESTIONS ► 0b
-                               └─ DISCOVERY ► 1
+0a ─┬─ CLEAR ──► [Plan-Type Selection] ─┬─ No Plan ──► Direct delegation
+    ├─ QUESTIONS ──► 0a (loop max 3)    ├─ Lightweight ──► 2L ──► 3 ──► 4 ──► 6
+    └─ DISCOVERY ──► 1 ──► 0b ──► PTS  ├─ Standard ──► (1?) ──► 2 ──► 3 ──► 4 ──► 5 ──► 6
+                                        └─ Spec-Driven ──► 1 ──► 2S ──► 3 ──► 4 ──► 5 ──► 6
 
-2 ──► 3 (approval) ──► User Choice ─┬─► 4 (implement)
-                                    └─► 3.5 (review) ─┬─ OKAY ──► 4
-                                                       └─ REJECT ─► fix ──► User Choice
-                                                                             ├─► 3.5 (re-review)
-                                                                             └─► 4 (implement)
+2/2L/2S ──► 3 (approval) ──► User Choice ─┬─► 4 (implement)
+                                           └─► 3.5 (review) ─┬─ OKAY ──► 4
+                                                              └─ REJECT ─► fix ──► User Choice
+                                                                                    ├─► 3.5 (re-review)
+                                                                                    └─► 4 (implement)
 
 4 ──┬──► 4 (next phase)
-    └──► 5 (all complete)
+    ├──► 5 (all complete — Standard/Spec-Driven)
+    └──► 6 (all complete — Lightweight)
 
 5a ─┬─ PASS + UX/DX ──► 5b ─┬─ PASS ──► 6
     ├─ PASS ──────────────────────────► 6
@@ -654,6 +685,22 @@ Examples:
                      ├─ PARTIAL ──────► 2
                      └─ FULL ─────────► 0a
 ```
+
+### Lightweight Plan Workflow
+
+Lightweight plans follow a reduced workflow:
+- **Skips**: Phase 1 (Discovery), Phase 5 (Final Validation), Phase 3.5 (High Accuracy Review)
+- **Includes**: Phase 0 → Plan-Type Selection → Phase 2L → Phase 3 → Phase 4 → Phase 6
+- Phase 4 has a single phase (no multi-phase loop)
+- Uses simplified MASTER_PLAN.md template (no specs section, no risk assessment)
+- Uses simplified task file templates (fewer sections, less ceremony)
+
+### Spec-Driven Plan Workflow
+
+Spec-Driven plans extend the Standard workflow:
+- **Same as Standard**: Full Phase 0 → 1 → 2S → 3 → 4 → 5 → 6 pipeline
+- **Additions**: Mandatory `specs/` directory created before task files, formal RFC 2119 language in specs, Given/When/Then acceptance criteria in task files
+- Specs are reviewed alongside MASTER_PLAN.md in Phase 3
 
 ### Gate Quick Reference
 

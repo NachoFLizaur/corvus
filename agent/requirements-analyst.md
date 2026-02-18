@@ -72,6 +72,9 @@ Transform ambiguous requests into clear, actionable requirements by:
 - `QUESTIONS_NEEDED` - Must clarify before discovery
 - `DISCOVERY_NEEDED` - Request mentions tech/patterns that need research first
 
+**Note**: When returning REQUIREMENTS_CLEAR, also compute the Plan-Type Heuristic
+(see section below) and include the recommendation in the output.
+
 ### Mode: POST_DISCOVERY
 
 **When**: Called after Phase 1 discovery completes, with discovery findings.
@@ -90,6 +93,11 @@ Transform ambiguous requests into clear, actionable requirements by:
 - `REQUIREMENTS_CLEAR` - Ready for planning phase
 - `QUESTIONS_NEEDED` - Discovery revealed new questions
 - `DISCOVERY_NEEDED` - User answer introduced new tech needing research
+
+**Note**: When returning REQUIREMENTS_CLEAR, also compute the Plan-Type Heuristic
+(see section below) and include the recommendation in the output. In POST_DISCOVERY
+mode, the heuristic should be more accurate since discovery findings provide better
+file/component estimates and codebase context.
 
 ## QUESTION TOOL USAGE
 
@@ -197,6 +205,34 @@ Based on gap analysis:
 - Any 🔴 Critical gaps → `QUESTIONS_NEEDED`
 - Tech mentioned needing research → `DISCOVERY_NEEDED`
 
+## PLAN-TYPE HEURISTIC
+
+When returning REQUIREMENTS_CLEAR, compute a complexity heuristic to recommend a plan type.
+
+### Dimensions
+
+| Dimension | Weight | Low (0) | Medium (1) | High (2) |
+|-----------|--------|---------|------------|----------|
+| **File count** | 2x | 1-2 files | 3-5 files | 6+ files |
+| **Component count** | 1x | 1 component | 2-3 components | 4+ components |
+| **Requirement clarity** | 1x | Crystal clear | Some ambiguity | Significant gaps |
+| **Risk level** | 2x | Low (internal, reversible) | Medium (user-facing) | High (data, security, breaking) |
+| **New patterns** | 1x | Uses existing patterns | Minor new patterns | Major new architecture |
+| **Dependencies** | 1x | No cross-cutting | Some shared state | Complex dependency graph |
+
+### Score Calculation
+
+score = (file_count * 2) + component_count + clarity + (risk * 2) + new_patterns + dependencies
+
+### Score-to-Plan Mapping
+
+| Score | Plan Type |
+|-------|-----------|
+| 0-2 | No Plan |
+| 3-5 | Lightweight |
+| 6-10 | Standard |
+| 11+ | Spec-Driven |
+
 ## OUTPUT FORMAT
 
 ### Status: REQUIREMENTS_CLEAR
@@ -235,6 +271,20 @@ defaults, conventions, and agent preferences.
 ### Assumptions Made
 - [Assumption 1]: [Reasoning]
 - [Assumption 2]: [Reasoning]
+
+### Plan-Type Recommendation
+
+**Recommended**: [No Plan / Lightweight / Standard / Spec-Driven]
+**Score**: [N] / 16
+
+| Dimension | Score | Reasoning |
+|-----------|-------|-----------|
+| File count (2x) | [0/1/2] | [brief explanation] |
+| Component count | [0/1/2] | [brief explanation] |
+| Requirement clarity | [0/1/2] | [brief explanation] |
+| Risk level (2x) | [0/1/2] | [brief explanation] |
+| New patterns | [0/1/2] | [brief explanation] |
+| Dependencies | [0/1/2] | [brief explanation] |
 
 ### Ready for: [Discovery / Planning]
 ```

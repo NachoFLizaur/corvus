@@ -49,14 +49,23 @@ Invoke **task-planner** with combined context from Phase 1:
 ```markdown
 **TASK**: Create master plan for [feature description]
 
+**PLAN_TYPE**: [LIGHTWEIGHT / STANDARD / SPEC_DRIVEN]
+(Selected by user in Plan-Type Selection step)
+
 **EXPECTED OUTCOME**:
 - Master plan document at `.corvus/tasks/[feature-name]/MASTER_PLAN.md`
 - Individual task files at `.corvus/tasks/[feature-name]/NN-task-name.md`
+[If SPEC_DRIVEN: - Spec files at `.corvus/tasks/[feature-name]/specs/*.md`]
 
 **USER REQUIREMENTS (IMMUTABLE)**:
 [Paste the "User Requirements (Immutable)" section from requirements-analyst output]
 ⚠️ These MUST be incorporated into MASTER_PLAN.md and all relevant task files.
 ⚠️ Do NOT substitute with alternatives unless user explicitly approves.
+
+**PLAN-TYPE CONTEXT**:
+- If LIGHTWEIGHT: Generate simplified plan — 1 phase, 3-6 tasks, simplified templates
+- If STANDARD: Generate full plan — current behavior, no changes
+- If SPEC_DRIVEN: Generate full plan with mandatory specs layer — formal specs before task files, SHALL/MUST language, Given/When/Then acceptance criteria
 
 **TEST PREFERENCE**: `tests_enabled: [true/false]` (from Corvus question() tool — see "Test Preference" step)
 - When `true`: Generate test tasks, include test sections in task files (default behavior)
@@ -99,6 +108,27 @@ Invoke **task-planner** with combined context from Phase 1:
 - Recommended execution order
 - Any concerns or risks
 ```
+
+### Plan-Type-Specific Guidance
+
+#### LIGHTWEIGHT Plans
+- task-planner generates a simplified MASTER_PLAN.md (1 phase, no specs section)
+- 3-6 tasks maximum
+- Simplified task file templates
+- Skip Phase 5 (Final Validation) — phase-level 4b is sufficient
+- Skip Phase 3.5 (High Accuracy Review) — keep it fast
+
+#### STANDARD Plans
+- Current behavior — no changes to existing templates or workflow
+- Full MASTER_PLAN.md with all sections
+- Multi-phase structure with phase test tasks
+
+#### SPEC_DRIVEN Plans
+- task-planner creates `specs/` directory with formal specifications FIRST
+- Specs use SHALL/MUST/SHOULD/MAY language (RFC 2119)
+- Acceptance criteria in task files use Given/When/Then format
+- Specs are presented alongside MASTER_PLAN.md in Phase 3 for approval
+- Higher test coverage expectations
 
 **Exit Criteria**: Master plan document exists with all task files created.
 
