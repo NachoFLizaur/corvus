@@ -284,8 +284,8 @@ function addPluginEntry(filePath, raw, entry) {
  */
 function removePluginEntry(filePath, raw, plugins) {
   if (plugins.length === 0) {
-    // Remove entire plugin key — replace "plugin": [...], with nothing
-    const pluginKeyRegex = /\s*"plugin"\s*:\s*\[\s*\]\s*,?/;
+    // Remove entire plugin key — match the array with its current contents
+    const pluginKeyRegex = /\s*"plugin"\s*:\s*\[[\s\S]*?\]\s*,?/;
     const newContent = raw.replace(pluginKeyRegex, '');
     fs.writeFileSync(filePath, newContent);
     return;
@@ -307,6 +307,58 @@ function findPluginEntry(plugins) {
   return plugins.findIndex(
     (p) => typeof p === 'string' && (p === 'corvus-ai' || p.startsWith('corvus-ai@'))
   );
+}
+
+/**
+ * Remove corvus-ai from a directory's package.json dependencies and node_modules.
+ * Returns an array of actions taken (for display).
+ */
+function cleanupNodeModules(dir) {
+  const actions = [];
+
+  // Remove from package.json
+  const pkgPath = path.join(dir, 'package.json');
+  if (fs.existsSync(pkgPath)) {
+    try {
+      const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+      if (pkg.dependencies && pkg.dependencies['corvus-ai']) {
+        delete pkg.dependencies['corvus-ai'];
+        fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n');
+        actions.push(`Removed corvus-ai from ${pkgPath}`);
+      }
+    } catch {}
+  }
+
+  // Remove node_modules/corvus-ai
+  const modPath = path.join(dir, 'node_modules', 'corvus-ai');
+  if (fs.existsSync(modPath)) {
+    fs.rmSync(modPath, { recursive: true });
+    actions.push(`Removed ${modPath}`);
+  }
+
+  return actions;
+}
+
+/**
+ * Walk up from `start` to filesystem root, looking for node_modules/corvus-ai.
+ * Returns array of directories (not the node_modules path) where it was found.
+ * Skips directories in the `exclude` set.
+ */
+function findStaleNodeModules(start, exclude) {
+  const found = [];
+  let current = path.resolve(start);
+  while (true) {
+    if (!exclude.has(current)) {
+      const modPath = path.join(current, 'node_modules', 'corvus-ai');
+      if (fs.existsSync(modPath)) {
+        found.push(current);
+      }
+    }
+    const parent = path.dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+  return found;
 }
 
 /**
@@ -402,6 +454,36 @@ async function uninstall() {
   info(`Will remove it from ${targetPath}`);
 
   if (dryRun) {
+    // Preview cleanup targets
+    const cacheDir = path.join(os.homedir(), '.cache', 'opencode');
+    const localDir = path.join(process.cwd(), '.opencode');
+    const globalDir = path.join(os.homedir(), '.config', 'opencode');
+    const cleanupDirs = [cacheDir, globalInstall ? globalDir : localDir];
+
+    for (const dir of cleanupDirs) {
+      const pkgPath = path.join(dir, 'package.json');
+      const modPath = path.join(dir, 'node_modules', 'corvus-ai');
+      if (fs.existsSync(pkgPath)) {
+        try {
+          const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+          if (pkg.dependencies?.['corvus-ai']) {
+            info(`Would remove corvus-ai from ${pkgPath}`);
+          }
+        } catch {}
+      }
+      if (fs.existsSync(modPath)) {
+        info(`Would remove ${modPath}`);
+      }
+    }
+
+    const cleaned = new Set(cleanupDirs.map((d) => path.resolve(d)));
+    const stale = findStaleNodeModules(process.cwd(), cleaned);
+    if (stale.length > 0) {
+      for (const dir of stale) {
+        warn(`Would warn about stale: ${path.join(dir, 'node_modules', 'corvus-ai')}`);
+      }
+    }
+
     process.stdout.write('\n');
     info('Dry run complete. No files were changed.');
     process.stdout.write('\n');
@@ -418,9 +500,52 @@ async function uninstall() {
   const remaining = data.plugin.filter((_, i) => i !== idx);
   removePluginEntry(targetPath, raw, remaining);
 
+  ok(`Removed "${entry}" from ${targetPath}`);
+
+  // --- Clean up cached/installed packages ---
+  const cacheDir = path.join(os.homedir(), '.cache', 'opencode');
+  const localDir = path.join(process.cwd(), '.opencode');
+  const globalDir = path.join(os.homedir(), '.config', 'opencode');
+
+  // Always clean the plugin cache
+  const cleanupDirs = [cacheDir];
+
+  // Clean the relevant .opencode or global config dir
+  if (globalInstall) {
+    cleanupDirs.push(globalDir);
+  } else {
+    cleanupDirs.push(localDir);
+  }
+
+  const allActions = [];
+  for (const dir of cleanupDirs) {
+    if (!fs.existsSync(dir)) continue;
+    allActions.push(...cleanupNodeModules(dir));
+  }
+
+  for (const action of allActions) {
+    ok(action);
+  }
+
+  // --- Warn about stale node_modules in ancestor directories ---
+  const cleaned = new Set(cleanupDirs.map((d) => path.resolve(d)));
+  const stale = findStaleNodeModules(process.cwd(), cleaned);
+  if (stale.length > 0) {
+    process.stdout.write('\n');
+    warn('corvus-ai was also found in node_modules at:');
+    for (const dir of stale) {
+      process.stdout.write(`    ${YELLOW}${path.join(dir, 'node_modules', 'corvus-ai')}${RESET}\n`);
+    }
+    process.stdout.write('\n');
+    info('These are outside OpenCode\'s managed directories.');
+    info('To fully remove, run:');
+    for (const dir of stale) {
+      process.stdout.write(`    ${BOLD}rm -rf ${path.join(dir, 'node_modules', 'corvus-ai')}${RESET}\n`);
+    }
+  }
+
   process.stdout.write('\n');
   process.stdout.write(`${GREEN}${BOLD}  Plugin removed!${RESET}\n\n`);
-  process.stdout.write(`  Removed "${BOLD}${entry}${RESET}" from ${BOLD}${targetPath}${RESET}\n\n`);
 }
 
 // ---------------------------------------------------------------------------
