@@ -117,7 +117,7 @@ ${BOLD}Usage:${RESET} npx corvus-ai [options]
 ${BOLD}Options:${RESET}
   ${BOLD}(no flags)${RESET}     Add corvus-ai to the plugin array in .opencode/opencode.json
   ${BOLD}--global${RESET}       Target ~/.config/opencode/opencode.json instead of local
-  ${BOLD}--uninstall${RESET}    Remove corvus-ai from the plugin array
+  ${BOLD}--uninstall${RESET}    Remove corvus-ai from all discovered config files and clean up cached packages
   ${BOLD}--migrate${RESET}      Remove manual corvus files from ~/.config/opencode/ and add plugin
   ${BOLD}--force${RESET}        Skip confirmation prompts
   ${BOLD}--dry-run${RESET}      Preview changes without modifying anything
@@ -166,6 +166,52 @@ function getTargetPath() {
   }
   // Default: create opencode.jsonc in .opencode/
   return path.join(cwd, '.opencode', 'opencode.jsonc');
+}
+
+/**
+ * Find all config files containing corvus-ai by walking up from cwd,
+ * mirroring OpenCode's findUp discovery logic.
+ * Returns array of file paths.
+ */
+function findAllConfigsWithCorvus() {
+  const found = [];
+  let current = process.cwd();
+
+  while (true) {
+    // Check opencode.jsonc and opencode.json at this level
+    for (const file of ['opencode.jsonc', 'opencode.json']) {
+      const p = path.join(current, file);
+      if (fs.existsSync(p)) {
+        const { data } = readConfig(p);
+        if (findPluginEntry(data.plugin) !== -1) found.push(p);
+      }
+    }
+    // Check .opencode/ directory at this level
+    for (const file of ['opencode.jsonc', 'opencode.json']) {
+      const p = path.join(current, '.opencode', file);
+      if (fs.existsSync(p)) {
+        const { data } = readConfig(p);
+        if (findPluginEntry(data.plugin) !== -1) found.push(p);
+      }
+    }
+
+    const parent = path.dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+
+  // Also check global config
+  const globalDir = path.join(os.homedir(), '.config', 'opencode');
+  for (const file of ['opencode.jsonc', 'opencode.json', 'config.json']) {
+    const p = path.join(globalDir, file);
+    if (fs.existsSync(p)) {
+      const { data } = readConfig(p);
+      if (findPluginEntry(data.plugin) !== -1) found.push(p);
+    }
+  }
+
+  // Deduplicate (in case global dir was already visited during walk-up)
+  return [...new Set(found)];
 }
 
 /**
@@ -426,40 +472,30 @@ async function install() {
 // Uninstall flow
 // ---------------------------------------------------------------------------
 async function uninstall() {
-  const targetPath = getTargetPath();
-  const targetLabel = globalInstall ? 'global' : 'local';
+  process.stdout.write(`\n${BOLD}  Corvus AI ${DIM}— Plugin Uninstaller${RESET}\n\n`);
 
-  process.stdout.write(`\n${BOLD}  Corvus AI ${DIM}— Plugin Uninstaller${RESET}\n`);
-  process.stdout.write(`  Target: ${BOLD}${targetPath}${RESET} ${DIM}(${targetLabel})${RESET}\n\n`);
+  // Find all config files that reference corvus-ai
+  const configFiles = findAllConfigsWithCorvus();
 
-  const { data, raw, existed } = readConfig(targetPath);
-
-  if (!existed) {
-    warn(`File does not exist: ${targetPath}`);
-    info('Nothing to uninstall.');
+  if (configFiles.length === 0) {
+    warn('corvus-ai was not found in any OpenCode config file.');
+    info('Searched project configs (walking up from cwd), .opencode/ directories, and global config.');
     process.stdout.write('\n');
-    process.exit(0);
+  } else {
+    info(`Found corvus-ai in ${configFiles.length} config file(s):`);
+    for (const f of configFiles) {
+      process.stdout.write(`    ${BOLD}${f}${RESET}\n`);
+    }
+    process.stdout.write('\n');
   }
 
-  const idx = findPluginEntry(data.plugin);
-  if (idx === -1) {
-    warn(`corvus-ai is not in the plugin array.`);
-    info('Nothing to uninstall.');
-    process.stdout.write('\n');
-    process.exit(0);
-  }
-
-  const entry = data.plugin[idx];
-  info(`Found plugin entry: "${entry}"`);
-  info(`Will remove it from ${targetPath}`);
+  // Preview cleanup targets
+  const cacheDir = path.join(os.homedir(), '.cache', 'opencode');
+  const localDir = path.join(process.cwd(), '.opencode');
+  const globalDir = path.join(os.homedir(), '.config', 'opencode');
+  const cleanupDirs = [cacheDir, localDir, globalDir];
 
   if (dryRun) {
-    // Preview cleanup targets
-    const cacheDir = path.join(os.homedir(), '.cache', 'opencode');
-    const localDir = path.join(process.cwd(), '.opencode');
-    const globalDir = path.join(os.homedir(), '.config', 'opencode');
-    const cleanupDirs = [cacheDir, globalInstall ? globalDir : localDir];
-
     for (const dir of cleanupDirs) {
       const pkgPath = path.join(dir, 'package.json');
       const modPath = path.join(dir, 'node_modules', 'corvus-ai');
@@ -490,33 +526,28 @@ async function uninstall() {
     process.exit(0);
   }
 
-  if (!(await confirm('Remove corvus-ai from the plugin array?'))) {
-    info('Uninstall cancelled.');
-    process.stdout.write('\n');
-    process.exit(0);
+  if (configFiles.length === 0) {
+    // No config entries, but still proceed to clean up cached packages
+  } else {
+    if (!(await confirm('Remove corvus-ai from all config files and clean up cached packages?'))) {
+      info('Uninstall cancelled.');
+      process.stdout.write('\n');
+      process.exit(0);
+    }
+
+    // Remove config entries
+    for (const filePath of configFiles) {
+      const { data, raw } = readConfig(filePath);
+      const idx = findPluginEntry(data.plugin);
+      if (idx === -1) continue;
+      const entry = data.plugin[idx];
+      const remaining = data.plugin.filter((_, i) => i !== idx);
+      removePluginEntry(filePath, raw, remaining);
+      ok(`Removed "${entry}" from ${filePath}`);
+    }
   }
-
-  // Remove entry (preserves comments in existing files)
-  const remaining = data.plugin.filter((_, i) => i !== idx);
-  removePluginEntry(targetPath, raw, remaining);
-
-  ok(`Removed "${entry}" from ${targetPath}`);
 
   // --- Clean up cached/installed packages ---
-  const cacheDir = path.join(os.homedir(), '.cache', 'opencode');
-  const localDir = path.join(process.cwd(), '.opencode');
-  const globalDir = path.join(os.homedir(), '.config', 'opencode');
-
-  // Always clean the plugin cache
-  const cleanupDirs = [cacheDir];
-
-  // Clean the relevant .opencode or global config dir
-  if (globalInstall) {
-    cleanupDirs.push(globalDir);
-  } else {
-    cleanupDirs.push(localDir);
-  }
-
   const allActions = [];
   for (const dir of cleanupDirs) {
     if (!fs.existsSync(dir)) continue;
