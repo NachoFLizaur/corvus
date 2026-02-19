@@ -117,7 +117,7 @@ ${BOLD}Usage:${RESET} npx corvus-ai [options]
 ${BOLD}Options:${RESET}
   ${BOLD}(no flags)${RESET}     Add corvus-ai to the plugin array in .opencode/opencode.json
   ${BOLD}--global${RESET}       Target ~/.config/opencode/opencode.json instead of local
-  ${BOLD}--uninstall${RESET}    Remove corvus-ai from the plugin array
+  ${BOLD}--uninstall${RESET}    Remove corvus-ai from all discovered config files and clean up cached packages
   ${BOLD}--migrate${RESET}      Remove manual corvus files from ~/.config/opencode/ and add plugin
   ${BOLD}--force${RESET}        Skip confirmation prompts
   ${BOLD}--dry-run${RESET}      Preview changes without modifying anything
@@ -166,6 +166,52 @@ function getTargetPath() {
   }
   // Default: create opencode.jsonc in .opencode/
   return path.join(cwd, '.opencode', 'opencode.jsonc');
+}
+
+/**
+ * Find all config files containing corvus-ai by walking up from cwd,
+ * mirroring OpenCode's findUp discovery logic.
+ * Returns array of file paths.
+ */
+function findAllConfigsWithCorvus() {
+  const found = [];
+  let current = process.cwd();
+
+  while (true) {
+    // Check opencode.jsonc and opencode.json at this level
+    for (const file of ['opencode.jsonc', 'opencode.json']) {
+      const p = path.join(current, file);
+      if (fs.existsSync(p)) {
+        const { data } = readConfig(p);
+        if (findPluginEntry(data.plugin) !== -1) found.push(p);
+      }
+    }
+    // Check .opencode/ directory at this level
+    for (const file of ['opencode.jsonc', 'opencode.json']) {
+      const p = path.join(current, '.opencode', file);
+      if (fs.existsSync(p)) {
+        const { data } = readConfig(p);
+        if (findPluginEntry(data.plugin) !== -1) found.push(p);
+      }
+    }
+
+    const parent = path.dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+
+  // Also check global config
+  const globalDir = path.join(os.homedir(), '.config', 'opencode');
+  for (const file of ['opencode.jsonc', 'opencode.json', 'config.json']) {
+    const p = path.join(globalDir, file);
+    if (fs.existsSync(p)) {
+      const { data } = readConfig(p);
+      if (findPluginEntry(data.plugin) !== -1) found.push(p);
+    }
+  }
+
+  // Deduplicate (in case global dir was already visited during walk-up)
+  return [...new Set(found)];
 }
 
 /**
@@ -284,8 +330,8 @@ function addPluginEntry(filePath, raw, entry) {
  */
 function removePluginEntry(filePath, raw, plugins) {
   if (plugins.length === 0) {
-    // Remove entire plugin key — replace "plugin": [...], with nothing
-    const pluginKeyRegex = /\s*"plugin"\s*:\s*\[\s*\]\s*,?/;
+    // Remove entire plugin key — match the array with its current contents
+    const pluginKeyRegex = /\s*"plugin"\s*:\s*\[[\s\S]*?\]\s*,?/;
     const newContent = raw.replace(pluginKeyRegex, '');
     fs.writeFileSync(filePath, newContent);
     return;
@@ -307,6 +353,58 @@ function findPluginEntry(plugins) {
   return plugins.findIndex(
     (p) => typeof p === 'string' && (p === 'corvus-ai' || p.startsWith('corvus-ai@'))
   );
+}
+
+/**
+ * Remove corvus-ai from a directory's package.json dependencies and node_modules.
+ * Returns an array of actions taken (for display).
+ */
+function cleanupNodeModules(dir) {
+  const actions = [];
+
+  // Remove from package.json
+  const pkgPath = path.join(dir, 'package.json');
+  if (fs.existsSync(pkgPath)) {
+    try {
+      const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+      if (pkg.dependencies && pkg.dependencies['corvus-ai']) {
+        delete pkg.dependencies['corvus-ai'];
+        fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n');
+        actions.push(`Removed corvus-ai from ${pkgPath}`);
+      }
+    } catch {}
+  }
+
+  // Remove node_modules/corvus-ai
+  const modPath = path.join(dir, 'node_modules', 'corvus-ai');
+  if (fs.existsSync(modPath)) {
+    fs.rmSync(modPath, { recursive: true });
+    actions.push(`Removed ${modPath}`);
+  }
+
+  return actions;
+}
+
+/**
+ * Walk up from `start` to filesystem root, looking for node_modules/corvus-ai.
+ * Returns array of directories (not the node_modules path) where it was found.
+ * Skips directories in the `exclude` set.
+ */
+function findStaleNodeModules(start, exclude) {
+  const found = [];
+  let current = path.resolve(start);
+  while (true) {
+    if (!exclude.has(current)) {
+      const modPath = path.join(current, 'node_modules', 'corvus-ai');
+      if (fs.existsSync(modPath)) {
+        found.push(current);
+      }
+    }
+    const parent = path.dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+  return found;
 }
 
 /**
@@ -374,53 +472,111 @@ async function install() {
 // Uninstall flow
 // ---------------------------------------------------------------------------
 async function uninstall() {
-  const targetPath = getTargetPath();
-  const targetLabel = globalInstall ? 'global' : 'local';
+  process.stdout.write(`\n${BOLD}  Corvus AI ${DIM}— Plugin Uninstaller${RESET}\n\n`);
 
-  process.stdout.write(`\n${BOLD}  Corvus AI ${DIM}— Plugin Uninstaller${RESET}\n`);
-  process.stdout.write(`  Target: ${BOLD}${targetPath}${RESET} ${DIM}(${targetLabel})${RESET}\n\n`);
+  // Find all config files that reference corvus-ai
+  const configFiles = findAllConfigsWithCorvus();
 
-  const { data, raw, existed } = readConfig(targetPath);
-
-  if (!existed) {
-    warn(`File does not exist: ${targetPath}`);
-    info('Nothing to uninstall.');
+  if (configFiles.length === 0) {
+    warn('corvus-ai was not found in any OpenCode config file.');
+    info('Searched project configs (walking up from cwd), .opencode/ directories, and global config.');
     process.stdout.write('\n');
-    process.exit(0);
+  } else {
+    info(`Found corvus-ai in ${configFiles.length} config file(s):`);
+    for (const f of configFiles) {
+      process.stdout.write(`    ${BOLD}${f}${RESET}\n`);
+    }
+    process.stdout.write('\n');
   }
 
-  const idx = findPluginEntry(data.plugin);
-  if (idx === -1) {
-    warn(`corvus-ai is not in the plugin array.`);
-    info('Nothing to uninstall.');
-    process.stdout.write('\n');
-    process.exit(0);
-  }
-
-  const entry = data.plugin[idx];
-  info(`Found plugin entry: "${entry}"`);
-  info(`Will remove it from ${targetPath}`);
+  // Preview cleanup targets
+  const cacheDir = path.join(os.homedir(), '.cache', 'opencode');
+  const localDir = path.join(process.cwd(), '.opencode');
+  const globalDir = path.join(os.homedir(), '.config', 'opencode');
+  const cleanupDirs = [cacheDir, localDir, globalDir];
 
   if (dryRun) {
+    for (const dir of cleanupDirs) {
+      const pkgPath = path.join(dir, 'package.json');
+      const modPath = path.join(dir, 'node_modules', 'corvus-ai');
+      if (fs.existsSync(pkgPath)) {
+        try {
+          const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+          if (pkg.dependencies?.['corvus-ai']) {
+            info(`Would remove corvus-ai from ${pkgPath}`);
+          }
+        } catch {}
+      }
+      if (fs.existsSync(modPath)) {
+        info(`Would remove ${modPath}`);
+      }
+    }
+
+    const cleaned = new Set(cleanupDirs.map((d) => path.resolve(d)));
+    const stale = findStaleNodeModules(process.cwd(), cleaned);
+    if (stale.length > 0) {
+      for (const dir of stale) {
+        warn(`Would warn about stale: ${path.join(dir, 'node_modules', 'corvus-ai')}`);
+      }
+    }
+
     process.stdout.write('\n');
     info('Dry run complete. No files were changed.');
     process.stdout.write('\n');
     process.exit(0);
   }
 
-  if (!(await confirm('Remove corvus-ai from the plugin array?'))) {
-    info('Uninstall cancelled.');
-    process.stdout.write('\n');
-    process.exit(0);
+  if (configFiles.length === 0) {
+    // No config entries, but still proceed to clean up cached packages
+  } else {
+    if (!(await confirm('Remove corvus-ai from all config files and clean up cached packages?'))) {
+      info('Uninstall cancelled.');
+      process.stdout.write('\n');
+      process.exit(0);
+    }
+
+    // Remove config entries
+    for (const filePath of configFiles) {
+      const { data, raw } = readConfig(filePath);
+      const idx = findPluginEntry(data.plugin);
+      if (idx === -1) continue;
+      const entry = data.plugin[idx];
+      const remaining = data.plugin.filter((_, i) => i !== idx);
+      removePluginEntry(filePath, raw, remaining);
+      ok(`Removed "${entry}" from ${filePath}`);
+    }
   }
 
-  // Remove entry (preserves comments in existing files)
-  const remaining = data.plugin.filter((_, i) => i !== idx);
-  removePluginEntry(targetPath, raw, remaining);
+  // --- Clean up cached/installed packages ---
+  const allActions = [];
+  for (const dir of cleanupDirs) {
+    if (!fs.existsSync(dir)) continue;
+    allActions.push(...cleanupNodeModules(dir));
+  }
+
+  for (const action of allActions) {
+    ok(action);
+  }
+
+  // --- Warn about stale node_modules in ancestor directories ---
+  const cleaned = new Set(cleanupDirs.map((d) => path.resolve(d)));
+  const stale = findStaleNodeModules(process.cwd(), cleaned);
+  if (stale.length > 0) {
+    process.stdout.write('\n');
+    warn('corvus-ai was also found in node_modules at:');
+    for (const dir of stale) {
+      process.stdout.write(`    ${YELLOW}${path.join(dir, 'node_modules', 'corvus-ai')}${RESET}\n`);
+    }
+    process.stdout.write('\n');
+    info('These are outside OpenCode\'s managed directories.');
+    info('To fully remove, run:');
+    for (const dir of stale) {
+      process.stdout.write(`    ${BOLD}rm -rf ${path.join(dir, 'node_modules', 'corvus-ai')}${RESET}\n`);
+    }
+  }
 
   process.stdout.write('\n');
   process.stdout.write(`${GREEN}${BOLD}  Plugin removed!${RESET}\n\n`);
-  process.stdout.write(`  Removed "${BOLD}${entry}${RESET}" from ${BOLD}${targetPath}${RESET}\n\n`);
 }
 
 // ---------------------------------------------------------------------------
