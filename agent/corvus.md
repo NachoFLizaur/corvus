@@ -471,11 +471,26 @@ Invoke **plan-reviewer** to review the master plan and task files:
 **MASTER PLAN**: `.corvus/tasks/[feature]/MASTER_PLAN.md`
 **TASK FILES**: `.corvus/tasks/[feature]/*.md`
 
+**TESTS_ENABLED**: [true/false] (from Phase 2 question() tool)
+
+**PROJECT ENVIRONMENT**:
+[Paste environment details from code-explorer]
+- Virtual environment: [path, e.g., .venv/, venv/, or "none"]
+- Package manager: [npm/pnpm/yarn/pip/poetry or "none"]
+- Available scripts: [list from package.json or Makefile, or "none"]
+- Command prefix: [e.g., ".venv/bin/python" or "pnpm", or "none"]
+
+**USER REQUIREMENTS**:
+[Paste the "User Requirements (Immutable)" section from requirements-analyst output]
+
 **MUST DO**:
-- Review all task files for executability
-- Verify file references exist in codebase
-- Check dependency graph for issues
-- Verify acceptance criteria are binary
+- Run 3-pass review (Structural → Completeness & Reference → Adversarial)
+- Verify ALL file paths via glob (not spot-check)
+- Run weasel word detection via grep
+- Check `tests_enabled` compliance
+- Verify user requirements traceability
+- Detect cross-task file conflicts
+- Provide evidence citations for every PASS sub-check
 - Render binary OKAY/REJECT verdict
 
 **MUST NOT DO**:
@@ -483,10 +498,14 @@ Invoke **plan-reviewer** to review the master plan and task files:
 - Suggest alternative approaches (unless current approach is broken)
 - Reject for style preferences
 - Cite more than 3 blocking issues
+- Claim verification without showing glob/grep output
 
 **REPORT BACK**:
 - **PLAN REVIEW GATE STATUS**: OKAY / REJECT
-- Review summary (4 criteria)
+- Sub-checklist results for all 4 criteria (with evidence)
+- Weasel word scan results
+- Cross-task file conflict table
+- User requirements traceability table
 - Blocking issues (if REJECT, max 3)
 - Non-blocking notes (optional)
 ```
