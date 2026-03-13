@@ -24,7 +24,7 @@ Structured planning. Delegated execution. Quality gates at every boundary.
   - [Manual Install](#manual-install)
   - [Customizing Models](#customizing-models)
 - [What's Included](#whats-included)
-  - [Agents (9)](#agents-9)
+  - [Agents (10)](#agents-10)
   - [Commands (4)](#commands-4)
   - [Skills (9)](#skills-9)
 - [How Corvus Works](#how-corvus-works)
@@ -132,11 +132,12 @@ Any agent field (`model`, `temperature`, `tools`, etc.) can be overridden this w
 
 ## What's Included
 
-### Agents (9)
+### Agents (10)
 
 | Agent | Purpose |
 |-------|---------|
 | `@corvus` | **Coordinator** — orchestrates complex multi-step workflows |
+| `@corvus-auto` | **Autonomous Coordinator** — zero-interruption workflow: auto-selects plan type, mandatory Phase 3.5, tests deferred to Phase 5, git commit/push/PR in Phase 6 |
 | `@code-explorer` | Find files, understand architecture, discover patterns |
 | `@code-implementer` | Write production code with plan-approve workflow |
 | `@code-quality` | Test, review, validate, security audit |
@@ -246,7 +247,7 @@ Key features:
 
 ```
 .
-├── agent/              # Custom agent definitions (9 agents)
+├── agent/              # Custom agent definitions (10 agents)
 ├── command/            # Custom slash commands (4 commands)
 ├── skill/              # On-demand skills (9 skills)
 │   ├── corvus-phase-0/ # Requirements analysis
