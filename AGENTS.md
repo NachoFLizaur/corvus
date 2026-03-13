@@ -34,6 +34,7 @@ When a user request clearly matches an agent's purpose, **delegate IMMEDIATELY**
 | task-planner | Breaking down complex features into subtasks | `@task-planner` |
 | researcher | Technical questions, best practices, external research | `@researcher` |
 | corvus | Orchestrating complex multi-step workflows | `@corvus` |
+| corvus-auto | Fully autonomous multi-step workflows (zero interruptions) | `@corvus-auto` |
 | requirements-analyst | Analyzing requests, identifying gaps, asking clarifying questions | `@requirements-analyst` |
 | ux-dx-quality | Subjective quality: UX, DX, docs, architecture | `@ux-dx-quality` |
 
@@ -72,6 +73,13 @@ When a user request clearly matches an agent's purpose, **delegate IMMEDIATELY**
 - Large features requiring multiple specialists
 - Complex workflows with dependencies
 - Need automated delegation and tracking
+
+**Use @corvus-auto when:**
+- Large features requiring multiple specialists AND you want zero interruptions
+- CI/CD pipelines or automated workflows where question() calls would block execution
+- You trust the heuristic plan-type selection (no manual override needed)
+- You want mandatory Phase 3.5 plan review without being asked
+- You want git commit + push + PR creation automatically after completion
 
 **Use @requirements-analyst when:**
 - User request is ambiguous or incomplete
