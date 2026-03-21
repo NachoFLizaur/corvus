@@ -23,6 +23,8 @@ When a user request clearly matches an agent's purpose, **delegate IMMEDIATELY**
 - "Find where X is implemented" → `@code-explorer`
 - "Add feature Y" → `@code-implementer`
 - "Review this code" → `@code-quality`
+- "Review this PR" → `@corvus-review`
+- "Check PR #123 for security issues" → `@corvus-review`
 
 ## Available Agents
 
@@ -37,6 +39,11 @@ When a user request clearly matches an agent's purpose, **delegate IMMEDIATELY**
 | corvus-auto | Fully autonomous multi-step workflows (zero interruptions) | `@corvus-auto` |
 | requirements-analyst | Analyzing requests, identifying gaps, asking clarifying questions | `@requirements-analyst` |
 | ux-dx-quality | Subjective quality: UX, DX, docs, architecture | `@ux-dx-quality` |
+| corvus-review | Interactive multi-pass PR code review | `@corvus-review` |
+| corvus-review-auto | Autonomous PR review (zero interruptions, auto-posts) | `@corvus-review-auto` |
+| security-reviewer | Dedicated security analysis with OWASP/CWE knowledge | `@security-reviewer` |
+| pr-context-gatherer | PR-specific context gathering (diffs, deps, conventions) | `@pr-context-gatherer` |
+| pr-comment-writer | GitHub review posting with error recovery | `@pr-comment-writer` |
 
 ## When to Delegate
 
@@ -94,6 +101,33 @@ When a user request clearly matches an agent's purpose, **delegate IMMEDIATELY**
 - Evaluating architectural decisions
 - Need subjective quality assessment beyond pass/fail
 
+**Use @corvus-review when:**
+- Reviewing pull requests with user oversight
+- PR reviews where you want to preview/edit before posting
+- Reviews of sensitive PRs (security, breaking changes)
+- First-time review setup (to calibrate before going autonomous)
+
+**Use @corvus-review-auto when:**
+- Automated PR review in CI/CD pipelines
+- Reviewing PRs where zero interaction is desired
+- Batch reviewing multiple PRs
+- You trust the review config and want auto-posting
+
+**Use @security-reviewer when:**
+- Deep security analysis of code changes
+- OWASP Top 10 vulnerability scanning
+- Taint analysis and secrets detection
+- Usually invoked by @corvus-review, not directly
+
+**Use @pr-context-gatherer when:**
+- Gathering structured context about a PR's changes
+- Building file maps with dependency analysis
+- Usually invoked by @corvus-review, not directly
+
+**Use @pr-comment-writer when:**
+- Posting formatted reviews to GitHub
+- Usually invoked by @corvus-review, not directly
+
 ## Delegation Pattern
 
 When delegating, provide clear context:
@@ -122,6 +156,7 @@ For complex delegations, use the 7-section format:
 - Deep code analysis → @code-explorer
 - Production code → @code-implementer
 - Quality assurance → @code-quality
+- PR review → @corvus-review
 
 ## Decision-Making Framework
 

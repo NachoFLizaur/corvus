@@ -24,10 +24,11 @@ Structured planning. Delegated execution. Quality gates at every boundary.
   - [Manual Install](#manual-install)
   - [Customizing Models](#customizing-models)
 - [What's Included](#whats-included)
-  - [Agents (10)](#agents-10)
+  - [Agents (15)](#agents-15)
   - [Commands (4)](#commands-4)
-  - [Skills (9)](#skills-9)
+  - [Skills (16)](#skills-16)
 - [How Corvus Works](#how-corvus-works)
+- [Corvus PR Review](#corvus-pr-review)
 - [Project Structure](#project-structure)
 - [Development](#development)
 - [Troubleshooting](#troubleshooting)
@@ -132,7 +133,7 @@ Any agent field (`model`, `temperature`, `tools`, etc.) can be overridden this w
 
 ## What's Included
 
-### Agents (10)
+### Agents (15)
 
 | Agent | Purpose |
 |-------|---------|
@@ -146,6 +147,11 @@ Any agent field (`model`, `temperature`, `tools`, etc.) can be overridden this w
 | `@researcher` | Technical questions, best practices |
 | `@requirements-analyst` | Analyze requests, identify gaps, clarify requirements |
 | `@ux-dx-quality` | Subjective quality: UX, DX, docs, architecture |
+| `@corvus-review` | **PR Review Coordinator** — interactive multi-pass PR review with user gates |
+| `@corvus-review-auto` | **Autonomous PR Review** — zero-interruption PR review with safety rails |
+| `@security-reviewer` | Dedicated security analysis: OWASP Top 10, CWE, taint analysis |
+| `@pr-context-gatherer` | PR-specific context gathering: diffs, dependencies, conventions |
+| `@pr-comment-writer` | GitHub review posting: API payloads, error recovery, line validation |
 
 ### Commands (4)
 
@@ -156,7 +162,7 @@ Any agent field (`model`, `temperature`, `tools`, etc.) can be overridden this w
 | `/summary` | Generate summary of current conversation for portability |
 | `/cleanup-subagents` | Clean up subagent sessions |
 
-### Skills (9)
+### Skills (16)
 
 Skills are loaded on-demand to minimize initial context size. Each Corvus phase has a dedicated skill that's loaded only when entering that phase.
 
@@ -171,6 +177,18 @@ Skills are loaded on-demand to minimize initial context size. Each Corvus phase 
 | `corvus-phase-7` | Follow-up triage |
 | `corvus-extras` | Utilities (subagent reference, todo patterns, error handling) |
 | `frontend-design` | Frontend UI/UX design guidelines |
+
+*PR Review Skills:*
+
+| Skill | Purpose |
+|-------|---------|
+| `corvus-review-r0` | PR intake, triage, config loading |
+| `corvus-review-r1` | Parallel context gathering |
+| `corvus-review-r2` | Multi-pass review orchestration |
+| `corvus-review-r3` | Comment synthesis and filtering |
+| `corvus-review-r4` | User gate / autonomous auto-proceed |
+| `corvus-review-r5` | GitHub posting and completion |
+| `corvus-review-extras` | Shared schemas, Conventional Comments, config |
 
 ---
 
@@ -243,26 +261,110 @@ Key features:
 
 ---
 
+## Corvus PR Review
+
+Corvus PR Review is a multi-pass code review system that brings the same structured, multi-agent approach to pull request reviews. It runs dedicated review passes in parallel, synthesizes findings, and posts formatted reviews to GitHub — either interactively with user gates or fully autonomously.
+
+### When to Use
+
+- You want a thorough, structured review that goes beyond surface-level linting
+- You need security-focused analysis with OWASP/CWE knowledge
+- You want consistent review quality across your team
+- You want to preview and edit review comments before posting
+
+### Usage
+
+```
+@corvus-review review PR #123
+@corvus-review review https://github.com/owner/repo/pull/123
+@corvus-review-auto #456    # autonomous, auto-posts
+```
+
+### Workflow
+
+```
+User: "Review PR #123"
+    │
+    ▼
+R0: Intake & Triage (parse PR, fetch metadata, load config)
+    │
+    ▼
+R1: Context Gathering [parallel]
+    ├── @pr-context-gatherer (files, deps, tests, conventions)
+    └── @researcher (issues, CI, advisories)
+    │
+    ▼
+R2: Multi-Pass Review
+    ├── Pass 1: Architecture & Design (@ux-dx-quality)     ─┐
+    ├── Pass 2: Logic & Correctness (@code-quality)         ├─ parallel
+    ├── Pass 3: Security (@security-reviewer)               ─┘
+    └── Pass 4: Conventions & Polish (max 3 nits)           ─ sequential
+    │
+    ▼
+R3: Comment Synthesis (dedup, filter, severity, nit budget)
+    │
+    ▼
+R4: User Gate → Post / Edit / Save Locally / Re-run
+    │
+    ▼
+R5: Post to GitHub via @pr-comment-writer
+```
+
+### Key Features
+
+- **Multi-pass review** following Google's priority order (correctness → design → security → style)
+- **Dedicated security agent** with OWASP Top 10 and CWE knowledge base
+- **Aggressive false-positive filtering** with confidence scores and nit budget enforcement
+- **Conventional Comments format** for consistent, actionable feedback
+- **Configurable** via `.opencode/review-config.yaml` for per-project tuning
+- **Interactive and autonomous modes** — preview before posting, or let it run hands-free
+- **Just-in-time context gathering** — no pre-built index needed, works on any repo
+
+### Configuration
+
+```yaml
+# .opencode/review-config.yaml
+severity_threshold: "nitpick"
+max_nits: 3
+passes:
+  architecture: true
+  correctness: true
+  security: true
+  conventions: true
+path_rules:
+  - pattern: "src/auth/**"
+    elevate_security: true
+  - pattern: "vendor/**"
+    skip_passes: ["conventions"]
+```
+
+> 📖 **Detailed Documentation**: See [docs/CORVUS-REVIEW-SKILL-SET.md](./docs/CORVUS-REVIEW-SKILL-SET.md) for complete review workflow documentation, configuration reference, and Conventional Comments specification.
+
+---
+
 ## Project Structure
 
 ```
 .
-├── agent/              # Custom agent definitions (10 agents)
-├── command/            # Custom slash commands (4 commands)
-├── skill/              # On-demand skills (9 skills)
-│   ├── corvus-phase-0/ # Requirements analysis
-│   ├── corvus-phase-1/ # Discovery
-│   ├── corvus-phase-2/ # Planning + Approval
-│   ├── corvus-phase-4/ # Implementation loop
-│   ├── corvus-phase-5/ # Final validation
-│   ├── corvus-phase-6/ # Completion
-│   ├── corvus-phase-7/ # Follow-up triage
-│   ├── corvus-extras/  # Utilities
-│   └── frontend-design/# Frontend design guidelines
-├── src/                # Plugin source code
-├── docs/               # Detailed documentation
-│   └── CORVUS-STATE-MACHINE.md
-├── AGENTS.md           # Delegation guidelines for agents
+├── agent/                  # Agent definitions (15 agents)
+│   ├── corvus.md           # Implementation orchestrator
+│   ├── corvus-auto.md      # Autonomous implementation orchestrator
+│   ├── corvus-review.md    # PR review orchestrator
+│   ├── corvus-review-auto.md # Autonomous PR review orchestrator
+│   ├── security-reviewer.md  # Security analysis specialist
+│   ├── pr-context-gatherer.md # PR context gathering
+│   ├── pr-comment-writer.md   # GitHub review posting
+│   └── ...                 # (8 more existing agents)
+├── command/                # Custom slash commands (4 commands)
+├── skill/                  # On-demand skills (16 skills)
+│   ├── corvus-phase-*/     # Implementation workflow skills (8)
+│   ├── corvus-review-*/    # PR review workflow skills (7)
+│   └── frontend-design/    # Frontend design guidelines
+├── src/                    # Plugin source code
+├── docs/                   # Detailed documentation
+│   ├── CORVUS-STATE-MACHINE.md
+│   └── CORVUS-REVIEW-SKILL-SET.md
+├── AGENTS.md
 └── README.md
 ```
 
