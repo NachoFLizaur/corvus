@@ -358,10 +358,10 @@ path_rules:
 │   ├── pr-comment-writer.md   # GitHub review posting
 │   └── ...                 # (8 more existing agents)
 ├── command/                # Custom slash commands (4 commands)
-├── skill/                  # On-demand skills (16 skills)
-│   ├── corvus-phase-*/     # Implementation workflow skills (8)
-│   ├── corvus-review-*/    # PR review workflow skills (7)
-│   └── frontend-design/    # Frontend design guidelines
+├── skill/                  # On-demand skills (18 skills)
+│   ├── corvus-phase-*/     # Corvus workflow phases (7)
+│   ├── corvus-review-*/    # PR review phases (7)
+│   └── *.../               # Utilities (corvus-extras, frontend-design, deep-research, web-search)
 ├── src/                    # Plugin source code
 ├── docs/                   # Detailed documentation
 │   ├── CORVUS-STATE-MACHINE.md
