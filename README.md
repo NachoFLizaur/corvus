@@ -26,7 +26,7 @@ Structured planning. Delegated execution. Quality gates at every boundary.
 - [What's Included](#whats-included)
   - [Agents (15)](#agents-15)
   - [Commands (4)](#commands-4)
-  - [Skills (16)](#skills-16)
+  - [Skills (18)](#skills-18)
 - [How Corvus Works](#how-corvus-works)
 - [Corvus PR Review](#corvus-pr-review)
 - [Project Structure](#project-structure)
@@ -162,7 +162,7 @@ Any agent field (`model`, `temperature`, `tools`, etc.) can be overridden this w
 | `/summary` | Generate summary of current conversation for portability |
 | `/cleanup-subagents` | Clean up subagent sessions |
 
-### Skills (16)
+### Skills (18)
 
 Skills are loaded on-demand to minimize initial context size. Each Corvus phase has a dedicated skill that's loaded only when entering that phase.
 
@@ -177,6 +177,8 @@ Skills are loaded on-demand to minimize initial context size. Each Corvus phase 
 | `corvus-phase-7` | Follow-up triage |
 | `corvus-extras` | Utilities (subagent reference, todo patterns, error handling) |
 | `frontend-design` | Frontend UI/UX design guidelines |
+| `deep-research` | Deep research for complex technical questions |
+| `web-search` | Quick web search for focused factual lookups |
 
 *PR Review Skills:*
 
