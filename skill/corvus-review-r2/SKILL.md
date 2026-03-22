@@ -448,7 +448,7 @@ custom_rules:
 ```yaml
 - id: "conv-NNN"
   pass: "conventions"
-  label: "<minor|nitpick|praise|note>"  # NO blocker/critical/major allowed
+  label: "<minor|nitpick|praise|thought|note>"  # NO blocker/critical/major allowed
   severity: <0-2>                        # Maximum severity: 2 (minor)
   file: "<file_path>"
   line_start: <number>

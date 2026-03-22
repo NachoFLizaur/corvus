@@ -80,15 +80,15 @@ description: Shared schemas, Conventional Comments spec, config schema, and comm
 | Phase | Subagent | Purpose | Parallel? |
 |-------|----------|---------|-----------|
 | R0 | (Corvus-Review direct) | Intake, triage, config | N/A |
-| R1 | @code-explorer | Read changed files, trace deps, find tests, detect conventions | Yes (with researcher) |
+| R1 | @pr-context-gatherer | Read changed files, trace deps, find tests, detect conventions | Yes (with researcher) |
 | R1 | @researcher | Fetch linked issues, dependency advisories, CI failures, related PRs | Yes (with code-explorer) |
 | R2 Pass 1 | @ux-dx-quality | Architecture & Design review | Yes (with Pass 2, 3) |
 | R2 Pass 2 | @code-quality | Logic & Correctness review | Yes (with Pass 1, 3) |
-| R2 Pass 3 | @code-quality | Security review | Yes (with Pass 1, 2) |
+| R2 Pass 3 | @security-reviewer | Security review | Yes (with Pass 1, 2) |
 | R2 Pass 4 | (Corvus-Review direct) | Conventions & Polish | Sequential (after 1-3) |
 | R3 | (Corvus-Review direct) | Comment synthesis | N/A |
 | R4 | (Corvus-Review direct) | User gate / auto-proceed | N/A |
-| R5 | (Corvus-Review direct) | GitHub posting | N/A |
+| R5 | @pr-comment-writer | GitHub posting | N/A |
 
 ---
 
@@ -386,19 +386,19 @@ REVIEW_CONTEXT:
 REVIEW_FINDINGS:
   pass_results:
     architecture:
-      status: "completed" | "skipped"
+      status: "completed" | "skipped" | "error"
       findings: [<Finding>]            # Finding structure from Conventional Comments spec
       summary: "<string>"
     correctness:
-      status: "completed" | "skipped"
+      status: "completed" | "skipped" | "error"
       findings: [<Finding>]
       summary: "<string>"
     security:
-      status: "completed" | "skipped"
+      status: "completed" | "skipped" | "error"
       findings: [<Finding>]
       summary: "<string>"
     conventions:
-      status: "completed" | "skipped"
+      status: "completed" | "skipped" | "error"
       findings: [<Finding>]
       summary: "<string>"
   
