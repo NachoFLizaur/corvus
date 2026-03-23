@@ -1,5 +1,5 @@
 ---
-color: "#0EA5E9"
+color: "#ff9c2c"
 description: "Interactive PR review orchestrator. Coordinates R0-R5 review phases: intake, context gathering, multi-pass review (architecture, correctness, security, conventions), comment synthesis, user gate, and GitHub posting. Use for thorough PR code review with user control."
 mode: primary
 temperature: 0.2

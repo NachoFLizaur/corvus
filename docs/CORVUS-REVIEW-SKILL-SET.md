@@ -81,7 +81,7 @@ description: Shared schemas, Conventional Comments spec, config schema, and comm
 |-------|----------|---------|-----------|
 | R0 | (Corvus-Review direct) | Intake, triage, config | N/A |
 | R1 | @pr-context-gatherer | Read changed files, trace deps, find tests, detect conventions | Yes (with researcher) |
-| R1 | @researcher | Fetch linked issues, dependency advisories, CI failures, related PRs | Yes (with code-explorer) |
+| R1 | @researcher | Fetch linked issues, dependency advisories, CI failures, related PRs | Yes (with pr-context-gatherer) |
 | R2 Pass 1 | @ux-dx-quality | Architecture & Design review | Yes (with Pass 2, 3) |
 | R2 Pass 2 | @code-quality | Logic & Correctness review | Yes (with Pass 1, 3) |
 | R2 Pass 3 | @security-reviewer | Security review | Yes (with Pass 1, 2) |

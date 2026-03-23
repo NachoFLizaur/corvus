@@ -1,5 +1,5 @@
 ---
-color: "#7C3AED"
+color: "#ff8800"
 description: "Corvus Auto for fully autonomous multi-step workflows. Zero user interruptions — auto-selects plan type, auto-approves plans, mandatory Phase 3.5 review, tests deferred to Phase 5, and git commit/push/PR in Phase 6. Use when you want hands-off execution."
 mode: primary
 temperature: 0.2
