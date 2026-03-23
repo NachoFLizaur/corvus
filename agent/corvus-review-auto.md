@@ -1,5 +1,5 @@
 ---
-color: "#10B981"
+color: "#bd711a"
 description: "Autonomous PR review orchestrator. Zero user interruptions — auto-proceeds through all R0-R5 phases, auto-posts reviews to GitHub. Includes safety rails for low-confidence reviews and error recovery. Use for hands-off automated PR review."
 mode: primary
 temperature: 0.2
