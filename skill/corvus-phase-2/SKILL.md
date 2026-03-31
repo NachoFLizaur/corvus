@@ -19,11 +19,16 @@ Invoke the `question()` tool with these exact parameters:
 
 - question: "Should I generate and run tests for this feature?"
 - options:
-  1. label: "Yes (recommended)", description: "Generate test tasks and run tests in quality gates"
-  2. label: "No — skip tests", description: "Skip test generation, quality gates use acceptance-only mode"
+  1. label: "Yes (recommended)", description: "Generate test tasks and run tests at every quality gate"
+  2. label: "Yes — at end only", description: "Generate test tasks but defer testing to Phase 5 final validation. Phase 4 quality gates use acceptance-only mode"
+  3. label: "No — skip tests", description: "Skip test generation entirely, quality gates always use acceptance-only mode"
 
-Store the result as `tests_enabled: true` (if "Yes") or `tests_enabled: false` (if "No").
-Pass this to task-planner via the `**TEST PREFERENCE**` field in the delegation template below.
+Store the result as two flags:
+- "Yes (recommended)": `tests_enabled: true, tests_deferred: false`
+- "Yes — at end only": `tests_enabled: true, tests_deferred: true`
+- "No — skip tests": `tests_enabled: false, tests_deferred: false`
+
+Pass both flags to task-planner via the `**TEST PREFERENCE**` field in the delegation template below.
 
 ### Step 2: Create Master Plan
 
@@ -67,9 +72,10 @@ Invoke **task-planner** with combined context from Phase 1:
 - If STANDARD: Generate full plan — current behavior, no changes
 - If SPEC_DRIVEN: Generate full plan with mandatory specs layer — formal specs before task files, SHALL/MUST language, Given/When/Then acceptance criteria
 
-**TEST PREFERENCE**: `tests_enabled: [true/false]` (from Corvus question() tool — see "Test Preference" step)
-- When `true`: Generate test tasks, include test sections in task files (default behavior)
-- When `false`: Do NOT generate test tasks, omit test sections from task files
+**TEST PREFERENCE**: `tests_enabled: [true/false], tests_deferred: [true/false]` (from Corvus question() tool — see "Test Preference" step)
+- When `tests_enabled: true, tests_deferred: false`: Generate test tasks, include test sections in task files (default behavior)
+- When `tests_enabled: true, tests_deferred: true`: Generate test tasks and include test sections, but Phase 4 quality gates run in acceptance-only mode. Tests are deferred to Phase 5 final validation.
+- When `tests_enabled: false`: Do NOT generate test tasks, omit test sections from task files
 
 **CONTEXT FROM RESEARCH**:
 [Paste summary of researcher findings, or "N/A - no external research needed"]
@@ -93,7 +99,7 @@ Invoke **task-planner** with combined context from Phase 1:
 - Include validation commands for each task using correct environment (venv, package manager)
 - Estimate effort for each task and phase
 - Group related tasks into logical phases
-- Respect `tests_enabled` flag: generate test tasks only when `true`
+- Respect `tests_enabled` flag: generate test tasks only when `true` (regardless of `tests_deferred` — deferred mode still generates test tasks)
 
 **MUST NOT DO**:
 - Skip the master plan document
@@ -220,6 +226,7 @@ You MUST invoke the question tool directly with these exact parameters:
 **TASK FILES**: `.corvus/tasks/[feature]/*.md`
 
 **TESTS_ENABLED**: [true/false] (from Phase 2 question() tool)
+**TESTS_DEFERRED**: [true/false] (from Phase 2 question() tool)
 
 **PROJECT ENVIRONMENT**:
 [Paste environment details from code-explorer]
@@ -235,7 +242,7 @@ You MUST invoke the question tool directly with these exact parameters:
 - Run 3-pass review (Structural → Completeness & Reference → Adversarial)
 - Verify ALL file paths via glob (not spot-check)
 - Run weasel word detection via grep
-- Check `tests_enabled` compliance
+- Check `tests_enabled` and `tests_deferred` compliance
 - Verify user requirements traceability
 - Detect cross-task file conflicts
 - Provide evidence citations for every PASS sub-check

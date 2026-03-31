@@ -86,8 +86,8 @@ stateDiagram-v2
 | 2S | Spec-Driven Planning | Create master plan with mandatory specs | @task-planner |
 | 3 | User Approval | Single approval gate | User |
 | 3.5 | High Accuracy Plan Review | Optional plan quality validation | @plan-reviewer |
-| 4 | Implementation Loop | Execute phases with quality gates (tests or acceptance-only based on `tests_enabled`) | @code-implementer + @code-quality |
-| 5 | Final Validation | Comprehensive objective + subjective checks (acceptance-only when `tests_enabled: false`) | @code-quality + @ux-dx-quality |
+| 4 | Implementation Loop | Execute phases with quality gates (tests when `tests_enabled: true, tests_deferred: false`; acceptance-only when `tests_enabled: false` OR `tests_deferred: true`) | @code-implementer + @code-quality |
+| 5 | Final Validation | Comprehensive objective + subjective checks (full tests when `tests_enabled: true` including deferred mode; acceptance-only when `tests_enabled: false`) | @code-quality + @ux-dx-quality |
 | 6 | Completion | Extract learnings, summarize | @task-planner |
 | 7 | Follow-up Triage | Route follow-up requests | Corvus decision |
 
@@ -261,10 +261,15 @@ Phase 5 UX/DX Required: [YES if ANY true / NO if all false]
 
 **Agent**: @code-quality
 
-**Checks** (when `tests_enabled: true`):
+**Checks** (when `tests_enabled: true, tests_deferred: false`):
 1. Run test suite (targeting phase's code)
 2. Verify acceptance criteria from ALL task files
 3. Check for regressions
+
+**Checks** (when `tests_enabled: true, tests_deferred: true` — deferred mode):
+1. Verify acceptance criteria from ALL task files (with concrete evidence)
+2. Check for regressions via code review
+3. Do NOT run tests — deferred to Phase 5 final validation
 
 **Checks** (when `tests_enabled: false` — acceptance-only mode):
 1. Verify acceptance criteria from ALL task files (with concrete evidence)
@@ -281,8 +286,8 @@ Phase 5 UX/DX Required: [YES if ANY true / NO if all false]
 | Condition | Action | When |
 |-----------|--------|------|
 | PHASE GATE STATUS = PASS | Proceed to 4c | Always |
-| All tests pass | Continue | `tests_enabled: true` only |
-| All acceptance criteria met | Continue | Always |
+| All tests pass | Continue | `tests_enabled: true` AND `tests_deferred: false` only |
+| All acceptance criteria met | Continue | Always (primary gate when `tests_deferred: true` or `tests_enabled: false`) |
 
 ### 4b to Fix Cycle (FAIL)
 
@@ -363,15 +368,17 @@ stateDiagram-v2
 
 **Agent**: @code-quality
 
-**Scope** (when `tests_enabled: true`): FULL test suite, production build, ALL acceptance criteria
+**Scope** (when `tests_enabled: true, tests_deferred: false`): FULL test suite, production build, ALL acceptance criteria
+**Scope** (when `tests_enabled: true, tests_deferred: true`): FULL test suite (FIRST execution — deferred from Phase 4), production build, ALL acceptance criteria
 **Scope** (when `tests_enabled: false`): Production build, ALL acceptance criteria (acceptance-only mode)
 
-**Checks** (when `tests_enabled: true`):
+**Checks** (when `tests_enabled: true` — including deferred mode):
 - Run FULL test suite (not just affected tests)
 - Run production build
 - Verify ALL acceptance criteria from ALL task files
 - Check for consistency across all changes
 - Look for regressions
+- (Deferred mode note: this is the first time tests are executed for the feature)
 
 **Checks** (when `tests_enabled: false`):
 - Run production build
@@ -723,8 +730,9 @@ Spec-Driven plans extend the Standard workflow:
 | Lint | After each file | code-implementer | Always |
 | Type check | After each file | code-implementer | Always |
 | Build | After implementation | code-implementer | Always |
-| **Tests** | End of phase (4b) | **code-quality** | `tests_enabled: true` only |
+| **Tests** | End of phase (4b) | **code-quality** | `tests_enabled: true` AND `tests_deferred: false` |
+| **Tests** | Phase 5a only | **code-quality** | `tests_enabled: true` AND `tests_deferred: true` |
 | **Acceptance** | End of phase (4b) | **code-quality** | Always |
-| Full suite | Phase 5a | code-quality | `tests_enabled: true` only |
+| Full suite | Phase 5a | code-quality | `tests_enabled: true` (including deferred — first run) |
 | Acceptance (all) | Phase 5a | code-quality | Always |
 | UX/DX | Phase 5b | ux-dx-quality | If required |

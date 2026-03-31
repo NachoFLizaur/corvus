@@ -24,13 +24,22 @@ Phase 5 has two steps:
 
 **MUST DO**:
 
-When `tests_enabled: true` (default):
+When `tests_enabled: true, tests_deferred: false` (default):
 - Run FULL test suite (not just affected tests)
 - Run production build
 - Verify ALL acceptance criteria from ALL task files
 - Check for consistency across all changes
 - Look for any regressions
 - Verify no breaking changes to existing functionality
+
+When `tests_enabled: true, tests_deferred: true` (deferred mode):
+- Run FULL test suite — this is the FIRST time tests are executed (they were deferred during Phase 4)
+- Run production build
+- Verify ALL acceptance criteria from ALL task files
+- Check for consistency across all changes
+- Look for any regressions
+- Verify no breaking changes to existing functionality
+- Report clearly that this is the deferred test run
 
 When `tests_enabled: false` (acceptance-only mode):
 - Run production build
@@ -42,13 +51,23 @@ When `tests_enabled: false` (acceptance-only mode):
 
 **REPORT BACK**:
 
-When `tests_enabled: true`:
+When `tests_enabled: true, tests_deferred: false`:
 - **5a OBJECTIVE GATE STATUS**: PASS / FAIL
 - Test results: [N]/[M] passing
 - Build status: PASS/FAIL
 - Acceptance criteria: [N]/[M] met (list any failures)
 - Regressions found: [list or none]
 - Any remaining issues (with severity)
+
+When `tests_enabled: true, tests_deferred: true` (deferred mode):
+- **5a OBJECTIVE GATE STATUS**: PASS / FAIL
+- **Mode**: DEFERRED TEST RUN (first test execution)
+- Test results: [N]/[M] passing
+- Build status: PASS/FAIL
+- Acceptance criteria: [N]/[M] met (list any failures)
+- Regressions found: [list or none]
+- Any remaining issues (with severity)
+- Note: Tests were deferred from Phase 4 quality gates
 
 When `tests_enabled: false`:
 - **5a OBJECTIVE GATE STATUS**: PASS / FAIL
@@ -64,7 +83,7 @@ When `tests_enabled: false`:
 - 5a PASS + No UX/DX required → Proceed to Phase 6
 - 5a FAIL → Create fix tasks, return to Phase 4
 
-> Note: Decision logic is identical regardless of `tests_enabled`. The gate always produces PASS/FAIL; only the evidence model differs.
+> Note: Decision logic is identical regardless of `tests_enabled` or `tests_deferred`. The gate always produces PASS/FAIL; only the evidence model differs. When `tests_deferred: true`, Phase 5a uses the full test+acceptance model (same as `tests_enabled: true, tests_deferred: false`).
 
 ### 5b. Comprehensive Subjective Check (IF REQUIRED)
 

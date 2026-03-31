@@ -80,14 +80,14 @@ For small, clearly-scoped changes (< 3 files) to the just-completed work:
    
    **MUST DO**:
    - [specific requirements]
-   - Validate changes (type check, lint, and tests if `tests_enabled: true`)
+   - Validate changes (type check, lint, and tests if `tests_enabled: true` — note: for follow-ups after deferred-mode features, run tests inline regardless of original `tests_deferred` setting since the full suite was already validated in Phase 5)
    
    **REPORT BACK**:
    - Files changed
    - Validation results
    ```
 
-3. **Validate with code-quality** (if significant changes — tests or acceptance-only based on `tests_enabled`)
+3. **Validate with code-quality** (if significant changes — tests or acceptance-only based on `tests_enabled`; for follow-ups after deferred-mode features, use full test mode since Phase 5 already validated the suite)
 
 4. **Update MASTER_PLAN.md**: Mark task complete via task-planner
 

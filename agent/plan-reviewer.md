@@ -89,7 +89,7 @@ Is anything missing that would block implementation?
 - [ ] Every task and phase has effort estimates
 - [ ] All inter-task dependencies are explicitly declared
 - [ ] All files that need changes are listed in at least one task
-- [ ] `tests_enabled` flag is respected: if `true`, test tasks exist per phase; if `false`, no test tasks and no test sections
+- [ ] `tests_enabled` and `tests_deferred` flags are respected: if `tests_enabled: true`, test tasks exist per phase (regardless of `tests_deferred`); if `tests_enabled: false`, no test tasks and no test sections
 - [ ] Every user requirement from the "User Requirements (Immutable)" section traces to at least one task
 
 ### 4. Consistency
@@ -114,7 +114,7 @@ Focus: Does the plan's structure hold together?
 2. Count task files vs MASTER_PLAN task count
 3. Verify phase groupings match
 4. Check dependency graph for cycles (trace all `Depends On` fields)
-5. Verify `tests_enabled` compliance (test tasks present/absent as expected)
+5. Verify `tests_enabled` and `tests_deferred` compliance (test tasks present/absent as expected; deferred mode still requires test tasks)
 6. Run the **Consistency** sub-checklist
 7. **Output**: Consistency sub-checklist results with evidence
 
@@ -187,14 +187,21 @@ grep -in "appropriately\|properly\|correctly\|as needed\|adequate" .corvus/tasks
 grep -in "TODO\|TBD\|to be determined\|determine the best" .corvus/tasks/[feature]/*.md
 ```
 
-## `tests_enabled` Flag Validation
+## `tests_enabled` / `tests_deferred` Flag Validation
 
-The delegation template includes `tests_enabled: true/false`.
+The delegation template includes `tests_enabled: true/false` and `tests_deferred: true/false`.
 
-**When `tests_enabled: true`**:
+**When `tests_enabled: true, tests_deferred: false`** (default):
 - Verify every phase ends with a test task
 - Verify task files include `## Tests` sections
 - Verify validation commands include test execution
+
+**When `tests_enabled: true, tests_deferred: true`** (deferred mode):
+- Verify every phase ends with a test task (test tasks are still generated)
+- Verify task files include `## Tests` sections
+- Verify validation commands include test execution commands
+- Verify MASTER_PLAN.md notes that Phase 4 uses acceptance-only mode
+- Verify Phase 5 is not skipped (deferred tests must run somewhere)
 
 **When `tests_enabled: false`**:
 - Verify NO test tasks exist
@@ -307,7 +314,7 @@ Incorrect validation commands → FAIL the Completeness sub-check.
   - Evidence: [dependency trace]
 - [x] All files needing changes are listed
   - Evidence: [file coverage analysis]
-- [x] `tests_enabled` flag compliance
+- [x] `tests_enabled` / `tests_deferred` flag compliance
   - Evidence: [compliance check result]
 - [x] User requirements traceability
   - Evidence: [traceability table]
@@ -324,8 +331,8 @@ Incorrect validation commands → FAIL the Completeness sub-check.
 ### User Requirements Traceability
 [Traceability table]
 
-### `tests_enabled` Compliance
-- Flag value: [true/false]
+### `tests_enabled` / `tests_deferred` Compliance
+- Flag values: `tests_enabled: [true/false]`, `tests_deferred: [true/false]`
 - Status: PASS
 - Evidence: [specific checks]
 
@@ -382,8 +389,8 @@ Incorrect validation commands → FAIL the Completeness sub-check.
 ### User Requirements Traceability
 [Traceability table]
 
-### `tests_enabled` Compliance
-- Flag value: [true/false]
+### `tests_enabled` / `tests_deferred` Compliance
+- Flag values: `tests_enabled: [true/false]`, `tests_deferred: [true/false]`
 - Status: PASS / FAIL
 - Evidence: [specific checks]
 
@@ -408,6 +415,7 @@ After Phase 3 (user approval), the user chooses "High Accuracy Review" instead o
 **TASK FILES**: `.corvus/tasks/[feature]/*.md`
 
 **TESTS_ENABLED**: [true/false] (from Phase 2 question() tool)
+**TESTS_DEFERRED**: [true/false] (from Phase 2 question() tool)
 
 **PROJECT ENVIRONMENT**:
 [Paste environment details from code-explorer]

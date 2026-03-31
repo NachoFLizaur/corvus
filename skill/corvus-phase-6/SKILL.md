@@ -71,8 +71,13 @@ Present final summary to user:
 
 ### Validation Results
 
-When `tests_enabled: true`:
+When `tests_enabled: true, tests_deferred: false`:
 - [x] All tests passing ([N] tests)
+- [x] Build successful
+- [x] All acceptance criteria met
+
+When `tests_enabled: true, tests_deferred: true`:
+- [x] All tests passing ([N] tests — run in Phase 5, deferred from Phase 4)
 - [x] Build successful
 - [x] All acceptance criteria met
 

@@ -28,8 +28,9 @@ Phase 4 operates at the **phase level**, not per-task. Tasks within a phase are 
          │
          ▼
 4b: code-quality (MANDATORY)
-    ├── tests_enabled: true  → tests + acceptance criteria
-    └── tests_enabled: false → acceptance criteria only
+    ├── tests_enabled: true, tests_deferred: false  → tests + acceptance criteria
+    ├── tests_enabled: true, tests_deferred: true   → acceptance criteria only (tests deferred to Phase 5)
+    └── tests_enabled: false                        → acceptance criteria only (no tests)
          │
     ┌────┴────┐
   PASS      FAIL
@@ -320,9 +321,14 @@ Phase 5 UX/DX Required: [YES if ANY task is true / NO if all false]
     MANDATORY OBJECTIVE QUALITY GATE: You CANNOT proceed until
     code-quality returns PASS for the ENTIRE PHASE.
     
-    When `tests_enabled: true`:
+    When `tests_enabled: true` AND `tests_deferred: false`:
     - Tests: PASS (for all affected code)
     - Acceptance criteria: ALL tasks in phase PASS
+    
+    When `tests_enabled: true` AND `tests_deferred: true` (deferred mode):
+    - Acceptance criteria: ALL tasks in phase PASS (verified via file inspection, code review, command output)
+    - Tests are NOT run during Phase 4 — deferred to Phase 5 final validation
+    - This is functionally identical to acceptance-only mode for Phase 4 purposes
     
     When `tests_enabled: false` (acceptance-only mode):
     - Acceptance criteria: ALL tasks in phase PASS (verified via file inspection, code review, command output)
@@ -330,7 +336,7 @@ Phase 5 UX/DX Required: [YES if ANY task is true / NO if all false]
     
     NOTE: code-implementer already validated lint, type check, and build.
     code-quality focuses on TESTS and acceptance criteria verification
-    (or acceptance criteria only when tests_enabled: false).
+    (or acceptance criteria only when tests_enabled: false OR tests_deferred: true).
     
     If ANY check returns FAIL:
     1. FIRST: Invoke task-planner LEARNING MODE (FAILURE_ANALYSIS)
@@ -346,7 +352,8 @@ Phase 5 UX/DX Required: [YES if ANY task is true / NO if all false]
 </quality_gate>
 
 **Template Selection for 4b**:
-- If `tests_enabled: true` (default): Use the standard delegation template below
+- If `tests_enabled: true` AND `tests_deferred: false` (default): Use the standard delegation template below
+- If `tests_enabled: true` AND `tests_deferred: true` (deferred mode): Use the "Acceptance-Only Mode" delegation template (tests deferred to Phase 5)
 - If `tests_enabled: false`: Use the "Acceptance-Only Mode" delegation template
 
 **DELEGATE TO**: @code-quality
@@ -420,7 +427,7 @@ Only tasks [NN] require fixes. Tasks [NN] should NOT be modified.
 ```
 ```
 
-#### 4b Delegation: Acceptance-Only Mode (when `tests_enabled: false`)
+#### 4b Delegation: Acceptance-Only Mode (when `tests_enabled: false` OR `tests_deferred: true`)
 
 ```markdown
 **TASK**: Validate Phase [N] implementation (acceptance-only mode)
@@ -431,7 +438,7 @@ Only tasks [NN] require fixes. Tasks [NN] should NOT be modified.
 
 **SCOPE**: All files created/modified in 4a for this phase
 
-**MODE**: ACCEPTANCE-ONLY (`tests_enabled: false`)
+**MODE**: ACCEPTANCE-ONLY (`tests_enabled: false` OR `tests_deferred: true`)
 
 **PRIMARY JOB**: VERIFY ACCEPTANCE CRITERIA
 

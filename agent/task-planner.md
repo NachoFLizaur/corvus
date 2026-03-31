@@ -88,6 +88,10 @@ Transform complex, multi-step work into:
     Test specifications MUST be derived from acceptance criteria, not implementation.
     NEVER skip the test task. NEVER merge test tasks across phases.
     
+    This applies regardless of `tests_deferred`. When `tests_deferred: true`,
+    test tasks are still generated — they are just not executed during Phase 4
+    quality gates (deferred to Phase 5 final validation).
+    
     When `tests_enabled: false`: Do NOT generate test tasks for any phase.
     Phases end with the last implementation task. Quality gates will run in
     "acceptance-only" mode (verifying criteria without test execution).
@@ -243,6 +247,9 @@ Create structured task plan with phases:
 
 > **When `tests_enabled: false`**: Omit all rows with Type = **test** from the Tasks table.
 > Phase task counts and effort estimates should reflect the absence of test tasks.
+>
+> **When `tests_enabled: true, tests_deferred: true`**: Keep all test task rows — test tasks are still
+> generated. The deferral only affects when code-quality executes them (Phase 5 instead of Phase 4).
 
 ### Exit Criteria
 - [ ] All tasks marked complete
@@ -1344,21 +1351,39 @@ cd frontend && pnpm test
 
 ---
 
-## TEST PREFERENCE FLAG
+## TEST PREFERENCE FLAGS
 
-The `tests_enabled` flag controls whether test-related artifacts are generated.
+Two flags jointly control test-related behavior: `tests_enabled` and `tests_deferred`.
 
 ### Flag Source
-- Captured by requirements-analyst during Phase 0
+- Captured via Corvus question() tool before Phase 2
 - Passed to task-planner via Corvus Phase 2 delegation
-- Default: `true`
+- Defaults: `tests_enabled: true`, `tests_deferred: false`
 
-### When `tests_enabled: true` (Default)
+### Flag Combinations
+
+| `tests_enabled` | `tests_deferred` | Question Answer | Task-Planner Behavior | Phase 4 (4b) | Phase 5 (5a) |
+|---|---|---|---|---|---|
+| `true` | `false` | "Yes (recommended)" | Generate test tasks | Tests + acceptance | Tests + acceptance |
+| `true` | `true` | "Yes — at end only" | Generate test tasks | Acceptance-only | Tests + acceptance (first run) |
+| `false` | `false` | "No — skip tests" | No test tasks | Acceptance-only | Acceptance-only |
+
+### When `tests_enabled: true, tests_deferred: false` (Default)
 - All existing behavior is preserved exactly as-is
 - Phase test tasks are generated (MANDATORY)
 - `## Tests` section included in task files
 - Test validation commands included
 - MASTER_PLAN.md includes test coverage fields and test exit criteria
+- Phase 4 quality gates run tests at every phase boundary
+
+### When `tests_enabled: true, tests_deferred: true` (Deferred Mode)
+- Phase test tasks ARE generated (same as default — MANDATORY)
+- `## Tests` section IS included in task files
+- Test validation commands ARE included
+- MASTER_PLAN.md includes test coverage fields and test exit criteria
+- Phase 4 quality gates run in **acceptance-only mode** (tests exist but are not executed)
+- Phase 5 runs the **full test suite** for the first time
+- Phase 5 is MANDATORY even for Lightweight plans when deferred mode is active
 
 ### When `tests_enabled: false`
 - Phase test tasks are NOT generated
@@ -1366,14 +1391,16 @@ The `tests_enabled` flag controls whether test-related artifacts are generated.
 - Test validation commands are omitted
 - MASTER_PLAN.md omits test coverage fields
 - Exit criteria uses "All acceptance criteria verified" instead of "All tests passing"
-- Quality gates (code-quality) run in "acceptance-only" mode
+- Quality gates (code-quality) run in "acceptance-only" mode at all phases
 
 ### Propagation
-The flag appears in:
-1. requirements-analyst output → "User Requirements (Immutable)" section
-2. Corvus Phase 2 delegation → passed to task-planner
+The flags appear in:
+1. Corvus question() tool → stored as two boolean flags
+2. Corvus Phase 2 delegation → passed to task-planner via `**TEST PREFERENCE**` field
 3. MASTER_PLAN.md → documented for downstream phases
-4. Individual task files → conditional sections based on flag
+4. Individual task files → conditional sections based on `tests_enabled`
+5. Phase 4 quality gate delegation → `tests_deferred` determines acceptance-only vs full mode
+6. Phase 5 delegation → `tests_deferred` determines whether this is the first test run
 
 ---
 
