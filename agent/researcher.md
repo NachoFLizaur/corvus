@@ -10,9 +10,9 @@ permissions:
   web-research_multi_search: "allow"
   web-research_fetch_pages: "allow"
   bash:
+    "*": "deny"
     "gh *": "allow"
     "curl *": "allow"
-    "*": "deny"
   edit:
     "**/*": "deny"
 ---

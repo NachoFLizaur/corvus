@@ -7,17 +7,15 @@ permissions:
   glob: "allow"
   grep: "allow"
   bash:
-    "gh api*": "allow"
-    "gh pr view*": "allow"
-    "gh pr diff*": "allow"
-    "git diff*": "allow"
-    "git log*": "allow"
-    "jq*": "allow"
+    "*": "deny"
     "rm *": "deny"
     "mv *": "deny"
     "cp *": "deny"
     "sudo *": "deny"
-    "*": "deny"
+    "gh *": "allow"
+    "git diff*": "allow"
+    "git log*": "allow"
+    "jq*": "allow"
   edit:
     "**/*": "deny"
 ---

@@ -7,6 +7,11 @@ permissions:
   glob: "allow"
   grep: "allow"
   bash:
+    "*": "deny"
+    "rm *": "deny"
+    "mv *": "deny"
+    "cp *": "deny"
+    "sudo *": "deny"
     "gh *": "allow"
     "git log*": "allow"
     "git blame*": "allow"
@@ -18,11 +23,6 @@ permissions:
     "git merge-base*": "allow"
     "file *": "allow"
     "wc *": "allow"
-    "rm *": "deny"
-    "mv *": "deny"
-    "cp *": "deny"
-    "sudo *": "deny"
-    "*": "deny"
   edit:
     "**/*": "deny"
 ---

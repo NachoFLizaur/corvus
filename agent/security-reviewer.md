@@ -7,6 +7,11 @@ permissions:
   glob: "allow"
   grep: "allow"
   bash:
+    "*": "deny"
+    "rm *": "deny"
+    "mv *": "deny"
+    "cp *": "deny"
+    "sudo *": "deny"
     "gh *": "allow"
     "git log*": "allow"
     "git blame*": "allow"
@@ -14,11 +19,6 @@ permissions:
     "git show*": "allow"
     "npm audit*": "allow"
     "pip audit*": "allow"
-    "rm *": "deny"
-    "mv *": "deny"
-    "cp *": "deny"
-    "sudo *": "deny"
-    "*": "deny"
   edit:
     "**/*": "deny"
 ---

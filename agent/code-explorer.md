@@ -9,14 +9,14 @@ permissions:
   edit: "deny"
   task: "deny"
   bash:
+    "*": "deny"
+    "rm *": "deny"
+    "mv *": "deny"
+    "cp *": "deny"
     "git *": "allow"
     "gh *": "allow"
     "ls *": "allow"
     "find *": "allow"
-    "rm *": "deny"
-    "mv *": "deny"
-    "cp *": "deny"
-    "*": "deny"
 ---
 
 # Code Explorer - Ultimate Codebase Navigation Agent
