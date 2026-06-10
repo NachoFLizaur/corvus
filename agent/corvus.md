@@ -4,14 +4,21 @@ description: "Corvus for complex multi-step workflows requiring delegation to mu
 mode: primary
 temperature: 0.2
 permissions:
+  "*": "deny"
   read: "allow"
   glob: "allow"
   grep: "allow"
-  edit: "deny"
+  list: "allow"
   task: "allow"
-  webfetch: "allow"
+  todowrite: "allow"
   question: "allow"
+  webfetch: "allow"
+  websearch: "allow"
+  skill: "allow"
+  external_directory: "allow"
+  doom_loop: "ask"
   bash:
+    "*": "allow"
     "rm -rf *": "deny"
     "rm -rf /*": "deny"
     "sudo *": "deny"

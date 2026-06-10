@@ -4,14 +4,21 @@ description: "Interactive PR review orchestrator. Coordinates R0-R5 review phase
 mode: primary
 temperature: 0.2
 permissions:
+  "*": "deny"
   read: "allow"
   glob: "allow"
   grep: "allow"
-  edit: "deny"
+  list: "allow"
   task: "allow"
-  webfetch: "allow"
+  todowrite: "allow"
   question: "allow"
+  webfetch: "allow"
+  websearch: "allow"
+  skill: "allow"
+  external_directory: "allow"
+  doom_loop: "ask"
   bash:
+    "*": "allow"
     "gh *": "allow"
     "git log*": "allow"
     "git diff*": "allow"

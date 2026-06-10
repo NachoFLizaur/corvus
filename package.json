@@ -1,6 +1,6 @@
 {
   "name": "corvus-ai",
-  "version": "0.7.3",
+  "version": "0.7.4",
   "description": "Corvus AI agent suite for OpenCode — multi-agent orchestration with specialized agents, commands, and skills",
   "type": "module",
   "main": "dist/index.js",

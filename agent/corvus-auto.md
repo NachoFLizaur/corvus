@@ -4,14 +4,21 @@ description: "Corvus Auto for fully autonomous multi-step workflows. Zero user i
 mode: primary
 temperature: 0.2
 permissions:
+  "*": "deny"
   read: "allow"
   glob: "allow"
   grep: "allow"
-  edit: "deny"
+  list: "allow"
   task: "allow"
-  webfetch: "allow"
+  todowrite: "allow"
   question: "deny"
+  webfetch: "allow"
+  websearch: "allow"
+  skill: "allow"
+  external_directory: "allow"
+  doom_loop: "allow"
   bash:
+    "*": "allow"
     "git init": "deny"
     "git reset --hard": "deny"
     "git push --force": "deny"
