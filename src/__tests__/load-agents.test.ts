@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs"
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { resolve, join } from "node:path"
 import { tmpdir } from "node:os"
 import { loadAgents } from "../load-agents"
@@ -7,11 +7,21 @@ import { loadAgents } from "../load-agents"
 const ROOT = resolve(import.meta.dir, "../..")
 const AGENT_DIR = resolve(ROOT, "agent")
 
+const loadAgentFixture = (source: string) => {
+  const tmpDir = mkdtempSync(join(tmpdir(), "agent-test-"))
+  try {
+    writeFileSync(join(tmpDir, "fixture.md"), source)
+    return loadAgents(tmpDir)["fixture"]
+  } finally {
+    rmSync(tmpDir, { recursive: true })
+  }
+}
+
 describe("loadAgents", () => {
   test("loads all agent files", () => {
     const agents = loadAgents(AGENT_DIR)
 
-    expect(Object.keys(agents)).toHaveLength(15)
+    expect(Object.keys(agents)).toHaveLength(16)
   })
 
   test("agent names from filenames", () => {
@@ -23,6 +33,7 @@ describe("loadAgents", () => {
     expect(names).toContain("researcher")
     expect(names).toContain("code-explorer")
     expect(names).toContain("code-quality")
+    expect(names).toContain("pr-code-reviewer")
   })
 
   test("maps description field", () => {
@@ -44,48 +55,69 @@ describe("loadAgents", () => {
     expect(agents["corvus"].temperature).toBe(0.2)
   })
 
-  test("maps permissions to permission", () => {
-    const agents = loadAgents(AGENT_DIR)
-    const permission = agents["corvus"].permission
+  test("preserves native singular permission", () => {
+    const agent = loadAgentFixture(
+      "---\npermission:\n  read: allow\n---\nNative permission",
+    )
 
-    expect(permission).toBeDefined()
-    expect(typeof permission).toBe("object")
+    expect(agent.permission).toEqual({ read: "allow" })
+    expect(agent).not.toHaveProperty("permissions")
   })
 
-  test("renames permissions to permission", () => {
-    const agents = loadAgents(AGENT_DIR)
-    const implementer = agents["code-implementer"]
+  test("loads legacy plural permissions as a singular alias", () => {
+    const agent = loadAgentFixture(
+      "---\npermissions:\n  read: allow\n---\nLegacy permission",
+    )
 
-    expect(implementer).toHaveProperty("permission")
-    expect(implementer).not.toHaveProperty("permissions")
+    expect(agent.permission).toEqual({ read: "allow" })
+    expect(agent).not.toHaveProperty("permissions")
   })
 
-  test("maps body to prompt", () => {
-    const agents = loadAgents(AGENT_DIR)
+  test("prefers singular permission when both forms are present", () => {
+    const agent = loadAgentFixture(
+      [
+        "---",
+        "permission:",
+        "  read: allow",
+        "permissions:",
+        "  read: deny",
+        "  write: allow",
+        "---",
+        "Conflicting permissions",
+      ].join("\n"),
+    )
 
-    expect(typeof agents["corvus"].prompt).toBe("string")
-    expect(agents["corvus"].prompt!.length).toBeGreaterThan(0)
+    expect(agent.permission).toEqual({ read: "allow" })
+    expect(agent).not.toHaveProperty("permissions")
+  })
+
+  test("passes unknown frontmatter fields through", () => {
+    const agent = loadAgentFixture(
+      "---\nnative_option:\n  enabled: true\n---\nNative metadata",
+    )
+
+    expect(agent.native_option).toEqual({ enabled: true })
+  })
+
+  test("uses the Markdown body as the authoritative prompt", () => {
+    const agent = loadAgentFixture(
+      "---\nprompt: Frontmatter prompt\n---\nMarkdown body prompt",
+    )
+
+    expect(agent.prompt).toBe("Markdown body prompt")
   })
 
   test("handles agent with minimal frontmatter", () => {
-    const tmpDir = mkdtempSync(join(tmpdir(), "agent-test-"))
-    try {
-      writeFileSync(
-        join(tmpDir, "minimal.md"),
-        "---\ndescription: minimal agent\n---\nHello",
-      )
+    const agent = loadAgentFixture(
+      "---\ndescription: minimal agent\n---\nHello",
+    )
 
-      const agents = loadAgents(tmpDir)
-
-      expect(agents["minimal"].description).toBe("minimal agent")
-      expect(agents["minimal"].prompt).toBe("Hello")
-      // Only defined fields should be set
-      expect(agents["minimal"].mode).toBeUndefined()
-      expect(agents["minimal"].temperature).toBeUndefined()
-      expect(agents["minimal"].tools).toBeUndefined()
-      expect(agents["minimal"].permission).toBeUndefined()
-    } finally {
-      rmSync(tmpDir, { recursive: true })
-    }
+    expect(agent.description).toBe("minimal agent")
+    expect(agent.prompt).toBe("Hello")
+    // Only defined fields should be set
+    expect(agent.mode).toBeUndefined()
+    expect(agent.temperature).toBeUndefined()
+    expect(agent.tools).toBeUndefined()
+    expect(agent.permission).toBeUndefined()
   })
 })

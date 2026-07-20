@@ -45,6 +45,22 @@ describe("Phase 1 Template", () => {
     expect(content).toContain("1b. Codebase Investigation")
   })
 
+  test("routes discovery results by origin", () => {
+    expect(content).toContain("| `PHASE_0A` | `PHASE_0B` |")
+    expect(content).toMatch(
+      /\| `PHASE_0A` \| Return `ACCUMULATED_FINDINGS` to Phase 0b,[^\n]*`POST_DISCOVERY`/,
+    )
+    expect(content).toContain("| `DIRECT_CALLER` | Original caller identity |")
+    expect(content).toMatch(
+      /\| `DIRECT_CALLER` \| Return the payload to the original caller and stop\./,
+    )
+  })
+
+  test("does not unconditionally enter planning", () => {
+    expect(content).not.toContain("Immediately invoke task-planner")
+    expect(content).toContain("Phase 1 never invokes task-planner directly.")
+  })
+
   test("has valid frontmatter", () => {
     // Assert - frontmatter must parse and have correct name
     expect(frontmatter).toBeDefined()

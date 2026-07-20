@@ -31,7 +31,8 @@ describe("built plugin", () => {
     const config = { agent: {}, command: {}, skills: { paths: [] } } as any
     const hooks = await plugin({})
     await hooks.config(config)
-    expect(Object.keys(config.agent).length).toBe(15)
+    expect(Object.keys(config.agent).length).toBe(16)
+    expect(config.agent["pr-code-reviewer"]).toBeDefined()
   })
 
   test("config hook loads commands", async () => {

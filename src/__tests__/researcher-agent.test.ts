@@ -10,6 +10,7 @@ describe("Researcher Agent", () => {
   // Arrange - read file once, share across tests (read-only, no shared mutable state)
   const content = readFileSync(RESEARCHER_PATH, "utf-8")
   const { frontmatter } = parseFrontmatter<Record<string, any>>(content)
+  const permission = frontmatter.permission
 
   test("no context7 references", () => {
     // Assert - no context7 in any case
@@ -21,19 +22,19 @@ describe("Researcher Agent", () => {
     expect(content).not.toMatch(/exa_web_search|websearch_exa/i)
   })
 
-  test("permissions has web-research_multi_search", () => {
+  test("permission has web-research_multi_search", () => {
     // Assert
-    expect(frontmatter.permissions["web-research_multi_search"]).toBe("allow")
+    expect(permission["web-research_multi_search"]).toBe("allow")
   })
 
-  test("permissions has web-research_fetch_pages", () => {
+  test("permission has web-research_fetch_pages", () => {
     // Assert
-    expect(frontmatter.permissions["web-research_fetch_pages"]).toBe("allow")
+    expect(permission["web-research_fetch_pages"]).toBe("allow")
   })
 
   test("curl permission is allow", () => {
     // Assert - curl must be "allow" for fallback tier 3
-    expect(frontmatter.permissions.bash["curl *"]).toBe("allow")
+    expect(permission.bash["curl *"]).toBe("allow")
   })
 
   test("has complexity router section", () => {
@@ -82,7 +83,7 @@ describe("Researcher Agent", () => {
     expect(frontmatter).toBeDefined()
     expect(frontmatter.description).toBeDefined()
     expect(frontmatter.mode).toBe("subagent")
-    expect(frontmatter.permissions).toBeDefined()
+    expect(frontmatter.permission).toBeDefined()
   })
 
   test("preserves output format sections", () => {
@@ -94,12 +95,12 @@ describe("Researcher Agent", () => {
 
   test("no git log bash permission", () => {
     // Assert - git log is code-explorer territory
-    expect(frontmatter.permissions.bash["git log*"]).toBeUndefined()
+    expect(permission.bash["git log*"]).toBeUndefined()
   })
 
   test("no git show bash permission", () => {
     // Assert - git show is code-explorer territory
-    expect(frontmatter.permissions.bash["git show*"]).toBeUndefined()
+    expect(permission.bash["git show*"]).toBeUndefined()
   })
 
   test("no local codebase research source section", () => {
@@ -121,13 +122,13 @@ describe("Researcher Agent", () => {
 
   test("gh bash permission preserved", () => {
     // Assert - GitHub-wide research is external research
-    expect(frontmatter.permissions.bash["gh *"]).toBe("allow")
+    expect(permission.bash["gh *"]).toBe("allow")
   })
 
-  test("read/glob/grep permissions preserved", () => {
+  test("read/glob/grep permission rules preserved", () => {
     // Assert - still needed for quick context checks (e.g., reading package.json)
-    expect(frontmatter.permissions.read).toBe("allow")
-    expect(frontmatter.permissions.glob).toBe("allow")
-    expect(frontmatter.permissions.grep).toBe("allow")
+    expect(permission.read).toBe("allow")
+    expect(permission.glob).toBe("allow")
+    expect(permission.grep).toBe("allow")
   })
 })
