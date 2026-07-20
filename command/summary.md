@@ -34,11 +34,11 @@ When invoked, this command:
 
 3. **Output Format**: Markdown suitable for copy-paste into a new session
 
-## CRITICAL RULES
+## Rules
 
 - Read todo list first to understand task status
 - Review git status/diff to identify file changes
-- Be comprehensive but concise - focus on actionable context
+- Focus on actionable context
 - Include specific file paths and line numbers where relevant
 - Highlight any critical decisions or architectural choices made
 - Note any dependencies or constraints discovered

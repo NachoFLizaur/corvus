@@ -7,7 +7,7 @@ description: Completion - success extraction and final summary
 
 **Goal**: Extract learnings and summarize the work.
 
-### 6a. Success Learning Extraction (ONCE for entire feature)
+### 6a. Success Learning Extraction (once for the entire feature)
 
 **DELEGATE TO**: @task-planner
 

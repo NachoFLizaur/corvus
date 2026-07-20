@@ -5,9 +5,9 @@ description: Follow-up triage - handling requests after feature completion
 
 ## Phase 7: FOLLOW-UP TRIAGE
 
-**When**: After Phase 6 completes and user makes a new request in the same session.
+**When**: After Phase 6 completes and the user makes a new request in the same session.
 
-**Goal**: Assess the new request and route it appropriately without abandoning the structured workflow.
+**Goal**: Assess the new request and route it appropriately without abandoning the structured workflow. Triage every follow-up before acting, and route all changes through subagents.
 
 ### Triage Decision Tree
 
@@ -28,8 +28,6 @@ New request received after completion
 
 ### Triage Assessment
 
-When a follow-up request comes in, first assess:
-
 ```markdown
 ## Follow-up Triage
 
@@ -46,21 +44,21 @@ When a follow-up request comes in, first assess:
 
 ### LIGHTWEIGHT PATH (Small Follow-ups)
 
-For small, clearly-scoped changes (< 3 files) to the just-completed work:
+For small, clearly-scoped changes (< 3 files) to the just-completed work. Lightweight still means validated and documented — every change is tracked in MASTER_PLAN.md.
 
 1. **Update MASTER_PLAN.md** via task-planner:
    ```markdown
    **TASK**: Update existing master plan with follow-up task
-   
+
    **MASTER PLAN**: `.corvus/tasks/[feature]/MASTER_PLAN.md`
-   
+
    **NEW TASK TO ADD**:
    - Description: [what needs to be done]
    - Files affected: [list]
    - Add to: [existing phase or new "Follow-up Fixes" phase]
-   
+
    **MUST DO**:
-   - Preserve all existing task statuses
+   - Preserve all existing task statuses (completed history stays intact)
    - Add new task with [ ] status
    - Update progress counts
    - Create individual task file if needed
@@ -69,25 +67,25 @@ For small, clearly-scoped changes (< 3 files) to the just-completed work:
 2. **Delegate to code-implementer**:
    ```markdown
    **TASK**: [description of the fix/change]
-   
+
    **TASK FILE**: `.corvus/tasks/[feature]/[NN-task].md` (if created)
-   
+
    **CONTEXT**:
    - Follow-up to: `.corvus/tasks/[feature]/MASTER_PLAN.md`
    - Related to task(s): [list if applicable]
-   
+
    **DELEGATED MODE**: Yes (continuation of approved work)
-   
+
    **MUST DO**:
    - [specific requirements]
-   - Validate changes (type check, lint, and tests if `tests_enabled: true` — note: for follow-ups after deferred-mode features, run tests inline regardless of original `tests_deferred` setting since the full suite was already validated in Phase 5)
-   
+   - Validate changes: type check, lint, and tests if `tests_enabled: true`. Follow-ups run tests inline regardless of the original `tests_deferred` setting — the full suite was already validated in Phase 5
+
    **REPORT BACK**:
    - Files changed
    - Validation results
    ```
 
-3. **Validate with code-quality** (if significant changes — tests or acceptance-only based on `tests_enabled`; for follow-ups after deferred-mode features, use full test mode since Phase 5 already validated the suite)
+3. **Validate with code-quality** if changes are significant (same test rule as step 2: run tests, or acceptance-only when `tests_enabled: false`)
 
 4. **Update MASTER_PLAN.md**: Mark task complete via task-planner
 
@@ -108,11 +106,3 @@ For unrelated work:
 2. Start fresh from Phase 0 with the new feature
 3. Create new `.corvus/tasks/[new-feature]/` directory
 4. Follow complete workflow
-
-### Key Principles for Follow-ups
-
-1. **Never skip triage** - Always assess before acting
-2. **Never write code directly** - All changes through subagents
-3. **Always update MASTER_PLAN.md** - Even small fixes get tracked
-4. **Preserve history** - Don't reset completed task statuses
-5. **Lightweight doesn't mean sloppy** - Still validate and document

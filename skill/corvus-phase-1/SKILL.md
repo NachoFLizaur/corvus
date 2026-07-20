@@ -5,9 +5,29 @@ description: Discovery phase - research and codebase exploration
 
 ## Phase 1: DISCOVERY
 
-**Goal**: Gather all context needed for planning.
+**Goal**: Gather the requested context once and return it to the declared caller.
 
-Launch these subagents **IN PARALLEL** using the Task tool:
+## Required Dispatch Envelope
+
+Every Phase 1 invocation includes this routing envelope:
+
+```markdown
+**DISCOVERY_ORIGIN**: [PHASE_0A | DIRECT_CALLER]
+**RETURN_TARGET**: [PHASE_0B | original caller identity]
+**DISCOVERY_SCOPE**: [specific unresolved questions]
+**EXISTING_FINDINGS**: [accumulated research/codebase findings, or "none"]
+```
+
+Valid routes are fixed:
+
+| `DISCOVERY_ORIGIN` | Required `RETURN_TARGET` | Meaning |
+|--------------------|--------------------------|---------|
+| `PHASE_0A` | `PHASE_0B` | Phase 0a requested discovery; completion must feed Requirements Analyst `POST_DISCOVERY` before selection or planning |
+| `DIRECT_CALLER` | Original caller identity | A user/caller requested discovery directly; completion returns findings only, with no implicit planning |
+
+Treat `EXISTING_FINDINGS` as already completed work. Scope researcher and code-explorer only to unanswered items; do not repeat research or code exploration already supplied to Phase 0b or the direct caller.
+
+Launch these subagents in parallel using the Task tool:
 
 ### 1a. External Research (researcher)
 
@@ -18,7 +38,7 @@ Use when the task involves technologies, patterns, or best practices that benefi
 
 **EXPECTED OUTCOME**:
 - Relevant documentation links
-- Best practice recommendations  
+- Best practice recommendations
 - Code examples from authoritative sources
 - Effort estimate (S/M/L/XL)
 
@@ -28,6 +48,7 @@ Use when the task involves technologies, patterns, or best practices that benefi
 - Follow three-tier fallback: MCP tools → webfetch → curl
 - Cite all sources with links
 - Focus on [specific technology/pattern]
+- Investigate only DISCOVERY_SCOPE gaps not answered by EXISTING_FINDINGS
 - Provide actionable recommendations
 - Include effort estimates
 
@@ -35,6 +56,7 @@ Use when the task involves technologies, patterns, or best practices that benefi
 - Make changes to any files
 - Provide generic advice without evidence
 - Skip the fallback chain if MCP tools fail
+- Repeat research already present in EXISTING_FINDINGS
 
 **REPORT BACK**:
 - TL;DR (1-3 sentences)
@@ -63,10 +85,12 @@ Always required to understand the target codebase.
 - Rate pattern quality where relevant
 - Identify potential risks or blockers
 - Detect project environment (venv, package manager, scripts)
+- Investigate only DISCOVERY_SCOPE gaps not answered by EXISTING_FINDINGS
 
 **MUST NOT DO**:
 - Make any file modifications
 - Guess at implementations without evidence
+- Repeat code exploration already present in EXISTING_FINDINGS
 
 **CONTEXT**: 
 - Project path: [path]
@@ -82,6 +106,21 @@ Always required to understand the target codebase.
 - Project environment (venv path, package manager, available scripts)
 ```
 
-**Exit Criteria**: Have both research findings AND codebase analysis (or just codebase analysis if no external research needed).
+## Completion Payload
 
-**Next Step**: Immediately invoke task-planner (Phase 2). Do NOT summarize findings and ask user for approval - the approval comes AFTER task-planner creates the plan files.
+Return one payload to `RETURN_TARGET`:
+
+```markdown
+**DISCOVERY_ORIGIN**: [unchanged from dispatch]
+**RETURN_TARGET**: [unchanged from dispatch]
+**NEW_FINDINGS**: [research/codebase findings produced by this invocation]
+**ACCUMULATED_FINDINGS**: [EXISTING_FINDINGS merged with NEW_FINDINGS, without duplicates]
+**UNRESOLVED_SCOPE**: [remaining questions, or "none"]
+```
+
+| Origin | Completion action |
+|--------|-------------------|
+| `PHASE_0A` | Return `ACCUMULATED_FINDINGS` to Phase 0b, which invokes Requirements Analyst in `POST_DISCOVERY`. Do not select a plan or invoke task-planner from Phase 1. |
+| `DIRECT_CALLER` | Return the payload to the original caller and stop. The caller decides whether any later action, including planning, is appropriate. |
+
+**Exit Criteria**: Requested scope is answered or explicitly listed in `UNRESOLVED_SCOPE`, and the payload has been returned to the declared target. Phase 1 never invokes task-planner directly.

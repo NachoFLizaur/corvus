@@ -4,13 +4,15 @@ Complete state machine documentation for the Corvus workflow, including phase tr
 
 ## Overview
 
-Corvus coordinates complex multi-step workflows through 8 phases (0-7, plus optional Phase 3.5), with a plan-type selection step between Phase 0 and Phase 2 that adapts planning depth to task complexity. Phase 3.5 provides an optional high-accuracy plan review, Phase 4 contains an implementation loop, and Phase 5 contains a two-step validation process. The state machine ensures correctness through mandatory gates, iteration limits, and structured error recovery. Plan types (No Plan, Lightweight, Standard, Spec-Driven) determine which phases are executed and which templates are used.
+Corvus coordinates complex work through Phases 0-7 plus optional Phase 3.5. Plan and test inputs are resolved before Phase 2. `No Plan` is not a Phase 2 mode: it delegates directly to one specialist and ends without a master plan, test-preference step, or approval gate. Planned work uses `LIGHTWEIGHT`, `STANDARD`, or `SPEC_DRIVEN`, then moves through planning, implementation, final gates, and completion.
+
+This document covers the interactive orchestrator (`agent/corvus.md`) and its mirrored autonomous variant (`agent/corvus-auto.md`). Corvus Auto consumes preselected inputs or deterministic defaults, denies `question()`, auto-approves the plan, requires Phase 3.5, and defaults to `delivery_mode: local_only`. Its guarded Git delivery route runs only after an explicit trusted opt-in.
 
 **Key Principles**:
 - **Correctness over speed**: Every phase must complete properly before proceeding
 - **Phase-level operations**: Validation happens per-phase, not per-task
 - **Learning loops**: Analyze failures before fixing, extract learnings after success
-- **Single approval gate**: User approval only at Phase 3
+- **Single planned-work approval gate**: Interactive plan approval and any Phase 3.5 continuation stay in the Phase 3/3.5 gate
 
 ---
 
@@ -20,24 +22,26 @@ Corvus coordinates complex multi-step workflows through 8 phases (0-7, plus opti
 stateDiagram-v2
     [*] --> Phase0a: User Request
 
-    Phase0a --> PlanTypeSelection: REQUIREMENTS_CLEAR
+    Phase0a --> PlanInput: REQUIREMENTS_CLEAR
     Phase0a --> Phase0a: QUESTIONS_NEEDED (max 3 rounds)
-    Phase0a --> Phase1_pre0b: DISCOVERY_NEEDED
+    Phase0a --> Phase1_0a: DISCOVERY_NEEDED
 
-    Phase1_pre0b --> Phase0b: Discovery Complete
+    Phase1_0a --> Phase0b: POST_DISCOVERY
 
-    Phase0b --> PlanTypeSelection: REQUIREMENTS_CLEAR
+    Phase0b --> PlanInput: REQUIREMENTS_CLEAR
     Phase0b --> Phase0b: QUESTIONS_NEEDED
-    Phase0b --> Phase1_pre0b: DISCOVERY_NEEDED (max 2 loops)
+    Phase0b --> Phase1_0a: DISCOVERY_NEEDED delta (max 2 passes)
 
-    PlanTypeSelection --> DirectDelegation: No Plan
-    PlanTypeSelection --> Phase2L: Lightweight
-    PlanTypeSelection --> Phase1_std: Standard (if DISCOVERY_NEEDED)
-    PlanTypeSelection --> Phase2: Standard (if REQUIREMENTS_CLEAR)
-    PlanTypeSelection --> Phase1_spec: Spec-Driven
+    PlanInput --> DirectDelegation: No Plan
+    PlanInput --> TestInput: Lightweight or Standard
+    PlanInput --> TestInput: Spec-Driven with discovery
+    PlanInput --> Phase1_spec: Spec-Driven without discovery
 
-    Phase1_std --> Phase2: Discovery Complete
-    Phase1_spec --> Phase2S: Discovery Complete
+    Phase1_spec --> TestInput: DIRECT_CALLER return
+
+    TestInput --> Phase2L: LIGHTWEIGHT
+    TestInput --> Phase2: STANDARD
+    TestInput --> Phase2S: SPEC_DRIVEN
 
     Phase2L --> Phase3: Lightweight MASTER_PLAN.md Created
     Phase2 --> Phase3: MASTER_PLAN.md Created
@@ -51,19 +55,20 @@ stateDiagram-v2
     UserChoice3 --> Phase4: Start Implementation
     UserChoice3 --> Phase3_5: High Accuracy Review
 
-    Phase3_5 --> Phase4: OKAY
+    Phase3_5 --> UserChoice3_5: OKAY (results presented)
     Phase3_5 --> PlanFix: REJECT
 
     PlanFix --> UserChoice3_5: Plan Updated
     UserChoice3_5 --> Phase3_5: Re-run Review
     UserChoice3_5 --> Phase4: Start Implementation
 
-    Phase4 --> Phase5: All Phases Complete (Standard/Spec-Driven)
-    Phase4 --> Phase6: All Phases Complete (Lightweight)
+    Phase4 --> Phase5: Standard/Spec-Driven complete
+    Phase4 --> Phase5: Lightweight + deferred tests
+    Phase4 --> Phase6: Lightweight + tests not deferred
     Phase4 --> Phase4: More Phases Remain
 
-    Phase5 --> Phase6: Validation PASS
-    Phase5 --> Phase4: Validation FAIL (create fix tasks)
+    Phase5 --> Phase6: 5a PASS with no 5b, or 5b PASS/NEEDS_IMPROVEMENT
+    Phase5 --> Phase4: 5a FAIL or 5b CRITICAL_ISSUES
 
     Phase6 --> Phase7: User Follow-up Request
     Phase6 --> [*]: Complete
@@ -79,16 +84,17 @@ stateDiagram-v2
 |-------|------|---------|----------|
 | 0a | Initial Clarification | Analyze request completeness | @requirements-analyst |
 | 0b | Post-Discovery Clarification | Analyze discovery findings | @requirements-analyst |
-| PTS | Plan-Type Selection | Choose planning depth based on complexity | Corvus + User (Question tool) |
-| 1 | Discovery | Gather context for planning | @researcher + @code-explorer (parallel) |
+| PI | Plan Input | Consume a preselection or resolve No Plan/Lightweight/Standard/Spec-Driven | Interactive Corvus + User, or Corvus Auto |
+| TI | Test Input | For planned work, resolve normal/deferred/no-test flags once | Interactive Corvus + User, or Corvus Auto |
+| 1 | Discovery | Gather unresolved context once and return to Phase 0b or the direct caller | @researcher + @code-explorer (parallel) |
 | 2 | Planning | Create master plan and task files | @task-planner |
 | 2L | Lightweight Planning | Create simplified master plan (1 phase, 3-6 tasks) | @task-planner |
 | 2S | Spec-Driven Planning | Create master plan with mandatory specs | @task-planner |
 | 3 | User Approval | Single approval gate | User |
 | 3.5 | High Accuracy Plan Review | Optional plan quality validation | @plan-reviewer |
-| 4 | Implementation Loop | Execute phases with quality gates (tests when `tests_enabled: true, tests_deferred: false`; acceptance-only when `tests_enabled: false` OR `tests_deferred: true`) | @code-implementer + @code-quality |
-| 5 | Final Validation | Comprehensive objective + subjective checks (full tests when `tests_enabled: true` including deferred mode; acceptance-only when `tests_enabled: false`) | @code-quality + @ux-dx-quality |
-| 6 | Completion | Extract learnings, summarize | @task-planner |
+| 4 | Implementation Loop | 4a implementation → 4b objective gate → 4c constrained plan update | @code-implementer + @code-quality + @task-planner |
+| 5 | Final Validation | Binary objective 5a plus optional three-valued subjective 5b | @code-quality + @ux-dx-quality |
+| 6 | Completion | Run the sole feature-wide `SUCCESS_EXTRACTION`, then summarize | @task-planner + orchestrator |
 | 7 | Follow-up Triage | Route follow-up requests | Corvus decision |
 
 ---
@@ -99,37 +105,44 @@ stateDiagram-v2
 
 | From | To | Condition |
 |------|-----|-----------|
-| 0a | 0a | `QUESTIONS_NEEDED` AND round < 3 |
-| 0a | Plan-Type Selection | `REQUIREMENTS_CLEAR` OR round = 3 |
-| 0a | Phase 1 | `DISCOVERY_NEEDED` |
+| 0a | 0a | `QUESTIONS_NEEDED`: caller resolves the complete batch, then re-invokes `INITIAL_ANALYSIS` (maximum 3 caller-owned rounds) |
+| 0a | Plan Input | `REQUIREMENTS_CLEAR` |
+| 0a | Phase 1 | `DISCOVERY_NEEDED` with `DISCOVERY_ORIGIN: PHASE_0A`, `RETURN_TARGET: PHASE_0B` |
 
 ### Phase 0b Transitions
 
 | From | To | Condition |
 |------|-----|-----------|
-| 0b | 0b | `QUESTIONS_NEEDED` AND total rounds < 3 |
-| 0b | Plan-Type Selection | `REQUIREMENTS_CLEAR` |
-| 0b | Phase 1 | `DISCOVERY_NEEDED` AND discovery iterations < 2 |
-| 0b | Phase 2 | `DISCOVERY_NEEDED` AND discovery iterations >= 2 (forced) |
+| 0b | 0b | `QUESTIONS_NEEDED`: caller resolves the complete batch, then re-invokes `POST_DISCOVERY` within the shared 3-round cap |
+| 0b | Plan Input | `REQUIREMENTS_CLEAR` |
+| 0b | Phase 1 | `DISCOVERY_NEEDED` and fewer than 2 additional discovery passes; send only the unresolved delta and return to 0b |
+| 0b | Plan Input | Additional-discovery cap reached; record unresolved items as assumptions, complete 0b, and resolve No Plan/planned work rather than jumping to Phase 2 |
 
-### Plan-Type Selection Transitions
+### Clarification and Input Ownership
 
-After Phase 0a or 0b returns `REQUIREMENTS_CLEAR`, Corvus presents the plan-type recommendation (from requirements-analyst's heuristic scoring) to the user via the Question tool. The user selects one of four plan types, which determines the subsequent workflow.
+Requirements Analyst is non-interactive and mechanically denied `question()`. On `QUESTIONS_NEEDED`, it returns one ordered batch containing IDs, priorities, question text, closed-ended options when applicable, recommended/default answers, and blocking reasons. Interactive Corvus puts the full batch into one `question()` call and returns `ANSWERS_BY_ID`; Corvus Auto records the defaults as `ASSUMPTIONS_BY_ID` and re-invokes analysis without asking.
+
+Valid preselected `PLAN_TYPE`, `tests_enabled`, and `tests_deferred` values are consumed as supplied. Interactive Corvus asks only for unresolved values. Corvus Auto uses the plan heuristic when no plan type was supplied and defaults an unresolved test tuple to `tests_enabled: true, tests_deferred: true`. Neither path repeats a resolved plan/test question, and Phase 2/task-planner never owns those questions.
+
+### Plan and Test Input Transitions
 
 | From | To | Condition |
 |------|-----|-----------|
-| Plan-Type Selection | Direct delegation | User selects "No Plan" |
-| Plan-Type Selection | Phase 2L (Lightweight) | User selects "Lightweight" |
-| Plan-Type Selection | Phase 1 | User selects "Standard" AND 0a returned DISCOVERY_NEEDED |
-| Plan-Type Selection | Phase 2 | User selects "Standard" AND 0a returned REQUIREMENTS_CLEAR |
-| Plan-Type Selection | Phase 1 | User selects "Spec-Driven" |
+| Plan Input | Direct delegation | `No Plan`; do not resolve tests, load Phase 2, invoke task-planner, or create a master plan |
+| Plan Input | Test Input | `LIGHTWEIGHT` or `STANDARD`; reuse completed discovery and do not repeat Phase 1 |
+| Plan Input | Test Input | `SPEC_DRIVEN` and discovery already exists |
+| Plan Input | Phase 1 | `SPEC_DRIVEN` and no discovery exists; use `DIRECT_CALLER`, then return to Test Input |
+| Test Input | Phase 2L | `LIGHTWEIGHT` with a valid resolved test tuple |
+| Test Input | Phase 2 | `STANDARD` with a valid resolved test tuple |
+| Test Input | Phase 2S | `SPEC_DRIVEN` with a valid resolved test tuple |
 
 ### Phase 1 Transitions
 
 | From | To | Condition |
 |------|-----|-----------|
-| Phase 1 | Phase 0b | Discovery complete AND came from 0a with `DISCOVERY_NEEDED` |
-| Phase 1 | Phase 0b | Additional discovery complete (from 0b loop) |
+| Phase 1 | Phase 0b | Origin is `PHASE_0A`; return accumulated findings for Requirements Analyst `POST_DISCOVERY` |
+| Phase 1 | Phase 0b | Additional Phase 0b discovery completes; merge only delta findings and re-run `POST_DISCOVERY` |
+| Phase 1 | Original caller | Origin is `DIRECT_CALLER`; return findings and stop with no implicit planning |
 
 ### Phase 2/2L/2S to Phase 3 Transitions
 
@@ -148,18 +161,21 @@ After Phase 0a or 0b returns `REQUIREMENTS_CLEAR`, Corvus presents the plan-type
 | Phase 3 | User Choice | User approves plan |
 | User Choice | Phase 4 | User chooses "Start Implementation" |
 | User Choice | Phase 3.5 | User chooses "High Accuracy Review" |
-| Phase 3.5 | Phase 4 | plan-reviewer returns OKAY |
+| Phase 3.5 | User Choice (post-OKAY) | plan-reviewer returns OKAY; results presented to user |
+| User Choice (post-OKAY) | Phase 4 | User confirms "Start Implementation" |
+| User Choice (post-OKAY) | Phase 3.5 | User chooses "Re-run Review" |
 | Phase 3.5 | Plan Fix | plan-reviewer returns REJECT |
-| Plan Fix | User Choice | task-planner fixes plan |
-| User Choice (post-fix) | Phase 3.5 | User chooses "Re-run Review" |
+| Plan Fix | User Choice (post-fix) | task-planner fixes plan |
+| User Choice (post-fix) | Phase 3.5 | User chooses "Re-run High Accuracy Review" |
 | User Choice (post-fix) | Phase 4 | User chooses "Start Implementation" |
 
 ### Phase 4 Transitions
 
 | From | To | Condition |
 |------|-----|-----------|
-| Phase 4 | Phase 4 | Current phase complete AND more phases remain |
-| Phase 4 | Phase 5 | All phases in master plan complete |
+| Phase 4c | Phase 4a | Task Planner `PROGRESS_UPDATE` succeeds and more implementation phases remain |
+| Phase 4c | Phase 5 | All phases complete for Standard/Spec-Driven, or Lightweight has `tests_deferred: true` |
+| Phase 4c | Phase 6 | Lightweight completes with `tests_deferred: false` |
 | Phase 4 | User Escalation | Fix iterations >= 3 for current phase |
 
 ### Phase 5 Transitions
@@ -169,8 +185,10 @@ After Phase 0a or 0b returns `REQUIREMENTS_CLEAR`, Corvus presents the plan-type
 | Phase 5a | Phase 5b | 5a PASS AND any task has `requires_ux_dx_review: true` |
 | Phase 5a | Phase 6 | 5a PASS AND no UX/DX review required |
 | Phase 5a | Phase 4 | 5a FAIL (create fix tasks) |
-| Phase 5b | Phase 6 | 5b PASS |
-| Phase 5b | Phase 4 | 5b FAIL (create fix tasks) |
+| Phase 5b | Phase 6 | `PASS` |
+| Phase 5b | Phase 6 | `NEEDS_IMPROVEMENT`; retain recommendations unless they expose an unmet immutable acceptance criterion |
+| Phase 5b | Phase 4 | `CRITICAL_ISSUES`; create scoped fix tasks, then rerun 5a and 5b after implementation |
+| Phase 5b | Contract recovery | Missing/unknown status; fail closed, request a conforming 5b result, and escalate if still invalid |
 
 ### Phase 6-7 Transitions
 
@@ -209,7 +227,7 @@ stateDiagram-v2
 
     Step4c --> ReadPlan: More phases remain
     Step4c --> [*]: All phases complete
-    note right of Step4c: Update MASTER_PLAN.md\n(corvus direct)
+    note right of Step4c: task-planner\nPROGRESS_UPDATE
 
     FixTasks --> Escalate: iterations >= 3
     Escalate --> [*]: User intervention
@@ -219,7 +237,7 @@ stateDiagram-v2
 
 **Agent**: @code-implementer (one per task)
 
-**Rule**: ONE TASK = ONE CODE-IMPLEMENTER (always)
+**Rule**: One task = one code-implementer, always
 
 ```
 For each task in current phase:
@@ -249,6 +267,13 @@ PHASE METADATA EXTRACTION - Phase [N]
 -------------------------------------
 Tasks in Phase: [NN, NN, NN]
 Total Tasks: [count]
+Test Mode: tests_enabled=[true/false], tests_deferred=[true/false]
+
+Task Ownership:
+- Task NN: type=[implementation/phase-test], manifest=[paths], changed=[paths]
+
+Validation Evidence:
+- Task NN: commands run=[commands/results], omitted by policy=[commands/reason]
 
 UX/DX Review Flags:
 - Task NN: requires_ux_dx_review = [true/false]
@@ -276,16 +301,13 @@ Phase 5 UX/DX Required: [YES if ANY true / NO if all false]
 2. Check for regressions via code review
 3. Do NOT run tests or report missing tests
 
-**NOT checked** (already done by code-implementer):
-- Lint
-- Type check
-- Build
+The task file's validation section is an allowlist. Code Implementer reports the checks it was authorized to run and any policy-based omissions; 4b must not assume generic lint, typecheck, build, or tests ran, and must not substitute commands that the task or workflow deferred or prohibited.
 
 ### 4b to 4c Transition (PASS)
 
 | Condition | Action | When |
 |-----------|--------|------|
-| PHASE GATE STATUS = PASS | Proceed to 4c | Always |
+| QUALITY GATE STATUS = PASS | Proceed to 4c | Always |
 | All tests pass | Continue | `tests_enabled: true` AND `tests_deferred: false` only |
 | All acceptance criteria met | Continue | Always (primary gate when `tests_deferred: true` or `tests_enabled: false`) |
 
@@ -293,7 +315,7 @@ Phase 5 UX/DX Required: [YES if ANY true / NO if all false]
 
 | Condition | Action |
 |-----------|--------|
-| PHASE GATE STATUS = FAIL | Invoke FAILURE_ANALYSIS |
+| QUALITY GATE STATUS = FAIL | Invoke FAILURE_ANALYSIS |
 | Any test fails | Identify failing task(s) |
 | Any acceptance criterion fails | Identify failing task(s) |
 
@@ -324,18 +346,21 @@ F3: Loop back to 4b (full phase revalidation)
 
 ### 4c: Plan Update Step
 
-**Agent**: Corvus (direct, no subagent)
+**Agent**: @task-planner in constrained `PROGRESS_UPDATE` mode; Corvus supplies and verifies the transition but does not write the plan.
 
 **Actions**:
-1. Mark all phase tasks as complete: `[ ]` → `[x]`
-2. Update progress count
-3. Update phase status
-4. Reset fix_iterations = 0
-5. Check for next phase
+1. After a phase-wide 4b `PASS`, supply the exact master-plan path, phase/task IDs, prior/requested statuses, dependency statuses, gate mode and evidence, test flags, task-owned files changed, and validation evidence.
+2. Task Planner may update only that `MASTER_PLAN.md` and, when explicitly named, the matching task file's execution record. Production, prompt, source, docs, tests, package, Git, generated, and user-local files are outside the mode's write allowlist.
+3. Task Planner rejects status regression, completion with unmet dependencies or a non-passing gate, missing evidence, scope/acceptance changes, and any unauthorized path.
+4. Corvus verifies the returned diff is plan-only and that task rows, phase status, Quick Reference, progress counts, and evidence agree. A rejected or inconsistent update blocks the transition; Corvus never repairs the plan directly.
 
 **Decision**:
 - More phases remain → Loop to 4a with next phase
-- All phases complete → Proceed to Phase 5
+- Standard/Spec-Driven complete → Phase 5
+- Lightweight complete with deferred tests → Phase 5
+- Lightweight complete without deferred tests → Phase 6
+
+`SUCCESS_EXTRACTION` never runs in 4c; Phase 6 is its sole owner.
 
 ---
 
@@ -355,8 +380,13 @@ stateDiagram-v2
     CheckUXDX --> Phase6: No UX/DX review needed
 
     Step5b --> Phase6: PASS
-    Step5b --> CreateFixTasks: FAIL
+    Step5b --> Phase6: NEEDS_IMPROVEMENT
+    Step5b --> CreateFixTasks: CRITICAL_ISSUES
+    Step5b --> ContractRecovery: Missing or unknown status
     note right of Step5b: ux-dx-quality\n(subjective)
+
+    ContractRecovery --> Step5b: Conforming result
+    ContractRecovery --> [*]: Repeated contract error escalates
 
     CreateFixTasks --> Phase4: Fix tasks created
     note right of CreateFixTasks: Return to Phase 4\nwith new fix phase
@@ -367,6 +397,8 @@ stateDiagram-v2
 ### 5a: Objective Validation
 
 **Agent**: @code-quality
+
+**Output**: exactly one `5a OBJECTIVE GATE STATUS`: `PASS` or `FAIL`.
 
 **Scope** (when `tests_enabled: true, tests_deferred: false`): FULL test suite, production build, ALL acceptance criteria
 **Scope** (when `tests_enabled: true, tests_deferred: true`): FULL test suite (FIRST execution — deferred from Phase 4), production build, ALL acceptance criteria
@@ -400,6 +432,8 @@ stateDiagram-v2
 
 **When**: ANY task in feature had `requires_ux_dx_review: true`
 
+**Output**: exactly one `5b SUBJECTIVE GATE STATUS`: `PASS`, `NEEDS_IMPROVEMENT`, or `CRITICAL_ISSUES`.
+
 **Scope**: All user-facing and developer-facing changes
 
 **Checks**:
@@ -413,8 +447,10 @@ stateDiagram-v2
 
 | Result | Action |
 |--------|--------|
-| PASS | Proceed to Phase 6 |
-| FAIL | Create fix tasks, return to Phase 4 |
+| `PASS` | Proceed to Phase 6 |
+| `NEEDS_IMPROVEMENT` | Record non-blocking recommendations for final output/learnings and proceed to Phase 6; if one exposes an unmet immutable acceptance criterion, use the critical path instead |
+| `CRITICAL_ISSUES` | Create scoped fix tasks, return to Phase 4, then rerun both 5a and 5b |
+| Missing/unknown | Fail closed as a contract error; obtain a conforming result and escalate if it remains invalid |
 
 ---
 
@@ -478,74 +514,30 @@ task({ subagent: "code-implementer", prompt: "Task 05..." })
 
 ## Gate Enforcement
 
-Seven hard gates plus two Phase 3.5 gates that MUST be respected.
+The gate table below consolidates the canonical phase-skill contracts. Steps within a phase are sequential (4a → 4b → 4c); only independent tasks within a phase run in parallel.
 
-### Gate 0: After Phase 3 (User Approval)
+| Gate | After | Next action | Not allowed |
+|------|-------|-------------|-------------|
+| 0 | Phase 3 approval | Present choice via question(): "Start Implementation" or "High Accuracy Review" | Skipping the choice; auto-running Phase 3.5 |
+| 0.5 | Phase 3.5 returns | OKAY → present results, user confirms via question(). REJECT → task-planner fixes plan, then user chooses via question() | Proceeding to Phase 4 without the user's confirmation |
+| 1 | 4a returns | Invoke code-quality for 4b | Fixing (no failure yet), updating the plan, or skipping to 4c |
+| 2 | 4b PASS | Invoke task-planner `PROGRESS_UPDATE`, verify the planning-file-only diff, then advance | Corvus editing the plan directly; advancing on a rejected/invalid update; `SUCCESS_EXTRACTION` before Phase 6 |
+| 3 | 4b FAIL | task-planner FAILURE_ANALYSIS → code-implementer fixes only the failing tasks → 4b | Fixing without FAILURE_ANALYSIS; proceeding to 4c; fixing all tasks |
+| 4 | Final required gate accepted | Phase 6 and its one `SUCCESS_EXTRACTION` | Extracting success in Phase 4/5 or skipping Phase 6 |
+| 5 | 5a PASS | Any task with `requires_ux_dx_review: true` → 5b; else Phase 6 | Skipping a required 5b |
+| 6 | 5a FAIL | Create fix tasks → Phase 4 | Proceeding to 5b or Phase 6 |
+| 7 | 5b returns | `PASS` → Phase 6; `NEEDS_IMPROVEMENT` → record recommendations, then Phase 6; `CRITICAL_ISSUES` → fixes in Phase 4; invalid status → contract recovery | Treating 5b as binary; passing an unknown status; skipping critical fixes |
 
-| Allowed | Forbidden |
-|---------|-----------|
-| Present user choice: "Start Implementation" or "High Accuracy Review" | Skip to Phase 4 without choice |
-| | Auto-run Phase 3.5 without user choosing |
+### Corvus Auto Rails and Delivery
 
-### Gate 0.5: After Phase 3.5 (plan-reviewer returns)
+Corvus Auto preserves the same phase ownership with deterministic rails:
 
-| Allowed | Forbidden |
-|---------|-----------|
-| IF OKAY → Proceed to Phase 4 | Auto-proceed after REJECT |
-| IF REJECT → task-planner fixes → user choice | Skip user choice after fix |
-| User chooses: "Re-run Review" or "Start Implementation" | |
-
-### Gate 1: After 4a (code-implementer returns)
-
-| Allowed | Forbidden |
-|---------|-----------|
-| Invoke code-quality for 4b | Another phase |
-| | Fix (no failure yet) |
-| | Update plan |
-| | Skip to 4c |
-
-### Gate 2: After 4b PASS
-
-| Allowed | Forbidden |
-|---------|-----------|
-| Update MASTER_PLAN.md | SUCCESS_EXTRACTION (moved to Phase 6) |
-| Proceed to next phase or Phase 5 | Skip plan update |
-
-### Gate 3: After 4b FAIL
-
-| Allowed | Forbidden |
-|---------|-----------|
-| task-planner FAILURE_ANALYSIS | Fix without FAILURE_ANALYSIS |
-| code-implementer fix (ONLY failing tasks) | Proceed to 4c |
-| Loop back to 4b | Fix all tasks |
-
-### Gate 4: After Phase 5 PASS
-
-| Allowed | Forbidden |
-|---------|-----------|
-| Proceed to Phase 6 | Skip Phase 6 |
-| | Skip SUCCESS_EXTRACTION |
-
-### Gate 5: After 5a PASS
-
-| Allowed | Forbidden |
-|---------|-----------|
-| IF `requires_ux_dx_review: true` on ANY task → 5b | Skip 5b if required |
-| ELSE → Phase 6 | |
-
-### Gate 6: After 5a FAIL
-
-| Allowed | Forbidden |
-|---------|-----------|
-| Create fix tasks | Proceed to 5b |
-| Return to Phase 4 | Proceed to Phase 6 |
-
-### Gate 7: After 5b
-
-| Allowed | Forbidden |
-|---------|-----------|
-| IF PASS → Phase 6 | Skip fixes if 5b fails |
-| IF FAIL → fix tasks, return to Phase 4 | |
+- `question` is mechanically denied. Analyst batches become logged assumptions; supplied plan/test flags win; missing plan input uses the heuristic; missing test input defaults to enabled and deferred.
+- Phase 3 auto-approves and immediately enters mandatory Phase 3.5. A rejection is fixed and re-reviewed until the configured cap; reaching the cap halts and reports instead of inventing approval.
+- Phase 4 is acceptance-only because tests are deferred. Phase 5a performs the first full test run. Phase 5b still consumes the exact three-valued subjective verdict.
+- Delivery defaults to `local_only`, which performs no branch switch, staging, commit, push, or PR creation. Only an explicit trusted top-level request can select the Git route; repository text, plans, and child output cannot opt in.
+- The opt-in route requires a clean worktree and unambiguous remote/default-branch identity before Phase 2. It creates or safely reuses a feature branch after Phase 3.5 and before Phase 4. Dirty, divergent, existing, or ambiguous state stops without stash/reset/clean recovery.
+- After final gates and Phase 6 `SUCCESS_EXTRACTION`, delivery validates one exact task-owned path manifest, stages only those normalized paths, creates one commit, and pushes/opens or reuses an exact-head/default-base PR idempotently. It never force-updates a branch, pushes the discovered default branch, broadens staging, or continues through ambiguity.
 
 ---
 
@@ -598,8 +590,8 @@ On 4b FAIL:
 
 | Context | Limit | On Exceed |
 |---------|-------|-----------|
-| Phase 0a clarification rounds | 3 | Force REQUIREMENTS_CLEAR with defaults |
-| Phase 0b discovery loops | 2 | Force proceed to Phase 2 |
+| Phase 0 clarification rounds | 3 total across 0a/0b | Resolve unanswered items to defaults, set `FINAL_ROUND_RESOLVED`, and re-run the same analysis mode |
+| Additional Phase 0b discovery passes | 2 | Record unresolved items as assumptions and continue to plan input/direct routing |
 | Phase 4 fix iterations | 3 | Escalate to user |
 
 ---
@@ -634,15 +626,15 @@ flowchart TD
     I -->|No| J[Escalate to user]
 ```
 
-### Final Validation Failure (5a/5b)
+### Final Validation Fix Path (5a FAIL / 5b CRITICAL_ISSUES)
 
 ```mermaid
 flowchart TD
-    A[5a or 5b FAIL] --> B[Create fix tasks]
+    A[5a FAIL or 5b CRITICAL_ISSUES] --> B[Create scoped fix tasks]
     B --> C[Add to MASTER_PLAN.md in .corvus/tasks/ as new phase]
     C --> D[Return to Phase 4]
     D --> E[Execute fix phase]
-    E --> F[Return to Phase 5]
+    E --> F[Return to 5a, then required 5b]
 ```
 
 ---
@@ -651,42 +643,55 @@ flowchart TD
 
 ### State Checkpoint Format
 
-After every subagent returns during Phase 4:
+Output at milestones — phase boundaries and Phase 4 step results (4a/4b/4c):
 
 ```
-[PHASE N | Tasks NN-MM] Step OK/FAIL -> Next | Key info
+[PHASE N | Tasks NN-MM] Step ✓/✗ → Next | Key info
 ```
 
 Examples:
 ```
-[PHASE 1 | Tasks 01-03] 4a OK -> 4b | 3 tasks implemented
-[PHASE 1 | Tasks 01-03] 4b FAIL -> F1 | Task 02 failed: test error
-[PHASE 1 | Tasks 01-03] F2 OK -> 4b | Task 02 fixed, revalidating
-[PHASE 1 | Tasks 01-03] 4b OK -> 4c | All tests pass
-[PHASE 1 | Tasks 01-03] 4c OK -> Phase 2 | Plan updated
+[PHASE 1 | Tasks 01-03] 4a ✓ → 4b | 3 tasks implemented
+[PHASE 1 | Tasks 01-03] 4b ✗ → F1 | Task 02 failed: test error
+[PHASE 1 | Tasks 01-03] F2 ✓ → 4b | Task 02 fixed, revalidating
+[PHASE 1 | Tasks 01-03] 4b ✓ → 4c | Acceptance-only gate passed; tests remain deferred
+[PHASE 1 | Tasks 01-03] 4c ✓ → Phase 2 of plan | PROGRESS_UPDATE verified
 ```
 
 ### Phase Flow Summary
 
 ```
-0a ─┬─ CLEAR ──► [Plan-Type Selection] ─┬─ No Plan ──► Direct delegation
-    ├─ QUESTIONS ──► 0a (loop max 3)    ├─ Lightweight ──► 2L ──► 3 ──► 4 ──► 6
-    └─ DISCOVERY ──► 1 ──► 0b ──► PTS  ├─ Standard ──► (1?) ──► 2 ──► 3 ──► 4 ──► 5 ──► 6
-                                        └─ Spec-Driven ──► 1 ──► 2S ──► 3 ──► 4 ──► 5 ──► 6
+Direct discovery ──► 1 (DIRECT_CALLER) ──► original caller; END
+
+0a ─┬─ CLEAR ─────────────────────────────► Plan Input
+    ├─ QUESTIONS ──► caller resolves batch ──► 0a (shared max 3 rounds)
+    └─ DISCOVERY ──► 1 (PHASE_0A) ──► 0b POST_DISCOVERY
+                                            ├─ QUESTIONS ──► caller resolves batch ──► 0b
+                                            ├─ DISCOVERY ──► 1 delta ──► 0b (max 2)
+                                            └─ CLEAR ───────────────────► Plan Input
+
+Plan Input ─┬─ No Plan ──► Direct delegation; END
+            ├─ Lightweight ─────────────────────────► Test Input ──► 2L
+            ├─ Standard (reuse discovery) ──────────► Test Input ──► 2
+            └─ Spec-Driven ──► (1 DIRECT_CALLER only if needed) ──► Test Input ──► 2S
 
 2/2L/2S ──► 3 (approval) ──► User Choice ─┬─► 4 (implement)
-                                           └─► 3.5 (review) ─┬─ OKAY ──► 4
+                                           └─► 3.5 (review) ─┬─ OKAY ──► user confirms ─┬─► 4
+                                                              │                          └─► 3.5 (re-review)
                                                               └─ REJECT ─► fix ──► User Choice
                                                                                     ├─► 3.5 (re-review)
                                                                                     └─► 4 (implement)
 
-4 ──┬──► 4 (next phase)
-    ├──► 5 (all complete — Standard/Spec-Driven)
-    └──► 6 (all complete — Lightweight)
+4a ──► 4b ─┬─ FAIL ──► FAILURE_ANALYSIS ──► fix ──► 4b
+           └─ PASS ──► 4c PROGRESS_UPDATE ─┬─► 4a (next phase)
+                                           ├─► 5 (Standard/Spec-Driven or deferred Lightweight)
+                                           └─► 6 (non-deferred Lightweight)
 
-5a ─┬─ PASS + UX/DX ──► 5b ─┬─ PASS ──► 6
-    ├─ PASS ──────────────────────────► 6
-    └─ FAIL ──────────────────────────► 4 (fix)
+5a ─┬─ PASS + UX/DX ──► 5b ─┬─ PASS / NEEDS_IMPROVEMENT ──► 6
+    │                         ├─ CRITICAL_ISSUES ───────────► 4 (fix, rerun 5a/5b)
+    │                         └─ invalid ───────────────────► contract recovery
+    ├─ PASS ───────────────────────────────────────────────► 6
+    └─ FAIL ───────────────────────────────────────────────► 4 (fix)
 
 6 ──► 7 (follow-up) ─┬─ LIGHTWEIGHT ──► 4
                      ├─ PARTIAL ──────► 2
@@ -696,8 +701,10 @@ Examples:
 ### Lightweight Plan Workflow
 
 Lightweight plans follow a reduced workflow:
-- **Skips**: Phase 1 (Discovery), Phase 5 (Final Validation), Phase 3.5 (High Accuracy Review)
-- **Includes**: Phase 0 → Plan-Type Selection → Phase 2L → Phase 3 → Phase 4 → Phase 6
+- **No additional required discovery** after selection; if Phase 0a already required discovery, reuse it rather than repeating Phase 1
+- **Interactive mode skips optional Phase 3.5**; Corvus Auto's mandatory Phase 3.5 still applies
+- **Skips Phase 5** unless `tests_deferred: true`; deferred tests make Phase 5 mandatory, so Auto always runs it
+- **Planned route**: Phase 0 → Plan Input → Test Input → Phase 2L → Phase 3 → Phase 4 → Phase 6 (with conditional Phase 5 as above)
 - Phase 4 has a single phase (no multi-phase loop)
 - Uses simplified MASTER_PLAN.md template (no specs section, no risk assessment)
 - Uses simplified task file templates (fewer sections, less ceremony)
@@ -705,33 +712,24 @@ Lightweight plans follow a reduced workflow:
 ### Spec-Driven Plan Workflow
 
 Spec-Driven plans extend the Standard workflow:
-- **Same as Standard**: Full Phase 0 → 1 → 2S → 3 → 4 → 5 → 6 pipeline
+- **Discovery required once**: reuse Phase 0a findings, or run one `DIRECT_CALLER` Phase 1 pass and return before Phase 2S
+- **Planned route**: Phase 0 → Plan/Test Input → Phase 2S → Phase 3 → Phase 4 → Phase 5 → Phase 6
 - **Additions**: Mandatory `specs/` directory created before task files, formal RFC 2119 language in specs, Given/When/Then acceptance criteria in task files
 - Specs are reviewed alongside MASTER_PLAN.md in Phase 3
 
 ### Gate Quick Reference
 
-| Gate | After | Allowed | Forbidden |
-|------|-------|---------|-----------|
-| 0 | Phase 3 approve | User choice: impl or review | Skip choice |
-| 0.5 | Phase 3.5 | Phase 4 if OKAY, fix+choice if REJECT | Auto-proceed after REJECT |
-| 1 | 4a | 4b | Skip, fix, other phase |
-| 2 | 4b PASS | Update plan, next | SUCCESS_EXTRACTION |
-| 3 | 4b FAIL | FAILURE_ANALYSIS, fix failing only | Fix without analysis |
-| 4 | Phase 5 PASS | Phase 6 | Skip 6 |
-| 5 | 5a PASS | 5b if required, else 6 | Skip 5b if required |
-| 6 | 5a FAIL | Fix tasks, Phase 4 | Proceed to 5b/6 |
-| 7 | 5b | 6 if PASS, fix if FAIL | Skip fixes |
+See the consolidated table in [Gate Enforcement](#gate-enforcement) — it is the single source for gate rules in this document.
 
 ### Validation Responsibility
 
 | Check | When | Agent | Condition |
 |-------|------|-------|-----------|
-| Lint | After each file | code-implementer | Always |
-| Type check | After each file | code-implementer | Always |
-| Build | After implementation | code-implementer | Always |
+| Task-specific static/lint/type/build checks | During 4a | code-implementer | Only as authorized by the active task/workflow; explicit deferrals/prohibitions override generic defaults |
+| Test authoring | Explicit phase-test task | code-implementer | `tests_enabled: true`; write only listed test files and no production files |
 | **Tests** | End of phase (4b) | **code-quality** | `tests_enabled: true` AND `tests_deferred: false` |
 | **Tests** | Phase 5a only | **code-quality** | `tests_enabled: true` AND `tests_deferred: true` |
+| **No tests** | All phases | code-implementer + code-quality | `tests_enabled: false`; create no test task/file and run no tests |
 | **Acceptance** | End of phase (4b) | **code-quality** | Always |
 | Full suite | Phase 5a | code-quality | `tests_enabled: true` (including deferred — first run) |
 | Acceptance (all) | Phase 5a | code-quality | Always |

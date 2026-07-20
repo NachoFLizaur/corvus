@@ -9,36 +9,22 @@ description: PR Review Phase R1 - Parallel context gathering via pr-context-gath
 
 **Input**: `PR_CONTEXT` (from R0).
 
-**Output**: `REVIEW_CONTEXT` object (see `corvus-review-extras` for schema).
-
-**Execution**: Two subagent workstreams run IN PARALLEL.
+**Output**: `REVIEW_CONTEXT` object — schema owned by `corvus-review-extras`; reference it by name, do not restate it.
 
 ---
 
 ## LAUNCH PARALLEL WORKSTREAMS
 
-<critical_rule priority="9999">
-  BOTH workstreams MUST be launched in a SINGLE message (parallel invocation).
-  Do NOT wait for one to complete before launching the other.
-  
-  EXCEPTION: If PR_CONTEXT.linked_issues is empty AND PR_CONTEXT.ci_status != "fail"
-  AND no dependency files changed, the @researcher workstream may be SKIPPED
-  (it would have nothing meaningful to research). In this case, launch only @pr-context-gatherer.
-</critical_rule>
+Launch BOTH workstreams in a single message (parallel invocation) — sequential launches double R1 latency for no benefit.
 
-### Skip-Researcher Conditions
+The one exception: skip the @researcher workstream (launch only @pr-context-gatherer) when ALL of these are true — it would have nothing meaningful to research:
 
-Skip the @researcher workstream when ALL of these are true:
 1. `PR_CONTEXT.linked_issues` is empty
 2. `PR_CONTEXT.ci_status` is NOT `"fail"`
-3. No dependency manifest files changed (`package.json`, `requirements.txt`, `go.mod`, `Cargo.toml`, `pom.xml`, `Gemfile`, etc.)
+3. No dependency manifest files changed (`package.json`, `requirements.txt`, `go.mod`, `Cargo.toml`, `pom.xml`, `Gemfile`, and their lockfiles)
 4. No `SECURITY.md` or security-related files changed
 
-When skipping researcher, set these REVIEW_CONTEXT fields to empty:
-- `linked_issues_detail: []`
-- `dependency_advisories: []`
-- `ci_failure_analysis: []`
-- `related_prs: []`
+When skipping researcher, set these REVIEW_CONTEXT fields to empty: `linked_issues_detail: []`, `dependency_advisories: []`, `ci_failure_analysis: []`, `related_prs: []`.
 
 ---
 
@@ -52,18 +38,10 @@ When skipping researcher, set these REVIEW_CONTEXT fields to empty:
 **CHANGED FILES** ([files_changed] files):
 [List all files from PR_CONTEXT.changed_files, one per line]
 
-**EXPECTED OUTCOME**:
-- Full content of every changed file (post-change state)
-- Diff hunks for each file
-- Import/export analysis for each file
-- Callers of any changed functions/exports
-- Associated test files for each changed file
-- Git history (recent authors, change frequency) for each file
-- Dependency graph (what depends on what)
-- Codebase conventions (naming, structure, error handling, test patterns)
+**EXPECTED OUTCOME**: Complete review context for every changed file — full post-change content, diff hunks, import/export analysis, callers of changed functions/exports, associated test files, and git history — plus a dependency graph and detected codebase conventions.
 
 **MUST DO**:
-- Read EVERY changed file in full (not just diff hunks) — reviewers need full context
+- Read every changed file in full (not just diff hunks) — reviewers need full context
 - For each changed file, identify its imports and exports
 - For each changed export/public function, find callers in the rest of the codebase
 - For each changed file, find associated test files (by convention: `*.test.*`, `*.spec.*`, `__tests__/`, or co-located)
@@ -98,18 +76,21 @@ gh pr diff [pr_number] --repo [repo]
 
 #### [file_path]
 - Language: [lang]
-- Diff: [+N/-M lines]
-- Imports: [list]
-- Exports: [list]  
-- Callers: [list of file:function that call into this file]
+- Status: [modified|added|deleted|renamed]
+- Diff: +[N]/-[M] lines
+- Imports: [list or "none"]
+- Exports: [list or "none"]
+- Callers: [list of file:function that call into this file, or "none found"]
 - Test files: [list or "none found"]
 - Git history: last modified [date], recent authors: [list], frequency: [high/medium/low]
+- Full content: [included / null (binary) / null (deleted)]
 
 [Repeat for each file]
 
 ### Dependency Graph
-[file_a] → depends on → [file_b]
-[file_c] → depended by → [file_d]
+[file_path]:
+  depends_on: [list]
+  depended_by: [list]
 
 ### Conventions Detected
 - Naming: [description]
@@ -121,6 +102,10 @@ gh pr diff [pr_number] --repo [repo]
 ### Test Coverage
 - Files with tests: [list]
 - Files without tests: [list]
+- Test framework: [detected framework or "unknown"]
+
+### Diff Hunks
+[Per-file diff hunks]
 ```
 ```
 
@@ -161,7 +146,7 @@ gh pr diff [pr_number] --repo [repo]
 2. **Dependency Advisories** (if dependency files changed):
    Check if any of these files are in the changed list: package.json, package-lock.json,
    yarn.lock, pnpm-lock.yaml, requirements.txt, Pipfile.lock, go.sum, Cargo.lock, Gemfile.lock
-   
+
    If yes, check for known advisories:
    ```bash
    # For npm projects
@@ -220,32 +205,18 @@ gh pr diff [pr_number] --repo [repo]
 
 ## MERGE WORKSTREAM RESULTS
 
-After both workstreams complete (or the single workstream if researcher was skipped), assemble the `REVIEW_CONTEXT` object.
+After the workstreams complete (or the single workstream if researcher was skipped), assemble the `REVIEW_CONTEXT` object (schema: `corvus-review-extras`):
 
-### Assembly Rules
-
-1. **File map**: Direct from @pr-context-gatherer output. Each changed file must have an entry.
-2. **Dependency graph**: Direct from @pr-context-gatherer output.
-3. **Conventions**: Direct from @pr-context-gatherer output.
-4. **Test coverage**: Derived from @pr-context-gatherer's test file associations.
-5. **Linked issues detail**: From @researcher (or empty if skipped).
-6. **Dependency advisories**: From @researcher (or empty if skipped).
-7. **CI failure analysis**: From @researcher (or empty if skipped).
-8. **Related PRs**: From @researcher (or empty if skipped).
+1. **file_map, dependency_graph, conventions**: direct from @pr-context-gatherer output
+2. **test_coverage**: derived from @pr-context-gatherer's test file associations
+3. **linked_issues_detail, dependency_advisories, ci_failure_analysis, related_prs**: from @researcher (or empty if skipped)
 
 ### Partial Failure Handling
 
-<critical_rule priority="999">
-  If ONE workstream fails but the other succeeds, DO NOT abort.
-  
-  - @pr-context-gatherer fails: This is CRITICAL. The review cannot proceed without
-    file context. RETRY ONCE. If retry fails, ABORT with error.
-  
-  - @researcher fails: This is NON-CRITICAL. Proceed with empty researcher
-    fields. Add a note to REVIEW_CONTEXT: "External context gathering failed.
-    Review proceeds without linked issue analysis, CI failure analysis, or
-    dependency advisory checks."
-</critical_rule>
+If one workstream fails but the other succeeds, do not abort:
+
+- **@pr-context-gatherer fails**: critical — the review cannot proceed without file context. Retry once; if the retry fails, abort with an error.
+- **@researcher fails**: non-critical — proceed with empty researcher fields and add a note to REVIEW_CONTEXT: "External context gathering failed. Review proceeds without linked issue analysis, CI failure analysis, or dependency advisory checks."
 
 ### Validation
 
@@ -255,51 +226,30 @@ Before proceeding to R2, verify REVIEW_CONTEXT:
 2. `conventions` has at least one non-empty field
 3. `dependency_graph` exists (may be empty for unrelated files)
 
-If validation fails, log warning and proceed (degraded review is better than no review).
+If validation fails, log a warning and proceed — a degraded review is better than no review.
 
 ---
 
 ## GATE ENFORCEMENT
 
-<gate id="r1-exit" priority="9999">
-  R1 MUST produce a REVIEW_CONTEXT with a populated file_map before proceeding to R2.
-  
-  VALID REVIEW_CONTEXT requires:
+<gate id="r1-exit">
+  R2 reviews from the file map, so R1 exits only with a populated one.
+  A valid REVIEW_CONTEXT requires:
   1. file_map is non-empty
   2. Every file in PR_CONTEXT.changed_files has a file_map entry
      (or a documented reason for absence, e.g., binary file, deleted file)
   3. conventions object exists
-  
-  If file_map is empty → ABORT (cannot review without file context)
-  If file_map is partial → WARN and proceed (degraded review)
+
+  If file_map is empty → abort (cannot review without file context)
+  If file_map is partial → warn and proceed (degraded review)
 </gate>
 
 ---
 
 ## EDGE CASES
 
-### Binary Files
-- Binary files (images, compiled assets) cannot be read as text.
-- Add to file_map with `full_content: null`, `language: "binary"`.
-- Skip from all R2 review passes.
-- If the PR is ONLY binary files, skip to R3 with a note: "All changes are binary files. No code review applicable."
-
-### Deleted Files
-- Deleted files have no post-change content.
-- Add to file_map with `full_content: null`, note `deleted: true`.
-- R2 reviewers should check: are callers of deleted exports updated?
-
-### Renamed/Moved Files
-- `gh pr diff` shows renames. Track old → new path.
-- Read the new path for full content.
-- Check that imports referencing the old path are updated.
-
-### Very Large Files (> 5000 lines)
-- Still read in full (reviewers need context).
-- But note in file_map: `large_file: true`.
-- R2 passes may focus primarily on changed hunks for very large files.
-
-### Submodule Changes
-- Submodule pointer changes show as a single-line diff.
-- Add to file_map with `language: "submodule"`, `full_content: null`.
-- @researcher should check the submodule repo for what changed (if accessible).
+- **Binary files** (images, compiled assets): cannot be read as text. file_map entry gets `full_content: null`, `language: "binary"`; skip from all R2 review passes. If the PR is ONLY binary files, skip to R3 with a note: "All changes are binary files. No code review applicable."
+- **Deleted files**: no post-change content. file_map entry gets `full_content: null`, `deleted: true`. R2 reviewers should check that callers of deleted exports are updated.
+- **Renamed/moved files**: `gh pr diff` shows renames. Track old → new path, read the new path for full content, and check that imports referencing the old path are updated.
+- **Very large files (> 5000 lines)**: still read in full (reviewers need context) but mark `large_file: true`; R2 passes may focus primarily on changed hunks.
+- **Submodule changes**: the pointer change shows as a single-line diff. file_map entry gets `language: "submodule"`, `full_content: null`. @researcher should check the submodule repo for what changed (if accessible).
