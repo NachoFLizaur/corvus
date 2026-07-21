@@ -26,12 +26,10 @@ Phase 4 operates at the **phase level**, not per-task: tasks within a phase are 
   PASS      FAIL
     │         │
     │         ▼
-    │    task-planner LEARNING (FAILURE_ANALYSIS with task attribution)
-    │         │
-    │         ▼
-    │    code-implementer (fix ONLY failing tasks)
-    │         │
-    │         └──► Loop back to 4b (full phase revalidation)
+    │    Iteration 1: code-implementer direct fix (4b failure report, targeted)
+    │    Iteration ≥2: task-planner LEARNING (FAILURE_ANALYSIS) → code-implementer fix
+    │         │    (fix ONLY failing tasks)
+    │         └──► Loop back to 4b (re-run the original 4b dispatch scope)
     │
     ▼
 4c: task-planner PROGRESS_UPDATE → verify planning-file diff
@@ -41,14 +39,21 @@ Phase 4 operates at the **phase level**, not per-task: tasks within a phase are 
 ### Operating Rules
 
 <operating_rules>
-  - **FAILURE_ANALYSIS before any fix** (canonical statement of this rule — orchestrators
-    and task-planner point here): when 4b returns FAIL, invoke task-planner LEARNING
-    (FAILURE_ANALYSIS) first, then dispatch fixes. The analysis attributes failures to
-    tasks and identifies root causes; fixing without it treats symptoms and repeats failures.
+  - **Iteration-aware fix loop** (canonical statement of this rule — orchestrators
+    and task-planner point here): on a phase's first 4b FAIL (Iteration 1), dispatch
+    code-implementer directly with the gate's failure report and task attribution,
+    `test_scope: targeted` — no task-planner round-trip. The 4b report already
+    attributes failures to tasks; a first fix needs that report, not a second analysis.
+    From iteration ≥2, invoke task-planner LEARNING (FAILURE_ANALYSIS) first, then
+    dispatch the fix (also `test_scope: targeted`) — a repeated failure signals a root
+    cause the report alone did not surface.
   - **Fix only failing tasks**: the gate report attributes every failure to specific
     task(s); leave passing tasks untouched.
-  - **Revalidate the full phase after any fix** (loop to 4b) — confirms fixes did not
-    break sibling tasks.
+  - **Revalidate the phase after any fix** (loop to 4b) — code-quality re-runs the same
+    scope as the original 4b dispatch: phase-targeted in the general case, never widening
+    to the full suite; the Lightweight non-deferred final gate
+    revalidates at its dispatched full scope (its sanctioned re-run).
+    This confirms fixes did not break sibling tasks.
   - **Parallelize independent tasks**: tasks with no inter-dependencies (check
     `Parallel With` / `Depends On` metadata and shared files) run concurrently.
   - **Update MASTER_PLAN.md at phase boundaries** (4c), not after each task. After
@@ -56,6 +61,9 @@ Phase 4 operates at the **phase level**, not per-task: tasks within a phase are 
     `PROGRESS_UPDATE` mode. Corvus never edits the plan directly.
   - **Max 3 fix iterations per phase**: at the cap, stop and escalate to the user with
     what passed, what still fails, and open questions — even if the phase is incomplete.
+  - **Fix-attempt accounting**: code-implementer's in-task 2-attempt fix rule
+    (Delegated Mode) does not consume the 4b 3-iteration cap — the cap counts only
+    4b FAIL → fix → 4b loops. Only a failure at the gate that carries final validation (Phase 5a — or a Lightweight non-deferred plan's final 4b gate) justifies a full-suite re-run.
 </operating_rules>
 
 ---
@@ -69,7 +77,7 @@ manifest as a write allowlist.
 | Mode / task type | Writable files and test authoring | Test execution in Phase 4 |
 |------------------|-----------------------------------|---------------------------|
 | `tests_enabled: true`, implementation task | Product files explicitly listed. Do not author tests unless an obsolete test edit is explicitly in this task's approved manifest. | Only commands explicitly authorized by the active task/workflow. |
-| `tests_enabled: true`, phase test task, `tests_deferred: false` | Existing/new test files explicitly listed; author tests and make no production changes. | May execute the task's planned test commands; 4b also runs its required gate tests. |
+| `tests_enabled: true`, phase test task, `tests_deferred: false` | Existing/new test files explicitly listed; author tests and make no production changes. | Runs only the test files this task authored/modified (test_scope: targeted); 4b owns the single phase-targeted gate run. |
 | `tests_enabled: true`, phase test task, `tests_deferred: true` | Existing/new test files explicitly listed; author tests and make no production changes. | Never execute tests in 4a or 4b. Phase 5 performs the first test run. |
 | `tests_enabled: false` | Product files only. No phase test task or test-file edit exists. | Never execute tests. |
 
@@ -78,6 +86,13 @@ narrower than generic agent defaults. A static-only task runs only those static
 checks; do not substitute typecheck, build, lint, or test commands it defers or
 prohibits. In no-test mode, treat a phase test task as a planning error and return
 it for correction rather than dispatching it.
+
+Test-scope edge cases (full semantics: corvus-phase-2 skill, Test Scope section):
+a phase with no test task → 4b runs acceptance checks only (`test_scope: none`);
+deferred mode → 4a/4b dispatches carry `test_scope: none`, and deferred authoring
+tasks may verify their own authored files immediately before the 5a dispatch,
+without consuming the single-full-run budget; disabled mode → every dispatch
+carries `test_scope: none`.
 
 ---
 
@@ -102,6 +117,7 @@ One task file = one code-implementer invocation, always. The Task tool runs mult
 
 **TASK TYPE**: implementation | phase-test
 **TEST MODE**: `tests_enabled: [true|false], tests_deferred: [true|false]`
+**TEST SCOPE**: `test_scope: [targeted|none]` — targeted = only tests scoped to this task (its own new/modified test files); none when `tests_deferred: true` or `tests_enabled: false`. Full semantics: corvus-phase-2 skill, Test Scope section.
 **AUTHORIZED FILE MANIFEST**: Exact `Files to Change` entries from the task file
 **AUTHORIZED VALIDATION**: Exact commands permitted by the task and active workflow
 
@@ -118,6 +134,7 @@ One task file = one code-implementer invocation, always. The Task tool runs mult
 - Deviate from task file without documenting why
 - Add a validation command not authorized by the task/workflow
 - Author or execute tests outside the resolved ownership row above
+- Run the full test suite; test_scope: targeted is the ceiling for implementer dispatches
 - Implement OTHER tasks (you are only responsible for task [NN])
 
 **REPORT BACK**:
@@ -216,11 +233,13 @@ typecheck, build, or test commands ran when an approved task narrowed them.
 ```markdown
 **TASK**: Validate Phase [N] implementation
 
-**PHASE TASKS**: 
+**PHASE TASKS**:
 - Task NN: [name] - `.corvus/tasks/[feature]/NN-task.md`
 - Task NN: [name] - `.corvus/tasks/[feature]/NN-task.md`
 
 **SCOPE**: All files created/modified in 4a for this phase
+
+**TEST SCOPE**: `test_scope: [targeted|none]` — targeted = union of test files created/modified by this phase's tasks (from their Tests sections); none when the phase has no test tasks (deferred and disabled dispatches use the acceptance-only template below). Exception: a Lightweight non-deferred plan's final 4b gate doubles as final validation and carries the plan's single full-suite run (semantics: corvus-phase-2 skill, Test Scope section).
 
 **PRIMARY JOB**: RUN TESTS
 
@@ -228,9 +247,9 @@ Code-implementer ran only the validations authorized by each task. Your gate own
 the required phase test execution and acceptance verification in this mode.
 
 **CHECKS REQUIRED**:
-1. Run test suite (targeting tests for this phase's code)
+1. Run the phase-targeted test scope (union of this phase's task test files) — once
 2. Verify acceptance criteria from ALL task files (with evidence)
-3. Check for regressions (if existing tests exist)
+3. Check for regressions within the dispatched test_scope plus acceptance-criteria evidence — the full suite belongs to Phase 5a only
 
 **MUST DO**:
 - Identify test files for the scope
@@ -241,6 +260,7 @@ the required phase test execution and acceptance verification in this mode.
 
 **MUST NOT DO**:
 - Add unrelated lint/typecheck/build commands; run a prerequisite build only when the authorized test workflow requires it
+- Run the full test suite — that is the Phase 5a dispatch, not 4b (sole exception: the Lightweight final gate noted in TEST SCOPE above)
 - Check criteria boxes without running tests
 - Report failures without task attribution
 
@@ -278,13 +298,15 @@ Only tasks [NN] require fixes. Tasks [NN] should NOT be modified.
 ```markdown
 **TASK**: Validate Phase [N] implementation (acceptance-only mode)
 
-**PHASE TASKS**: 
+**PHASE TASKS**:
 - Task NN: [name] - `.corvus/tasks/[feature]/NN-task.md`
 - Task NN: [name] - `.corvus/tasks/[feature]/NN-task.md`
 
 **SCOPE**: All files created/modified in 4a for this phase
 
 **MODE**: ACCEPTANCE-ONLY (`tests_enabled: false` OR `tests_deferred: true`)
+
+**TEST SCOPE**: `test_scope: none` — acceptance-only; no test execution.
 
 **PRIMARY JOB**: VERIFY ACCEPTANCE CRITERIA
 
@@ -331,15 +353,48 @@ Only tasks [NN] require fixes. Tasks [NN] should NOT be modified.
 
 **GATE DECISION**:
 - If QUALITY GATE STATUS = PASS → Proceed to 4c (update master plan)
-- If QUALITY GATE STATUS = FAIL → Learning-first fix cycle (F1 → F2 → F3)
+- If QUALITY GATE STATUS = FAIL → Iteration-aware fix cycle (iteration 1: F1 → F3; iteration ≥2: F2 → F3)
 
 ---
 
-### On FAIL: Learning-First Fix Cycle
+### On FAIL: Iteration-Aware Fix Cycle
 
-The canonical rule from Operating Rules applies: analysis first (F1), then fix (F2), then full revalidation (F3).
+The canonical rule from Operating Rules applies: iteration 1 dispatches a direct fix from the gate's failure report (F1); iteration ≥2 runs FAILURE_ANALYSIS first, then the fix (F2); every iteration ends with revalidation at the original 4b dispatch scope (F3).
 
-**Step F1: Failure Analysis — DELEGATE TO @task-planner**
+**Step F1 (Iteration 1): Direct Fix — DELEGATE TO @code-implementer (failing tasks only)**
+
+No task-planner round-trip: the 4b report already attributes failures to tasks.
+
+```markdown
+**TASK**: Fix failing tasks from the 4b quality gate (iteration 1)
+
+**FAILING TASKS ONLY**:
+- Task NN: [failed criteria/tests from the gate report]
+
+**DO NOT MODIFY**: Tasks [NN, NN] - these passed validation
+
+**FAILURE REPORT**:
+[4b gate output with task attribution — failing criteria, exact errors, files involved per task]
+
+**TEST SCOPE**: `test_scope: targeted`
+
+**MUST DO**:
+- Address each attributed failure from the failure report
+- Reapply each failing task's type, test flags, file manifest, and validation allowlist
+- Modify ONLY files related to failing tasks, then run only authorized validation
+
+**MUST NOT DO**:
+- Modify files for passing tasks
+- Make unrelated changes
+- Run the full test suite
+
+**REPORT BACK**:
+- Changes made per failing task
+- Validation results
+- Ready for re-validation
+```
+
+**Step F2 (Iteration ≥2): Failure Analysis, Then Fix — DELEGATE TO @task-planner, then @code-implementer**
 
 ```markdown
 **TASK**: Analyze phase quality gate failure
@@ -352,17 +407,21 @@ The canonical rule from Operating Rules applies: analysis first (F1), then fix (
 
 **PHASE**: [phase number]
 
+**ITERATION**: [N ≥ 2] of 3
+
 **FAILURE DETAILS**:
 - Failing task(s): [list with task IDs]
 - What failed: [specific test/build/criteria per task]
 - Error messages: [exact errors]
 - Files involved: [list per task]
+- Previous fix attempts: [what each prior iteration changed]
 
 **QUESTIONS TO ANSWER**:
 1. What is the root cause of each failure?
-2. Are the task definitions correct, or do they need updating?
-3. Was there missing context that caused the failure?
-4. What should the fix approach be for each failing task?
+2. Why did the previous fix not work?
+3. Are the task definitions correct, or do they need updating?
+4. Was there missing context that caused the failure?
+5. What should the fix approach be for each failing task?
 
 **MUST DO**:
 - Analyze the failure root cause per failing task
@@ -377,7 +436,7 @@ The canonical rule from Operating Rules applies: analysis first (F1), then fix (
 - Confirmation that passing tasks should NOT be modified
 ```
 
-**Step F2: Fix Implementation — DELEGATE TO @code-implementer (failing tasks only)**
+Then dispatch the fix to @code-implementer:
 
 ```markdown
 **TASK**: Fix implementation based on failure analysis
@@ -388,10 +447,12 @@ The canonical rule from Operating Rules applies: analysis first (F1), then fix (
 **DO NOT MODIFY**: Tasks [NN, NN] - these passed validation
 
 **FAILURE ANALYSIS**:
-[Root cause and recommended fix approach from F1]
+[Root cause and recommended fix approach from the analysis]
 
 **SPECIFIC FIXES REQUIRED**:
-[Exact changes needed per failing task based on F1 analysis]
+[Exact changes needed per failing task based on the analysis]
+
+**TEST SCOPE**: `test_scope: targeted`
 
 **MUST DO**:
 - Follow the fix approach from failure analysis
@@ -410,7 +471,7 @@ The canonical rule from Operating Rules applies: analysis first (F1), then fix (
 - Ready for re-validation
 ```
 
-**Step F3: Loop to 4b** — full phase revalidation (per Operating Rules). Track iterations; the 3-iteration cap with user escalation applies.
+**Step F3: Loop to 4b** — code-quality re-runs the same scope as the original 4b dispatch (per Operating Rules): phase-targeted in the general case, never widening to the full suite; the Lightweight non-deferred final gate revalidates at its dispatched full scope (its sanctioned re-run). Track iterations; the 3-iteration cap with user escalation applies.
 
 ---
 
@@ -469,7 +530,7 @@ MASTER_PLAN.md directly, repair the result silently, or advance to another phase
 
 - [ ] Every task ran through its own code-implementer (one task = one invocation)
 - [ ] code-quality reported QUALITY GATE STATUS: PASS for the entire phase
-- [ ] Every fix iteration was preceded by FAILURE_ANALYSIS and followed by full revalidation
+- [ ] Every fix iteration followed the iteration rule (iteration 1: direct fix from the 4b report; iteration ≥2: FAILURE_ANALYSIS first) and re-ran the original 4b dispatch scope
 - [ ] task-planner accepted `PROGRESS_UPDATE`
 - [ ] Returned diff is confined to authorized planning files and preserves task meaning
 - [ ] MASTER_PLAN.md mirrors completion across tasks, Quick Reference, counts, evidence, and phase status

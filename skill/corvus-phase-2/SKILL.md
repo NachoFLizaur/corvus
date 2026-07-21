@@ -42,6 +42,27 @@ This table is the canonical flag-combination reference — corvus, corvus-auto, 
 
 Pass the complete resolved tuple to task-planner via the fields in the delegation template below.
 
+### Test Scope (canonical definition)
+
+Every dispatch that may execute tests carries exactly one `test_scope: targeted | full | none` field:
+
+- `test_scope: targeted` — code-implementer dispatches: only tests scoped to that task (its own new/modified test files), including fix iterations. code-quality 4b dispatches: the union of test files created/modified by that phase's tasks, derived from the task files' Tests sections — never "tests related to changed code".
+- `test_scope: full` — the entire suite. Only the Phase 5a code-quality dispatch may carry it, with one exception: a Lightweight non-deferred plan has no Phase 5, so its final 4b gate doubles as final validation and is dispatched with `test_scope: full` — the plan's single full run. A Lightweight deferred plan runs Phase 5 (mandatory) and takes its full run there.
+- `test_scope: none` — no test execution; acceptance-only evidence.
+
+Precedence (flag semantics dominate): `tests_enabled: false` forces `test_scope: none` on every dispatch — `test_scope: full` can never override it. `tests_deferred: true` forces `test_scope: none` on Phase 4 4a/4b dispatches; deferred phase-test authoring tasks may verify their own authored files immediately before the 5a dispatch, without consuming the full-run budget.
+
+Run-count budget (happy path):
+
+| Plan mode | Happy-path test runs |
+|-----------|---------------------|
+| Lightweight | 1 full (non-deferred: at the final 4b gate, doubling as final validation; deferred: at Phase 5a) — owned by code-quality |
+| Standard / Spec-Driven | P targeted (one per 4b gate, P = phase count) + 1 full (Phase 5a) |
+| Deferred (`tests_deferred: true`) | 1 full (Phase 5a — first execution) |
+| Tests disabled / audit-only | 0 |
+
+phase-4 (dispatch templates), phase-5 (5a), code-quality, code-implementer, and task-planner consume these semantics; they do not redefine them.
+
 ### Create Master Plan
 
 After requirements are clear and any required discovery has returned to its caller, invoke task-planner to create `.corvus/tasks/[feature-name]/MASTER_PLAN.md` (the execution tracking document) plus individual task files with detailed implementation steps. Wait for task-planner to create the actual files, then proceed to Phase 3 — Phase 3 needs real documents to approve, so present task-planner's files, not a verbal plan of your own, and save implementation discussion for Phase 4.

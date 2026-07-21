@@ -510,7 +510,7 @@ project's. Derive commands from the environment details code-explorer reports:
 
 ## PHASE TEST TASKS
 
-Applies when `tests_enabled: true` (see Test Preference Flags). Every phase then ends with one test task that writes tests for all implementation tasks in that phase — one per phase, never merged across phases. Derive test specifications from acceptance criteria rather than implementation details: tests stay spec-driven and code-implementer writes them in fresh context. A phase test task owns only the existing/new test files explicitly listed in its manifest and makes no production-file changes. In deferred mode the authored tests exist before the acceptance-only phase gate but are not executed until Phase 5.
+Applies when `tests_enabled: true` (see Test Preference Flags). Every phase then ends with one test task that writes tests for all implementation tasks in that phase — one per phase, never merged across phases. Derive test specifications from acceptance criteria rather than implementation details: tests stay spec-driven and code-implementer writes them in fresh context. A phase test task owns only the existing/new test files explicitly listed in its manifest and makes no production-file changes. In deferred mode the authored tests exist before the acceptance-only phase gate but are not executed until Phase 5. Task files' Tests sections must list concrete test-file paths so 4b can derive the phase-targeted union from them.
 
 ### Test Task Naming Convention
 
@@ -596,7 +596,8 @@ Follow AAA pattern (Arrange-Act-Assert).
 
 ### Step 4: Validate within the selected test mode
 
-- `tests_deferred: false`: run the concrete test commands authorized by this task.
+- `tests_deferred: false`: run only the test files listed in this task's Files to
+  Change (`test_scope: targeted`); never the full suite.
 - `tests_deferred: true`: do not execute tests in Phase 4. Run only explicitly
   authorized static checks on the test source; Phase 5 performs the first test run.
 
@@ -612,8 +613,9 @@ Follow AAA pattern (Arrange-Act-Assert).
 ## Validation Commands
 
 \`\`\`bash
-# tests_deferred: false — run the phase tests
-{project-specific test command for the listed test files}
+# tests_deferred: false — run only this task's authored test files, named explicitly
+# (test_scope: targeted), e.g. `bun test src/__tests__/{new-file}.test.ts` — never a bare suite command
+{project-specific test command naming the authored test files}
 
 # tests_deferred: true — replace the test command with authorized static checks
 {project-specific static validation command}
@@ -1008,13 +1010,13 @@ Use this context to reference specific files in deliverables, fold the reported 
 
 ## TEST PREFERENCE FLAGS
 
-`tests_enabled` and `tests_deferred` arrive via the `**TEST PREFERENCE**` field in the Phase 2 delegation (defaults: `tests_enabled: true`, `tests_deferred: false`). Full flag semantics — the capture question and Phase 4/5 gate behavior — live in the corvus-phase-2 skill; planning must encode the following ownership exactly:
+`tests_enabled` and `tests_deferred` arrive via the `**TEST PREFERENCE**` field in the Phase 2 delegation (defaults: `tests_enabled: true`, `tests_deferred: false`). Full flag semantics — the capture question and Phase 4/5 gate behavior — live in the corvus-phase-2 skill; canonical `test_scope` semantics live there too (Test Scope section): planners stamp scope expectations into task validation sections but never plan a full-suite run outside Phase 5a. Planning must encode the following ownership exactly:
 
 | Flags / task type | Writable files and test authoring | Test execution |
 |-------------------|-----------------------------------|----------------|
-| `tests_enabled: true`, implementation task | Product files explicitly listed in `Files to Change`. Do not author tests unless an obsolete test edit is explicitly part of that task's approved manifest. | Only concrete commands authorized by the active workflow/task. |
-| `tests_enabled: true`, phase test task, `tests_deferred: false` | Existing/new test files explicitly listed; author the phase tests and make no production changes. | May run the listed test commands as planned. |
-| `tests_enabled: true`, phase test task, `tests_deferred: true` | Existing/new test files explicitly listed; author the phase tests and make no production changes. | Never run tests in Phase 4; use only authorized static checks. Phase 5 performs the first test execution. |
+| `tests_enabled: true`, implementation task | Product files explicitly listed in `Files to Change`. Do not author tests unless an obsolete test edit is explicitly part of that task's approved manifest. | Only concrete commands authorized by the active workflow/task, validated once per task; test execution capped at `test_scope: targeted` (own task). |
+| `tests_enabled: true`, phase test task, `tests_deferred: false` | Existing/new test files explicitly listed; author the phase tests and make no production changes. | Run only the test files this task authored/modified (`test_scope: targeted`); never the full suite. 4b owns the phase-targeted gate run. |
+| `tests_enabled: true`, phase test task, `tests_deferred: true` | Existing/new test files explicitly listed; author the phase tests and make no production changes. | Never run tests in Phase 4; use only authorized static checks. Phase 5 performs the first test execution. Own-file targeted verification immediately before the 5a dispatch does not consume the single-full-run budget. |
 | `tests_enabled: false` | Product files only. Generate no phase test task, test-file manifest, test-authoring step, or test section. | None; no test command is planned or run. |
 
 With tests enabled, include test coverage fields and final test exit criteria in
@@ -1057,7 +1059,7 @@ When invoked with `**MODE**: LEARNING`, the task-planner operates in reflection 
 
 | Trigger | When Invoked | Purpose |
 |---------|--------------|---------|
-| FAILURE_ANALYSIS | The Phase 4b objective gate fails | Diagnose the phase failure before a fix |
+| FAILURE_ANALYSIS | A phase's 4b gate fails for the second or later iteration (iteration ≥2; iteration 1 is a direct fix — rule: corvus-phase-4 skill) | Diagnose the repeated phase failure before the next fix |
 | SUCCESS_EXTRACTION | Phase 6, after final gates pass | Extract feature-wide learnings once |
 
 ### Invocation Format
@@ -1071,9 +1073,9 @@ When invoked with `**MODE**: LEARNING`, the task-planner operates in reflection 
 
 ### FAILURE_ANALYSIS Mode
 
-**Purpose**: Analyze why a quality gate failed before any fix is attempted.
+**Purpose**: Analyze why a phase's quality gate keeps failing before the next fix is attempted.
 
-**When Invoked**: Phase 4b code-quality returns `FAIL`.
+**When Invoked**: Phase 4b code-quality returns `FAIL` for the second or later iteration (iteration ≥2; iteration 1 dispatches a direct fix — rule: corvus-phase-4 skill).
 
 **Input Context**:
 ```markdown
@@ -1081,13 +1083,13 @@ When invoked with `**MODE**: LEARNING`, the task-planner operates in reflection 
 **MODE**: LEARNING
 **TRIGGER**: FAILURE_ANALYSIS
 **FAILED GATE**: 4b objective (phase-level)
-**ITERATION**: [current iteration number, max 3]
+**ITERATION**: [current iteration number, 2-3]
 
 **FAILURE DETAILS**:
 - What failed: [specific test/build/criteria]
 - Error message: [exact error]
 - Files involved: [list]
-- Previous fix attempts: [if iteration > 1]
+- Previous fix attempts: [required — what each prior iteration changed]
 ```
 
 **Context to load** (one batch):
@@ -1103,7 +1105,7 @@ glob(".corvus/tasks/{feature}/*.md")                 // Related task files
 2. Is the task definition correct, or does it need updating?
 3. Was there missing context that caused the failure?
 4. What should the fix approach be?
-5. If this is iteration > 1, why did the previous fix not work?
+5. Why did the previous fix not work?
 
 **Output Format**:
 ```markdown

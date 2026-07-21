@@ -40,11 +40,16 @@ Build an effective validation allowlist before editing:
 4. Use language/toolchain defaults only when no explicit validation contract
    exists. Defaults fill an omission; they never override an approved task.
 
-After each coherent file change or implementation step, run and show every command
-authorized for that checkpoint. If the effective allowlist contains only static
-checks, those checks are the complete validation for that task. Do not add a
-typecheck, lint, build, or test command that the task/workflow defers, disables,
-or prohibits.
+Validate once per task, after completing the task's implementation steps, using
+the effective allowlist and showing every authorized command. A task file may
+define additional explicit checkpoints; only those add validation runs. Test
+execution honors the dispatch's `test_scope` field: `targeted` = only tests
+scoped to this task (its own new/modified test files) — never the full suite,
+in first runs and in fix iterations alike; `none` = no test execution
+(semantics: corvus-phase-2 skill, Test Scope section). If the effective
+allowlist contains only static checks, those checks are the complete validation
+for that task. Do not add a typecheck, lint, build, or test command that the
+task/workflow defers, disables, or prohibits.
 
 Use project-environment commands, never bare `python`/`pytest`/`npm` when the
 project defines a prefix. Check for a venv (`.venv/bin/...`), lockfile-implied
@@ -56,6 +61,7 @@ run with the controlling policy. Missing output for an authorized command is a
 validation failure; a command explicitly deferred/disabled/prohibited is `NOT
 RUN (policy)`, not `FAIL`. On an authorized-command failure, Normal Mode stops and
 requests approval; Delegated Mode may attempt a fix twice, then reports the result.
+Fix attempts re-run the same targeted scope and never widen to the full suite.
 
 ## FILE AND TEST OWNERSHIP
 
@@ -65,7 +71,7 @@ Change` as the exact write allowlist.
 | Mode / task type | Writable files and test authoring | Test execution |
 |------------------|-----------------------------------|----------------|
 | `tests_enabled: true`, implementation task | Product files explicitly listed. Do not author tests unless an obsolete test edit is explicitly included in this task's approved manifest. | Run only test commands authorized by the active workflow/task. |
-| `tests_enabled: true`, phase test task, `tests_deferred: false` | Existing/new test files explicitly listed; author tests and make no production changes. | May run the planned test commands. |
+| `tests_enabled: true`, phase test task, `tests_deferred: false` | Existing/new test files explicitly listed; author tests and make no production changes. | Run only the test files this task authored/modified (test_scope: targeted); never the full suite. |
 | `tests_enabled: true`, phase test task, `tests_deferred: true` | Existing/new test files explicitly listed; author tests and make no production changes. | Never run tests in Phase 4; Phase 5 performs the first execution. |
 | `tests_enabled: false` | Product files only; no test task, test file, fixture, or snapshot is created or modified. | Never run tests. |
 
@@ -91,7 +97,8 @@ typecheck/build; preserve it rather than substituting generic defaults.
   </rule>
 
   <rule id="incremental_execution">
-    Implement one step at a time; validate each step before proceeding.
+    Implement steps in order; validate the completed task (and any task-defined
+    checkpoint) before reporting.
   </rule>
 
   <rule id="failure_protocol">
@@ -149,7 +156,7 @@ The dispatch prompt contains this line (sent by the corvus-phase-4 skill):
    manifest, explicit prohibitions/deferrals, and effective validation allowlist.
 3. **Reject ownership conflicts** before mutation; do not improvise a broader scope.
 4. **Execute implementation steps** in order and modify only manifest paths.
-5. **Validate each change/step** with only the effective allowlist and capture output.
+5. **Validate the completed task** with only the effective allowlist and capture output.
 6. **Report progress** without waiting; for authorized-command errors, attempt a fix
    at most twice and continue where possible.
 7. **Complete and report** all changes, policy-based omissions, and deviations.
@@ -166,7 +173,7 @@ Report errors and keep going where possible:
 **Issue**: [description]
 **Impact**: [blocking / non-blocking]
 
-**Attempted Fix**: 
+**Attempted Fix**:
 [What I tried]
 
 **Result**: [success / failure]
@@ -386,7 +393,7 @@ When encountering errors (Normal Mode — in Delegated Mode use the Delegated er
 ### Normal Mode
 1. Present a plan before implementing; implement one step at a time
 2. Report errors and request approval before fixing them
-3. Validate after each step with the user-approved command allowlist
+3. Validate the completed task with the user-approved command allowlist
 4. Apply file/test ownership from the approved plan; do not create implicit test work
 
 ### Delegated Mode (when invoked by Corvus)
@@ -394,7 +401,7 @@ When encountering errors (Normal Mode — in Delegated Mode use the Delegated er
 2. Attempt to fix errors — report them and continue where possible
 3. Follow the task file's exact file manifest, task type, and acceptance criteria
 4. Apply resolved `tests_enabled` / `tests_deferred` ownership without exception
-5. Validate after each change with the effective task/workflow allowlist; never substitute generic defaults
+5. Validate the completed task with the effective task/workflow allowlist; never substitute generic defaults
 6. Report commands run with output and commands not run because policy deferred, disabled, or prohibited them
 7. Document any deviation with reasoning
 8. **Follow the decision hierarchy** when facing trade-offs: Maintainability > Extensibility > Consistency > Simplicity > Performance. If a proper solution takes longer, take the time — reduce scope rather than quality.

@@ -150,15 +150,15 @@ Steps within a phase are sequential (4a → 4b → 4c); only independent tasks w
 |------|-------|-------------|-------------|
 | 0 | Phase 3 approval | Present choice via question(): "Start Implementation" or "High Accuracy Review" | Skipping the choice; auto-running Phase 3.5 |
 | 0.5 | Phase 3.5 returns | OKAY → present results, user confirms via question(). REJECT → task-planner fixes plan, then user chooses via question() | Proceeding to Phase 4 without the user's confirmation |
-| 1 | 4a returns | Invoke code-quality for 4b | Fixing (no failure yet), updating the plan, or skipping to 4c |
+| 1 | 4a returns | Invoke code-quality for 4b in the mode the resolved test flags select, with the matching `test_scope` (targeted when enabled non-deferred; none when deferred or disabled); Lightweight non-deferred final gate: `test_scope: full`, doubling as final validation (semantics: corvus-phase-2 skill, Test Scope section) | Fixing (no failure yet), updating the plan, or skipping to 4c |
 | 2 | 4b PASS | Update MASTER_PLAN.md → next phase or Phase 5 | SUCCESS_EXTRACTION (Phase 6 owns it); skipping the plan update |
-| 3 | 4b FAIL | task-planner FAILURE_ANALYSIS → code-implementer fixes only the failing tasks → 4b | Fixing without FAILURE_ANALYSIS; proceeding to 4c; fixing all tasks |
+| 3 | 4b FAIL | Iteration 1: code-implementer fixes only the failing tasks (targeted, with the 4b failure report) → 4b. Iteration ≥2: task-planner FAILURE_ANALYSIS first → fix → 4b | Skipping FAILURE_ANALYSIS from iteration 2 onward; full-suite reruns at 4b (sole exception: the Lightweight non-deferred final gate revalidating at its dispatched full scope); proceeding to 4c; fixing all tasks |
 | 4 | Phase 5 PASS | Phase 6 | Skipping Phase 6 / SUCCESS_EXTRACTION |
 | 5 | 5a PASS | Any task with `requires_ux_dx_review: true` → 5b; else Phase 6 | Skipping a required 5b |
 | 6 | 5a FAIL | Create fix tasks → Phase 4 | Proceeding to 5b or Phase 6 |
 | 7 | 5b returns | PASS → Phase 6; NEEDS_IMPROVEMENT → record non-blocking recommendations for final output/learnings, then Phase 6 (if a recommendation exposes an unmet immutable acceptance criterion, use the CRITICAL_ISSUES path); CRITICAL_ISSUES → create fixes scoped only to reported blocking issues → Phase 4 → rerun 5a and 5b; missing or unknown status, or malformed output → fail closed as a blocking producer/consumer contract error and do not proceed to Phase 6 | Dropping recommendations; treating an unmet immutable acceptance criterion as non-blocking; broad or unscoped fixes; skipping the 5a or 5b rerun; treating missing or unknown status or malformed output as success |
 
-Failure-loop detail (FAILURE_ANALYSIS always precedes a fix): corvus-phase-4 skill.
+Failure-loop detail: the iteration rule lives in the corvus-phase-4 skill.
 
 ## WORKFLOW PHASES
 
@@ -391,10 +391,10 @@ Load first: `skill({ name: "corvus-phase-4" })`
   └─ tests_enabled: false                       → acceptance criteria only (no tests)
   ▼
 PASS → 4c: update plan → next phase
-FAIL → FAILURE_ANALYSIS → fix failing tasks → 4b
+FAIL → fix loop (iteration 1: direct fix; iteration ≥2: FAILURE_ANALYSIS first) → 4b
 ```
 
-One task = one code-implementer. FAILURE_ANALYSIS comes before any fix (Gate 3). Max 3 fix iterations per phase — on hitting the cap, stop and escalate to the user with what passed, what still fails, and open questions, even if the phase is incomplete.
+One task = one code-implementer. Iteration 1 fixes directly from the 4b failure report; FAILURE_ANALYSIS precedes fixes from iteration 2 onward (Gate 3; rule: corvus-phase-4 skill). Max 3 fix iterations per phase — on hitting the cap, stop and escalate to the user with what passed, what still fails, and open questions, even if the phase is incomplete.
 
 ## Phase 5: FINAL VALIDATION
 
@@ -402,7 +402,7 @@ One task = one code-implementer. FAILURE_ANALYSIS comes before any fix (Gate 3).
 
 Load first: `skill({ name: "corvus-phase-5" })`
 
-- **5a**: code-quality — always. Tests + acceptance criteria when `tests_enabled: true` (deferred mode runs the full suite here for the first time); acceptance-only when `tests_enabled: false`
+- **5a**: code-quality — always. THE single full-suite run (`test_scope: full`) when `tests_enabled: true` — every enabled mode, deferred mode's first execution; acceptance-only (`test_scope: none`) when `tests_enabled: false`
 - **5b**: ux-dx-quality — only if any task had `requires_ux_dx_review: true`
 
 ## Phase 6: COMPLETION
@@ -433,14 +433,14 @@ Routes to: LIGHTWEIGHT (< 3 files) | PARTIAL RESTART (3+ files) | FULL RESTART (
 
 | Responsibility | When | Who | Active contract |
 |----------------|------|-----|-----------------|
-| Task validation | Each authorized task checkpoint | code-implementer | Run only the effective task/workflow validation allowlist. Lint, typecheck, and build are not unconditional defaults; a non-deferred phase-test task may execute only its planned test commands. |
-| Test authoring | Explicit phase-test task | code-implementer | `tests_enabled: true`; author only listed test files. With `tests_deferred: true`, author without executing. An implementation task authors no tests unless an obsolete test edit is explicitly in its approved manifest. |
+| Task validation | Each authorized task checkpoint | code-implementer | Validate per task with the effective allowlist; test execution capped at `test_scope: targeted` (own task only). Lint, typecheck, and build are not unconditional defaults. |
+| Test authoring | Explicit phase-test task | code-implementer | `tests_enabled: true`; author only listed test files; a non-deferred phase-test task runs only its own authored test files (targeted). With `tests_deferred: true`, author without executing. An implementation task authors no tests unless an obsolete test edit is explicitly in its approved manifest. |
 | No test work | Entire workflow | None | `tests_enabled: false`; no phase-test task, test edit, or test execution exists. |
-| Test execution | End of each phase (4b) | code-quality | Only when `tests_enabled: true` AND `tests_deferred: false`. |
-| Test execution | Phase 5a (first test run) | code-quality | Only when `tests_enabled: true` AND `tests_deferred: true`. |
+| Test execution (targeted) | End of each phase (4b) | code-quality | `tests_enabled: true` AND `tests_deferred: false`; scope = union of the phase's task test files (`test_scope: targeted`), once. |
+| Test execution (full) | Phase 5a | code-quality | `tests_enabled: true` (all modes) — THE single full-suite run; in deferred mode also the first execution (`test_scope: full`); a Lightweight non-deferred plan carries this run at its final 4b gate. |
 | Acceptance criteria | End of each phase (4b) | code-quality | Always; verify with evidence appropriate to the active mode and do not assume generic commands ran. |
 
-In enabled non-deferred mode, the explicit phase-test task may run its planned tests and Phase 4b executes gate tests. In enabled deferred mode, that task authors tests but Phase 5a owns their first execution. Disabled mode has no test task, test edit, or test run. Code Quality consumes the effective allowlist evidence rather than assuming lint, typecheck, build, or tests ran.
+In enabled non-deferred mode, the phase-test task runs only its own authored test files, 4b executes the phase's targeted union once, and 5a runs the full suite once (a Lightweight non-deferred plan folds that full run into its final 4b gate). In enabled deferred mode, that task authors without executing and Phase 5a is the first and full execution. Disabled mode has no test task, test edit, or test run; `test_scope: full` never overrides `tests_enabled: false`. Code Quality consumes the effective allowlist evidence rather than assuming lint, typecheck, build, or tests ran. These rows summarize canonical rules: `test_scope` semantics (corvus-phase-2 skill), fix loop (corvus-phase-4 skill), per-task cadence (code-implementer), execution-mode matrix (code-quality).
 
 ## OPERATING PRINCIPLES
 

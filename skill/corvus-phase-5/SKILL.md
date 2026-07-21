@@ -12,12 +12,12 @@ description: Final validation - comprehensive objective and subjective checks
 
 ### Test Flags in Phase 5
 
-Phase 5a's own rows from the flag-combination semantics (full table: corvus-phase-2 skill, TEST PREFERENCE section):
+Phase 5a's own rows from the flag-combination semantics (full table: corvus-phase-2 skill, Entry Contract (canonical flag table) and Test Scope section):
 
 | Flags | Phase 5a behavior |
 |-------|-------------------|
-| `tests_enabled: true, tests_deferred: false` | Run the full test suite (not just affected tests) |
-| `tests_enabled: true, tests_deferred: true` | Run the full test suite — Phase 5 performs the first full test run in deferred mode (tests were deferred during Phase 4); report it clearly as the deferred test run |
+| `tests_enabled: true, tests_deferred: false` | Run the full test suite (`test_scope: full`) — the feature's single full-suite run, owned by code-quality (not just affected tests) |
+| `tests_enabled: true, tests_deferred: true` | Run the full test suite (`test_scope: full`) — the feature's single full-suite run, owned by code-quality, and the first test execution in deferred mode (tests were deferred during Phase 4); report it clearly as the deferred test run |
 | `tests_enabled: false` | Acceptance-only: production build + acceptance criteria with concrete evidence + regression review via code review; do not run tests or report missing tests as a gap |
 
 The 5a objective gate always produces PASS / FAIL; only its evidence model
@@ -33,6 +33,8 @@ differs by flags. The three-valued subjective contract applies only to 5b.
 **MASTER PLAN**: `.corvus/tasks/[feature]/MASTER_PLAN.md`
 
 **ALL TASK FILES**: `.corvus/tasks/[feature]/*.md`
+
+**TEST SCOPE**: `test_scope: [full|none]` — full when `tests_enabled: true`; none when `tests_enabled: false`
 
 **MUST DO**:
 - [Insert the Phase 5a behavior row for the active test flags from the table above]
@@ -53,7 +55,7 @@ differs by flags. The three-valued subjective contract applies only to 5b.
 **Decision Point after 5a**:
 - PASS + UX/DX required → Proceed to 5b
 - PASS + no UX/DX required → Proceed to Phase 6
-- FAIL → Create fix tasks, return to Phase 4
+- FAIL → Create fix tasks, return to Phase 4 (fix dispatches carry `test_scope: targeted`); re-verification is ONE full 5a re-run, within the iteration cap
 
 ### 5b. Comprehensive Subjective Check (if required)
 

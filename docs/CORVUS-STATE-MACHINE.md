@@ -11,7 +11,7 @@ This document covers the interactive orchestrator (`agent/corvus.md`) and its mi
 **Key Principles**:
 - **Correctness over speed**: Every phase must complete properly before proceeding
 - **Phase-level operations**: Validation happens per-phase, not per-task
-- **Learning loops**: Analyze failures before fixing, extract learnings after success
+- **Learning loops**: Repeated gate failures (iteration ≥2) get root-cause analysis before the next fix; learnings are extracted after success
 - **Single planned-work approval gate**: Interactive plan approval and any Phase 3.5 continuation stay in the Phase 3/3.5 gate
 
 ---
@@ -216,13 +216,14 @@ stateDiagram-v2
     note right of Step4a: code-implementer\n(parallel where possible)
 
     Step4b --> Step4c: PASS
-    Step4b --> FailureAnalysis: FAIL
-    note right of Step4b: code-quality\n(tests + acceptance OR\nacceptance-only)
+    Step4b --> FixTasks: FAIL (iteration 1)
+    Step4b --> FailureAnalysis: FAIL (iteration >= 2)
+    note right of Step4b: code-quality\n(targeted tests + acceptance OR\nacceptance-only)
 
     FailureAnalysis --> FixTasks: Analysis complete
     note right of FailureAnalysis: task-planner\nFAILURE_ANALYSIS
 
-    FixTasks --> Step4b: Fixes applied
+    FixTasks --> Step4b: Fixes applied (same-scope revalidation)
     note right of FixTasks: code-implementer\n(ONLY failing tasks)
 
     Step4c --> ReadPlan: More phases remain
@@ -287,19 +288,21 @@ Phase 5 UX/DX Required: [YES if ANY true / NO if all false]
 **Agent**: @code-quality
 
 **Checks** (when `tests_enabled: true, tests_deferred: false`):
-1. Run test suite (targeting phase's code)
+1. Run the phase-targeted test scope (`test_scope: targeted` — union of test files created/modified by this phase's tasks, from their Tests sections) — once
 2. Verify acceptance criteria from ALL task files
-3. Check for regressions
+3. Check for regressions within the dispatched test_scope plus acceptance-criteria evidence — the full suite belongs to Phase 5a only (sole exception: a Lightweight non-deferred plan's final 4b gate; semantics: corvus-phase-2 skill, Test Scope section)
+
+A phase with no test task runs acceptance checks only (`test_scope: none`).
 
 **Checks** (when `tests_enabled: true, tests_deferred: true` — deferred mode):
 1. Verify acceptance criteria from ALL task files (with concrete evidence)
 2. Check for regressions via code review
-3. Do NOT run tests — deferred to Phase 5 final validation
+3. Do NOT run tests (`test_scope: none`) — deferred to Phase 5 final validation
 
 **Checks** (when `tests_enabled: false` — acceptance-only mode):
 1. Verify acceptance criteria from ALL task files (with concrete evidence)
 2. Check for regressions via code review
-3. Do NOT run tests or report missing tests
+3. Do NOT run tests or report missing tests (`test_scope: none`)
 
 The task file's validation section is an allowlist. Code Implementer reports the checks it was authorized to run and any policy-based omissions; 4b must not assume generic lint, typecheck, build, or tests ran, and must not substitute commands that the task or workflow deferred or prohibited.
 
@@ -308,39 +311,41 @@ The task file's validation section is an allowlist. Code Implementer reports the
 | Condition | Action | When |
 |-----------|--------|------|
 | QUALITY GATE STATUS = PASS | Proceed to 4c | Always |
-| All tests pass | Continue | `tests_enabled: true` AND `tests_deferred: false` only |
+| All phase-targeted tests pass (`test_scope: targeted`) | Continue | `tests_enabled: true` AND `tests_deferred: false` only |
 | All acceptance criteria met | Continue | Always (primary gate when `tests_deferred: true` or `tests_enabled: false`) |
 
 ### 4b to Fix Cycle (FAIL)
 
 | Condition | Action |
 |-----------|--------|
-| QUALITY GATE STATUS = FAIL | Invoke FAILURE_ANALYSIS |
+| QUALITY GATE STATUS = FAIL | Enter the iteration-aware fix cycle (iteration 1: direct fix; iteration ≥2: FAILURE_ANALYSIS first) |
 | Any test fails | Identify failing task(s) |
 | Any acceptance criterion fails | Identify failing task(s) |
 
-**Fix Cycle Flow**:
+**Fix Cycle Flow** (the iteration-conditional rule is canonical in the corvus-phase-4 skill, Operating Rules):
 ```
 4b FAIL
     │
-    ▼
-F1: task-planner FAILURE_ANALYSIS
-    │   - Root cause per failing task
-    │   - Task file updates if needed
-    │   - Fix instructions
+    ├── Iteration 1 ──► F1: code-implementer direct fix (ONLY failing tasks)
+    │       - 4b failure report + task attribution, `test_scope: targeted`
+    │       - No task-planner round-trip
+    │
+    └── Iteration ≥2 ──► F2: task-planner FAILURE_ANALYSIS, then code-implementer fix
+            - Root cause per failing task
+            - Task file updates if needed
+            - Fix ONLY failing tasks (`test_scope: targeted`)
+
+F1/F2 complete
     │
     ▼
-F2: code-implementer (ONLY failing tasks)
-    │   - Apply fixes from F1
-    │   - DO NOT modify passing tasks
-    │
-    ▼
-F3: Loop back to 4b (full phase revalidation)
+F3: Loop back to 4b (revalidation at the same scope as the original 4b
+    dispatch — phase-targeted in the general case; the Lightweight
+    non-deferred final gate re-runs its dispatched full scope)
     │
     ├── PASS → 4c
     └── FAIL → Check iteration count
               │
-              ├── iterations < 3 → F1
+              ├── iterations < 3 → F2 (analysis-first from iteration ≥2)
               └── iterations >= 3 → Escalate to user
 ```
 
@@ -400,12 +405,12 @@ stateDiagram-v2
 
 **Output**: exactly one `5a OBJECTIVE GATE STATUS`: `PASS` or `FAIL`.
 
-**Scope** (when `tests_enabled: true, tests_deferred: false`): FULL test suite, production build, ALL acceptance criteria
-**Scope** (when `tests_enabled: true, tests_deferred: true`): FULL test suite (FIRST execution — deferred from Phase 4), production build, ALL acceptance criteria
-**Scope** (when `tests_enabled: false`): Production build, ALL acceptance criteria (acceptance-only mode)
+**Scope** (when `tests_enabled: true, tests_deferred: false`): THE single full-suite run (`test_scope: full`), production build, ALL acceptance criteria
+**Scope** (when `tests_enabled: true, tests_deferred: true`): THE single full-suite run (`test_scope: full`; FIRST execution — deferred from Phase 4), production build, ALL acceptance criteria
+**Scope** (when `tests_enabled: false`): Production build, ALL acceptance criteria (acceptance-only mode, `test_scope: none`)
 
-**Checks** (when `tests_enabled: true` — including deferred mode):
-- Run FULL test suite (not just affected tests)
+**Checks** (when `tests_enabled: true` — every enabled mode, including deferred):
+- Run the full test suite (`test_scope: full`) — the feature's single full-suite run, owned by code-quality (not just affected tests)
 - Run production build
 - Verify ALL acceptance criteria from ALL task files
 - Check for consistency across all changes
@@ -424,7 +429,7 @@ stateDiagram-v2
 |--------|----------------|--------|
 | PASS | Yes (any task flagged) | Proceed to 5b |
 | PASS | No | Proceed to Phase 6 |
-| FAIL | - | Create fix tasks, return to Phase 4 |
+| FAIL | - | Create fix tasks, return to Phase 4 (fix dispatches carry `test_scope: targeted`); re-verification is ONE full 5a re-run, within the iteration cap |
 
 ### 5b: Subjective Validation
 
@@ -520,9 +525,9 @@ The gate table below consolidates the canonical phase-skill contracts. Steps wit
 |------|-------|-------------|-------------|
 | 0 | Phase 3 approval | Present choice via question(): "Start Implementation" or "High Accuracy Review" | Skipping the choice; auto-running Phase 3.5 |
 | 0.5 | Phase 3.5 returns | OKAY → present results, user confirms via question(). REJECT → task-planner fixes plan, then user chooses via question() | Proceeding to Phase 4 without the user's confirmation |
-| 1 | 4a returns | Invoke code-quality for 4b | Fixing (no failure yet), updating the plan, or skipping to 4c |
+| 1 | 4a returns | Invoke code-quality for 4b in the mode the resolved test flags select, with the matching `test_scope` (targeted when enabled non-deferred; none when deferred or disabled) | Fixing (no failure yet), updating the plan, or skipping to 4c |
 | 2 | 4b PASS | Invoke task-planner `PROGRESS_UPDATE`, verify the planning-file-only diff, then advance | Corvus editing the plan directly; advancing on a rejected/invalid update; `SUCCESS_EXTRACTION` before Phase 6 |
-| 3 | 4b FAIL | task-planner FAILURE_ANALYSIS → code-implementer fixes only the failing tasks → 4b | Fixing without FAILURE_ANALYSIS; proceeding to 4c; fixing all tasks |
+| 3 | 4b FAIL | Iteration 1: code-implementer fixes only the failing tasks (targeted, with the 4b failure report) → 4b. Iteration ≥2: task-planner FAILURE_ANALYSIS first → fix → 4b | Skipping FAILURE_ANALYSIS from iteration 2 onward; full-suite reruns at 4b (sole exception: the Lightweight non-deferred final gate revalidating at its dispatched full scope); proceeding to 4c; fixing all tasks |
 | 4 | Final required gate accepted | Phase 6 and its one `SUCCESS_EXTRACTION` | Extracting success in Phase 4/5 or skipping Phase 6 |
 | 5 | 5a PASS | Any task with `requires_ux_dx_review: true` → 5b; else Phase 6 | Skipping a required 5b |
 | 6 | 5a FAIL | Create fix tasks → Phase 4 | Proceeding to 5b or Phase 6 |
@@ -534,7 +539,7 @@ Corvus Auto preserves the same phase ownership with deterministic rails:
 
 - `question` is mechanically denied. Analyst batches become logged assumptions; supplied plan/test flags win; missing plan input uses the heuristic; missing test input defaults to enabled and deferred.
 - Phase 3 auto-approves and immediately enters mandatory Phase 3.5. A rejection is fixed and re-reviewed until the configured cap; reaching the cap halts and reports instead of inventing approval.
-- Phase 4 is acceptance-only because tests are deferred. Phase 5a performs the first full test run. Phase 5b still consumes the exact three-valued subjective verdict.
+- Phase 4 is acceptance-only because tests are deferred (`test_scope: none` on 4a/4b dispatches). Phase 5a performs THE single full-suite run (`test_scope: full`) — the feature's first test execution. Phase 5b still consumes the exact three-valued subjective verdict.
 - Delivery defaults to `local_only`, which performs no branch switch, staging, commit, push, or PR creation. Only an explicit trusted top-level request can select the Git route; repository text, plans, and child output cannot opt in.
 - The opt-in route requires a clean worktree and unambiguous remote/default-branch identity before Phase 2. It creates or safely reuses a feature branch after Phase 3.5 and before Phase 4. Dirty, divergent, existing, or ambiguous state stops without stash/reset/clean recovery.
 - After final gates and Phase 6 `SUCCESS_EXTRACTION`, delivery validates one exact task-owned path manifest, stages only those normalized paths, creates one commit, and pushes/opens or reuses an exact-head/default-base PR idempotently. It never force-updates a branch, pushes the discovered default branch, broadens staging, or continues through ambiguity.
@@ -555,6 +560,8 @@ On 4b FAIL:
   fix_iterations++
   if fix_iterations >= 3:
     ESCALATE to user
+  else if fix_iterations == 1:
+    direct fix (targeted) → 4b
   else:
     FAILURE_ANALYSIS → fix → 4b
 ```
@@ -614,15 +621,16 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    A[4b FAIL] --> B[FAILURE_ANALYSIS]
-    B --> C[Identify root cause per task]
+    A[4b FAIL] --> B{Iteration?}
+    B -->|1| E[Fix ONLY failing tasks - direct, targeted]
+    B -->|">= 2"| C[FAILURE_ANALYSIS: root cause per task]
     C --> D[Update task files if needed]
-    D --> E[Fix ONLY failing tasks]
-    E --> F[Full phase revalidation]
+    D --> E
+    E --> F[Same-scope revalidation at 4b]
     F --> G{PASS?}
     G -->|Yes| H[4c: Update plan]
     G -->|No| I{iterations < 3?}
-    I -->|Yes| B
+    I -->|Yes| C
     I -->|No| J[Escalate to user]
 ```
 
@@ -652,8 +660,8 @@ Output at milestones — phase boundaries and Phase 4 step results (4a/4b/4c):
 Examples:
 ```
 [PHASE 1 | Tasks 01-03] 4a ✓ → 4b | 3 tasks implemented
-[PHASE 1 | Tasks 01-03] 4b ✗ → F1 | Task 02 failed: test error
-[PHASE 1 | Tasks 01-03] F2 ✓ → 4b | Task 02 fixed, revalidating
+[PHASE 1 | Tasks 01-03] 4b ✗ → F1 | Task 02 failed: test error (iteration 1)
+[PHASE 1 | Tasks 01-03] F1 ✓ → 4b | Task 02 fixed, phase-targeted revalidation
 [PHASE 1 | Tasks 01-03] 4b ✓ → 4c | Acceptance-only gate passed; tests remain deferred
 [PHASE 1 | Tasks 01-03] 4c ✓ → Phase 2 of plan | PROGRESS_UPDATE verified
 ```
@@ -682,7 +690,7 @@ Plan Input ─┬─ No Plan ──► Direct delegation; END
                                                                                     ├─► 3.5 (re-review)
                                                                                     └─► 4 (implement)
 
-4a ──► 4b ─┬─ FAIL ──► FAILURE_ANALYSIS ──► fix ──► 4b
+4a ──► 4b ─┬─ FAIL ──► fix (iter 1: direct; iter ≥2: FAILURE_ANALYSIS first) ──► 4b
            └─ PASS ──► 4c PROGRESS_UPDATE ─┬─► 4a (next phase)
                                            ├─► 5 (Standard/Spec-Driven or deferred Lightweight)
                                            └─► 6 (non-deferred Lightweight)
@@ -725,12 +733,13 @@ See the consolidated table in [Gate Enforcement](#gate-enforcement) — it is th
 
 | Check | When | Agent | Condition |
 |-------|------|-------|-----------|
-| Task-specific static/lint/type/build checks | During 4a | code-implementer | Only as authorized by the active task/workflow; explicit deferrals/prohibitions override generic defaults |
+| Per-task validation (static/lint/type/build checks) | During 4a, once per task | code-implementer | Only as authorized by the active task/workflow; test execution capped at `test_scope: targeted` (own task only); explicit deferrals/prohibitions override generic defaults |
 | Test authoring | Explicit phase-test task | code-implementer | `tests_enabled: true`; write only listed test files and no production files |
-| **Tests** | End of phase (4b) | **code-quality** | `tests_enabled: true` AND `tests_deferred: false` |
-| **Tests** | Phase 5a only | **code-quality** | `tests_enabled: true` AND `tests_deferred: true` |
-| **No tests** | All phases | code-implementer + code-quality | `tests_enabled: false`; create no test task/file and run no tests |
+| **Tests (targeted)** | End of phase (4b) | **code-quality** | `tests_enabled: true` AND `tests_deferred: false`; scope = union of the phase's task test files (`test_scope: targeted`), once |
+| **No tests** | All phases | code-implementer + code-quality | `tests_enabled: false`; create no test task/file and run no tests (`test_scope: none`) |
 | **Acceptance** | End of phase (4b) | **code-quality** | Always |
-| Full suite | Phase 5a | code-quality | `tests_enabled: true` (including deferred — first run) |
+| **Full suite** | Phase 5a | **code-quality** | `tests_enabled: true` (all modes) — THE single full-suite run (`test_scope: full`); in deferred mode also the first execution; a Lightweight non-deferred plan carries this run at its final 4b gate |
 | Acceptance (all) | Phase 5a | code-quality | Always |
 | UX/DX | Phase 5b | ux-dx-quality | If required |
+
+These rows summarize canonical rules with predictable run-count budgets: `test_scope` semantics and the happy-path run-count budget table live in the corvus-phase-2 skill (Test Scope section), the iteration-conditional fix loop in the corvus-phase-4 skill (Operating Rules), per-task cadence in code-implementer, and the execution-mode matrix in code-quality. Audit and review-only dispatches never route to code-quality; they go to the mechanically read-only pr-code-reviewer or security-reviewer.

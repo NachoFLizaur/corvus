@@ -1258,3 +1258,320 @@ describe("prompt contracts: Phase H workflow + safety", () => {
     })
   })
 })
+
+// ============================================================================
+// Test cadence redesign — Phase 1 (Tasks 01-04)
+// ============================================================================
+
+describe("test cadence redesign — phase 1 pins", () => {
+  describe("test_scope semantics (Task 01)", () => {
+    test("defines the canonical test_scope semantics once", () => {
+      // Phase-2 owns the single canonical definition; consumers point here.
+      const definitionLine =
+        "Every dispatch that may execute tests carries exactly one `test_scope: targeted | full | none` field:"
+      expect(read(PHASE_2).split(definitionLine).length - 1).toBe(1)
+
+      expectContains(PHASE_2, [
+        "Precedence (flag semantics dominate): `tests_enabled: false` forces `test_scope: none` on every dispatch — `test_scope: full` can never override it.",
+        "| Deferred (`tests_deferred: true`) | 1 full (Phase 5a — first execution) |",
+      ])
+    })
+  })
+
+  describe("dispatch cadence (Task 02)", () => {
+    test("phase-4 dispatch templates carry an explicit test_scope", () => {
+      // 4a (per-task) and 4b (phase-union) templates each declare the field.
+      expectContains(PHASE_4, [
+        "**TEST SCOPE**: `test_scope: [targeted|none]` — targeted = only tests scoped to this task (its own new/modified test files); none when `tests_deferred: true` or `tests_enabled: false`. Full semantics: corvus-phase-2 skill, Test Scope section.",
+        "**TEST SCOPE**: `test_scope: [targeted|none]` — targeted = union of test files created/modified by this phase's tasks (from their Tests sections); none when the phase has no test tasks (deferred and disabled dispatches use the acceptance-only template below). Exception: a Lightweight non-deferred plan's final 4b gate doubles as final validation and carries the plan's single full-suite run (semantics: corvus-phase-2 skill, Test Scope section).",
+      ])
+    })
+
+    test("removes the 4b double-run clause", () => {
+      expectAbsent(PHASE_4, ["4b also runs its required gate tests"])
+
+      // Line-wise row matching (same style as the deferred/disabled rows above):
+      // the non-deferred phase-test row assigns the single gate run to 4b.
+      const phaseTestRow = (relPath: string): string =>
+        read(relPath)
+          .split("\n")
+          .find((line) =>
+            line.includes("phase test task, `tests_deferred: false`"),
+          ) ?? ""
+
+      const phase4Row = phaseTestRow(PHASE_4)
+      expect(phase4Row).toMatch(/test_scope: targeted/)
+      expect(phase4Row).toContain(
+        "4b owns the single phase-targeted gate run.",
+      )
+
+      const implementerRow = phaseTestRow(CODE_IMPLEMENTER)
+      expect(implementerRow).toMatch(/test_scope: targeted/)
+      expect(implementerRow).toContain("never the full suite.")
+    })
+
+    test("defines 4b targeted as the union of phase test files", () => {
+      expectContains(PHASE_4, [
+        "1. Run the phase-targeted test scope (union of this phase's task test files) — once",
+        "3. Check for regressions within the dispatched test_scope plus acceptance-criteria evidence — the full suite belongs to Phase 5a only",
+      ])
+    })
+  })
+
+  describe("conditional fix loop (Task 03)", () => {
+    test("fix loop is iteration-conditional in the canonical owner", () => {
+      expectContains(PHASE_4, [
+        // Operating Rules: iteration-1 direct fix, iteration-≥2 analysis-first.
+        "on a phase's first 4b FAIL (Iteration 1), dispatch",
+        "`test_scope: targeted` — no task-planner round-trip. The 4b report already",
+        "From iteration ≥2, invoke task-planner LEARNING (FAILURE_ANALYSIS) first, then",
+        // F-steps restate the same conditional rule.
+        "The canonical rule from Operating Rules applies: iteration 1 dispatches a direct fix from the gate's failure report (F1); iteration ≥2 runs FAILURE_ANALYSIS first, then the fix (F2); every iteration ends with revalidation at the original 4b dispatch scope (F3).",
+        // Cap sentence survives the redesign.
+        "- **Max 3 fix iterations per phase**: at the cap, stop and escalate to the user with",
+      ])
+    })
+
+    test("orchestrator Gate 3 rows stay in parity", () => {
+      const gate3Row = (relPath: string): string =>
+        read(relPath).match(/^\| 3 \| 4b FAIL \|.*$/m)?.[0] ?? ""
+
+      const interactiveRow = gate3Row(CORVUS)
+      expect(interactiveRow).toContain(
+        "Iteration 1: code-implementer fixes only the failing tasks (targeted, with the 4b failure report) → 4b.",
+      )
+      expect(interactiveRow).toContain(
+        "Iteration ≥2: task-planner FAILURE_ANALYSIS first → fix → 4b",
+      )
+      expect(interactiveRow).toContain(
+        "Skipping FAILURE_ANALYSIS from iteration 2 onward; full-suite reruns at 4b (sole exception: the Lightweight non-deferred final gate revalidating at its dispatched full scope); proceeding to 4c; fixing all tasks",
+      )
+      expect(gate3Row(CORVUS_AUTO)).toBe(interactiveRow)
+    })
+
+    test("task-planner FAILURE_ANALYSIS triggers from iteration two", () => {
+      expectContains(TASK_PLANNER, [
+        "**MODE**: LEARNING",
+        "**TRIGGER**: FAILURE_ANALYSIS",
+        "| FAILURE_ANALYSIS | A phase's 4b gate fails for the second or later iteration (iteration ≥2; iteration 1 is a direct fix — rule: corvus-phase-4 skill) | Diagnose the repeated phase failure before the next fix |",
+      ])
+    })
+
+    test("extras fix loop matches the conditional rule", () => {
+      expectContains(CORVUS_EXTRAS, [
+        "2. **Dispatch the fix** — iteration 1: send a targeted fix request (`test_scope: targeted`) to code-implementer with the failure report; iteration ≥2: task-planner FAILURE_ANALYSIS first (rule: corvus-phase-4 skill)",
+      ])
+      expectAbsent(CORVUS_EXTRAS, ["before any fix"])
+    })
+  })
+
+  describe("per-task cadence (Task 04)", () => {
+    test("implementer validates per task, never per step", () => {
+      expectAbsent(CODE_IMPLEMENTER, ["After each coherent file change"])
+      expectContains(CODE_IMPLEMENTER, [
+        "Validate once per task, after completing the task's implementation steps, using",
+        "5. **Validate the completed task** with only the effective allowlist and capture output.",
+        "Fix attempts re-run the same targeted scope and never widen to the full suite.",
+      ])
+    })
+  })
+})
+
+// ============================================================================
+// Test cadence redesign — Phase 2 (Tasks 06-08)
+// ============================================================================
+
+describe("test cadence redesign — phase 2 pins", () => {
+  describe("single full run and audit routing (Task 06)", () => {
+    test("code-quality owns the dispatched scope and forbids per-task suite runs", () => {
+      expectContains(CODE_QUALITY, [
+        // Validation-sequence rule: one run of the dispatched scope, never per-task.
+        "3. **Run the dispatched `test_scope` once**: at 4b, `targeted` = the union of test files created/modified by this phase's tasks (never the full suite, never per-task runs)",
+        // Execution-standards row restating the same ownership boundary.
+        "| **Single test run** | Run the dispatched test_scope once, not per-task; the full suite belongs to Phase 5a only — except a Lightweight non-deferred plan's final 4b gate, which doubles as final validation and carries `test_scope: full` (semantics: corvus-phase-2 skill, Test Scope section) |",
+      ])
+      expectAbsent(CODE_QUALITY, ["unified test suite"])
+    })
+
+    test("audit dispatches never route to code-quality", () => {
+      // Requirement 6 / edge case 9: the one-line audit-routing sentence.
+      expectContains(CODE_QUALITY, [
+        "Audit and review-only dispatches are out of scope: they route to the mechanically read-only pr-code-reviewer or security-reviewer, never to code-quality.",
+      ])
+    })
+
+    test("phase 5a is the single full run for all enabled modes", () => {
+      // Phase-5 flag table: both enabled rows declare the single full-suite run
+      // owned by code-quality, pointing at the canonical phase-2 flag table.
+      expectContains(PHASE_5, [
+        "Phase 5a's own rows from the flag-combination semantics (full table: corvus-phase-2 skill, Entry Contract (canonical flag table) and Test Scope section):",
+        "Run the full test suite (`test_scope: full`) — the feature's single full-suite run, owned by code-quality (not just affected tests)",
+        "owned by code-quality, and the first test execution in deferred mode (tests were deferred during Phase 4); report it clearly as the deferred test run",
+        // ONE-full-re-run rule on the 5a FAIL path.
+        "FAIL → Create fix tasks, return to Phase 4 (fix dispatches carry `test_scope: targeted`); re-verification is ONE full 5a re-run, within the iteration cap",
+      ])
+      expectContains(CODE_QUALITY, [
+        "this dispatch carries `test_scope: full` and is THE single full-suite run of the feature, for ALL `tests_enabled: true` modes (in deferred mode it is also the first test execution)",
+        "On FAIL at the gate that carries final validation (5a — or, for a Lightweight non-deferred plan, its final 4b gate), fix tasks return to Phase 4 and fix dispatches carry `test_scope: targeted`; re-verification is ONE full re-run at that same gate — the only sanctioned second full run — within the 3-iteration cap.",
+      ])
+
+      // The existing 5b structural anchors (three-valued contract test above)
+      // still parse after the Task 06 edits.
+      const consumerContract =
+        read(PHASE_5).match(
+          /The only accepted 5b values and meanings are:\n([\s\S]*?)\n\*\*Decision Point after 5b\*\*:/,
+        )?.[1] ?? ""
+      expect(consumerContract).not.toBe("")
+      const decisions =
+        read(PHASE_5).match(
+          /\*\*Decision Point after 5b\*\*:\n([\s\S]*?)\n\nPhase 5 records/,
+        )?.[1] ?? ""
+      expect(decisions).not.toBe("")
+    })
+  })
+
+  describe("orchestrator parity (Task 07)", () => {
+    test("validation responsibility division stays in mirror parity", () => {
+      // Section extraction from heading to the next `##` heading. No marked
+      // divergences exist inside this section at pin time, so no strip step
+      // is needed before comparing.
+      const divisionSection = (relPath: string): string =>
+        read(relPath).match(
+          /## VALIDATION RESPONSIBILITY DIVISION\n([\s\S]*?)\n## /,
+        )?.[1] ?? ""
+
+      const interactiveSection = divisionSection(CORVUS)
+      expect(interactiveSection).not.toBe("")
+      expect(interactiveSection).toContain(
+        "| Test execution (targeted) | End of each phase (4b) | code-quality | `tests_enabled: true` AND `tests_deferred: false`; scope = union of the phase's task test files (`test_scope: targeted`), once. |",
+      )
+      expect(interactiveSection).toContain(
+        "| Test execution (full) | Phase 5a | code-quality | `tests_enabled: true` (all modes) — THE single full-suite run; in deferred mode also the first execution (`test_scope: full`); a Lightweight non-deferred plan carries this run at its final 4b gate. |",
+      )
+      expect(divisionSection(CORVUS_AUTO)).toBe(interactiveSection)
+    })
+
+    test("5a full run is unconditional for enabled modes in both orchestrators", () => {
+      for (const file of [CORVUS, CORVUS_AUTO]) {
+        expectContains(file, [
+          // The 5a resolution row: one full-suite run for every enabled mode.
+          "- **5a**: code-quality — always. THE single full-suite run (`test_scope: full`) when `tests_enabled: true` — every enabled mode, deferred mode's first execution; acceptance-only (`test_scope: none`) when `tests_enabled: false`",
+          // Gate 1 carries the matching test_scope resolution clause.
+          "with the matching `test_scope` (targeted when enabled non-deferred; none when deferred or disabled)",
+        ])
+        // The old deferred-only 5a conditional row is gone.
+        expectAbsent(file, ["AND `tests_deferred: true`"])
+      }
+    })
+
+    // Task 07 criterion 5 (`tests_enabled`, `tests_deferred`, `**TEST PREFERENCE**`
+    // in agent/corvus.md) is already pinned by "corvus.md workflow pins" above —
+    // per the task spec, no duplicate test is added.
+  })
+
+  describe("planner cadence (Task 08)", () => {
+    test("planner generates targeted-only phase test tasks", () => {
+      const plannerRows = read(TASK_PLANNER).split("\n")
+
+      const nonDeferredRow =
+        plannerRows.find((line) =>
+          line.includes("phase test task, `tests_deferred: false`"),
+        ) ?? ""
+      expect(nonDeferredRow).toMatch(/test_scope: targeted/)
+      expect(nonDeferredRow).toContain(
+        "never the full suite. 4b owns the phase-targeted gate run.",
+      )
+
+      const deferredRow =
+        plannerRows.find((line) =>
+          line.includes("phase test task, `tests_deferred: true`"),
+        ) ?? ""
+      expect(deferredRow).toContain(
+        "Own-file targeted verification immediately before the 5a dispatch does not consume the single-full-run budget.",
+      )
+
+      expectContains(TASK_PLANNER, [
+        "never plan a full-suite run outside Phase 5a",
+        // MASTER_PLAN-mandatory rule survives the cadence redesign.
+        "Create a MASTER_PLAN.md for every plan — it is the primary execution tracking document.",
+      ])
+    })
+  })
+})
+
+// ============================================================================
+// Test cadence redesign — Phase 3 (Tasks 10-11)
+// ============================================================================
+
+describe("test cadence redesign — phase 3 pins", () => {
+  describe("docs sync (Task 10)", () => {
+    test("state machine reflects targeted 4b and the single 5a full run", () => {
+      expectContains(STATE_MACHINE_DOC, [
+        // 5a scope rows: both enabled modes declare THE single full-suite run.
+        "**Scope** (when `tests_enabled: true, tests_deferred: false`): THE single full-suite run (`test_scope: full`), production build, ALL acceptance criteria",
+        "**Scope** (when `tests_enabled: true, tests_deferred: true`): THE single full-suite run (`test_scope: full`; FIRST execution — deferred from Phase 4), production build, ALL acceptance criteria",
+        // 4b-to-4c transition row: the phase gate is targeted, never full.
+        "| All phase-targeted tests pass (`test_scope: targeted`) | Continue | `tests_enabled: true` AND `tests_deferred: false` only |",
+        // Validation Responsibility table: targeted 4b row + the merged
+        // single-full-run row (the old deferred-only :731 row folded in).
+        "| **Tests (targeted)** | End of phase (4b) | **code-quality** | `tests_enabled: true` AND `tests_deferred: false`; scope = union of the phase's task test files (`test_scope: targeted`), once |",
+        "| **Full suite** | Phase 5a | **code-quality** | `tests_enabled: true` (all modes) — THE single full-suite run (`test_scope: full`); in deferred mode also the first execution; a Lightweight non-deferred plan carries this run at its final 4b gate |",
+      ])
+      // The superseded 5a-deferred-only row string never returns.
+      expectAbsent(STATE_MACHINE_DOC, [
+        "Only when `tests_enabled: true` AND `tests_deferred: true`",
+      ])
+    })
+
+    test("AGENTS.md names code-quality run ownership", () => {
+      // Task 10 criterion 3: the exact ownership note — 4b targeted + the
+      // single Phase 5 full run stay with code-quality; audits route to the
+      // read-only reviewers instead.
+      expectContains("AGENTS.md", [
+        "it owns the 4b phase-targeted test runs (`test_scope: targeted`, the union of the phase's task test files, once) and the single Phase 5 full-suite run (`test_scope: full`; a Lightweight non-deferred plan has no Phase 5 and carries this single full run at its final 4b gate).",
+        "audit and review-only dispatches go to `@pr-code-reviewer`/`@security-reviewer` instead",
+      ])
+    })
+  })
+
+  describe("sweep absence guarantees (Task 11)", () => {
+    test("old cadence phrases never reappear", () => {
+      // Task 11 step-3 zero-hit greps promoted to pins. Combos already pinned
+      // in the phase 1/2 blocks are skipped — no duplicate pins:
+      //   phase-4 + "4b also runs..." ("removes the 4b double-run clause"),
+      //   code-implementer + "After each coherent file change" ("implementer
+      //   validates per task, never per step"),
+      //   code-quality + "unified test suite" ("code-quality owns the
+      //   dispatched scope and forbids per-task suite runs").
+      const DOUBLE_RUN = "4b also runs its required gate tests"
+      const PER_CHANGE = "After each coherent file change"
+      const UNIFIED_SUITE = "unified test suite"
+
+      expectAbsent(PHASE_4, [PER_CHANGE, UNIFIED_SUITE])
+      expectAbsent(CODE_IMPLEMENTER, [DOUBLE_RUN, UNIFIED_SUITE])
+      expectAbsent(CODE_QUALITY, [DOUBLE_RUN, PER_CHANGE, "task-planner LEARNING before fixing"])
+      for (const file of [CORVUS, CORVUS_AUTO]) {
+        expectAbsent(file, [DOUBLE_RUN, PER_CHANGE, UNIFIED_SUITE])
+      }
+    })
+
+    test("test_scope full stays exclusive to Phase 5a contexts", () => {
+      // The 4a and 4b delegation templates never carry `test_scope: full`;
+      // Phase 5a alone owns that value (pinned in the phase 2 block). Each
+      // template block must extract non-empty so the check cannot pass
+      // vacuously on a moved anchor.
+      const source = read(PHASE_4)
+      const templates = [
+        /#### Single-Task Delegation Template\n([\s\S]*?)\n#### Worked Example/,
+        /#### 4b Delegation: Standard Mode([\s\S]*?)\n#### 4b Delegation: Acceptance-Only Mode/,
+        /#### 4b Delegation: Acceptance-Only Mode([\s\S]*?)\n\*\*GATE DECISION\*\*/,
+      ].map((anchor) => source.match(anchor)?.[1] ?? "")
+
+      expect(templates).toHaveLength(3)
+      for (const template of templates) {
+        expect(template).not.toBe("")
+        expect(template).not.toMatch(/test_scope:\s*full/)
+      }
+    })
+  })
+})

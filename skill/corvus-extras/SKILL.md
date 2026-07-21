@@ -16,7 +16,7 @@ Canonical reference for all 16 agents in the corvus-ai suite. Orchestrators keep
 | requirements-analyst | Request analysis, gap identification, clarifying questions | Phase 0a (initial) and 0b (post-discovery); returns REQUIREMENTS_CLEAR / QUESTIONS_NEEDED / DISCOVERY_NEEDED |
 | researcher | External docs, best practices, library/API research | Phase 1a; run in parallel with code-explorer |
 | code-explorer | Codebase analysis, architecture, patterns, environment detection | Phase 1b; run in parallel with researcher |
-| task-planner | Creates/updates planning files through constrained planning and learning modes | Phase 2 (plan), Phase 3.5-fail (fix plan), Phase 4b-fail (FAILURE_ANALYSIS), Phase 4c (PROGRESS_UPDATE), Phase 6a (SUCCESS_EXTRACTION) |
+| task-planner | Creates/updates planning files through constrained planning and learning modes | Phase 2 (plan), Phase 3.5-fail (fix plan), Phase 4b-fail iteration ≥2 (FAILURE_ANALYSIS), Phase 4c (PROGRESS_UPDATE), Phase 6a (SUCCESS_EXTRACTION) |
 | plan-reviewer | High-accuracy plan review → OKAY / REJECT | Phase 3.5, only if the user chose plan review |
 | code-implementer | Implementation + task/workflow-authorized validation | Phase 4a; delegated mode with a task-file path |
 | code-quality | Tests, build validation, acceptance criteria → quality gate | Phase 4b (per phase) and Phase 5a (final, full suite) |
@@ -86,7 +86,7 @@ todowrite([
 ### Recoverable Errors (implementation or validation failures)
 
 1. **Categorize** — test failure, build error, or acceptance-criteria miss
-2. **Send a targeted fix request** to code-implementer for the exact issue
+2. **Dispatch the fix** — iteration 1: send a targeted fix request (`test_scope: targeted`) to code-implementer with the failure report; iteration ≥2: task-planner FAILURE_ANALYSIS first (rule: corvus-phase-4 skill)
 3. **Re-validate** with code-quality
 4. **Track iterations** — after 3 failed attempts, stop and escalate to the user with results so far and open questions
 
