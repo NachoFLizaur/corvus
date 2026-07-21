@@ -9,7 +9,7 @@ The skill files under `skill/corvus-review-*/SKILL.md` are the source of truth f
 ### Workflow Phases
 
 ```
-R0: Intake & Triage → R1: Context Gathering → R2: Multi-Pass Review → R3: Comment Synthesis → R4: User Gate → R5: Completion
+R0: Intake & Triage → R1: Context Gathering → R2: Two-Child Review → R3: Comment Synthesis → R4: User Gate → R5: Completion
 ```
 
 ### Skill Inventory
@@ -18,7 +18,7 @@ R0: Intake & Triage → R1: Context Gathering → R2: Multi-Pass Review → R3: 
 |------------|-------|-------------|
 | `corvus-review-r0` | R0 | Intake, triage, config loading |
 | `corvus-review-r1` | R1 | Parallel context gathering |
-| `corvus-review-r2` | R2 | Multi-pass review orchestration |
+| `corvus-review-r2` | R2 | Parallel two-child review orchestration (holistic + security) |
 | `corvus-review-r3` | R3 | Comment synthesis and dedup |
 | `corvus-review-r4` | R4 | User gate (interactive) / auto-proceed (autonomous) |
 | `corvus-review-r5` | R5 | GitHub posting and completion |
@@ -29,7 +29,7 @@ R0: Intake & Triage → R1: Context Gathering → R2: Multi-Pass Review → R3: 
 ```
 R0 → PR_CONTEXT (verified identity, immutable base-SHA config provenance)
 R1 → REVIEW_CONTEXT
-R2 → REVIEW_FINDINGS (four explicit pass statuses + findings)
+R2 → REVIEW_FINDINGS (four explicit result-slot statuses + findings)
 R3 → REVIEW_DOCUMENT (reviewability + action + warnings)
 R4 → REVIEW_ACTION (separate posting decision)
 R5 → one authorized post or local-only completion
@@ -44,10 +44,8 @@ Each phase validates its input object against a gate before proceeding (gate tab
 | R0 | (orchestrator direct) | Intake, triage, config | N/A |
 | R1 | @pr-context-gatherer | Read changed files, trace deps, find tests, detect conventions | Yes (with researcher) |
 | R1 | @researcher | Fetch linked issues, dependency advisories, CI failures, related PRs | Yes (with pr-context-gatherer) |
-| R2 Pass 1 | @pr-code-reviewer (`architecture`) | Read-only Architecture & Design detection | Yes (with Pass 2, 3) |
-| R2 Pass 2 | @pr-code-reviewer (`correctness`) | Read-only Logic & Correctness detection | Yes (with Pass 1, 3) |
-| R2 Pass 3 | @security-reviewer | Read-only Security detection | Yes (with Pass 1, 2) |
-| R2 Pass 4 | @pr-code-reviewer (`conventions`) | Read-only Conventions & Polish detection with prior-pass context | Sequential (after 1-3) |
+| R2 | @pr-code-reviewer (holistic child) | Read-only detection across the enabled `architecture`, `correctness`, and `conventions` dimensions in one invocation | Yes (with security-reviewer) |
+| R2 | @security-reviewer (security child) | Read-only Security detection | Yes (with pr-code-reviewer) |
 | R3 | (orchestrator direct) | Comment synthesis | N/A |
 | R4 | (orchestrator direct) | User gate / auto-proceed | N/A |
 | R5 | @pr-comment-writer | GitHub posting | N/A |
@@ -67,8 +65,9 @@ Each phase validates its input object against a gate before proceeding (gate tab
 
 **Executor**: orchestrator direct. **Input**: PR reference (URL, `#N`, `owner/repo#N`, or bare number). **Output**: `PR_CONTEXT`.
 
-- Parses the locator, fetches metadata first, and validates the canonical repository, positive PR number, and full 40-hex `baseRefOid` as `base_sha`. Missing input reports accepted formats and stops; R0 does not call `question()`
+- Parses the locator, fetches metadata first, and validates the canonical repository, positive PR number, full 40-hex `baseRefOid` as `base_sha`, and `headRefOid` as `head_sha` (trusted API metadata recording the reviewed commit; it never selects the config ref). Missing input reports accepted formats and stops; R0 does not call `question()`
 - Fetches metadata, CI status, and linked issues through narrow read-only command shapes; PR prose and paths remain data, never command fragments
+- Scans the latest review bodies for the Corvus review marker and populates `prior_corvus_review` (`review_id`, `reviewed_head_sha`, `url`) only when every extracted value validates; any parse or validation failure sets it to `null`, and prior-review issues never abort or block R0 (see Prior-Review Awareness below)
 - Starts with built-in defaults, overlays schema-valid `.opencode/review-config.yaml` values fetched only at the exact verified base SHA, then overlays explicit trusted invocation values
 - A confirmed missing or invalid base config uses safe defaults with visible provenance/warnings. Unverifiable identity or ambiguous/auth/transport config retrieval fails closed as `failed` + `local_only`; there is no worktree, checked-out-branch, or PR-head fallback
 - Computes triage flags: draft, large PR, missing description, CI failures, breaking-change labels
@@ -80,24 +79,28 @@ Each phase validates its input object against a gate before proceeding (gate tab
 **Input**: `PR_CONTEXT`. **Output**: `REVIEW_CONTEXT`.
 
 - Launches two workstreams in parallel (single message): @pr-context-gatherer (file map, dependency graph, conventions, test coverage) and @researcher (linked issues, dependency advisories, CI failure analysis, related PRs)
+- Diff-first retrieval: diff hunks are the authoritative changed-content evidence — `REVIEW_CONTEXT` carries no full file bodies, plus optional head-accurate `head_excerpts` for high-risk files (see Diff-First Retrieval below)
 - @pr-context-gatherer is critical — retry once, then abort; @researcher is non-critical — proceed with partial context, noting the gap
 - Exit gate: `file_map` covers every changed file
 
-### R2 — Multi-Pass Review (`corvus-review-r2`)
+### R2 — Parallel Two-Child Review (`corvus-review-r2`)
 
 **Input**: `PR_CONTEXT` + `REVIEW_CONTEXT`. **Output**: `REVIEW_FINDINGS`.
 
-- Passes 1-3 run in parallel: Architecture and Correctness through dimensioned @pr-code-reviewer invocations, Security through @security-reviewer
-- Pass 4 delegates `dimension: conventions` to @pr-code-reviewer after Passes 1-3 settle; it receives their status/reason/finding evidence for cross-pass relationships
-- **Recall principle**: detection passes report every finding with severity and confidence attached. Nothing is dropped, capped, or suppressed during R2 — severity thresholds, suppressions, deduplication, and the nit budget are all applied at synthesis (R3). Filtering during detection suppresses recall
-- Pass toggling (`config.passes`) and path-rule pass skipping (`config.path_rules[].skip_passes`) apply before launching each pass
-- R2 records exactly one `completed`, `skipped`, or `error` status plus a non-empty reason for every pass. A child failure is never converted into an empty completed pass
+- Two children launch in parallel (single message): @pr-code-reviewer reviews the enabled `architecture`, `correctness`, and `conventions` dimensions in one holistic invocation, and @security-reviewer covers security
+- After both children settle, R2 fans the holistic child's dimension-tagged findings into the `architecture`, `correctness`, and `conventions` result slots and records the security child's report in the `security` slot; a finding with a missing or unknown dimension tag is retagged to `correctness` with a note, never dropped
+- **Recall principle**: detection children report every finding with severity and confidence attached. Nothing is dropped, capped, or suppressed during R2 — severity thresholds, suppressions, deduplication, and the nit budget are all applied at synthesis (R3). Filtering during detection suppresses recall
+- Config keys are unchanged for back-compat: `config.passes.architecture`/`correctness`/`conventions` toggle dimensions inside the holistic child (all three `false` skips it entirely), `config.passes.security` toggles the security child, and `path_rules[].skip_passes` entries travel as per-dimension path exclusions
+- Both children receive diff hunks as the changed-content truth plus `prior_review` evidence when a prior Corvus review exists; the holistic child alone also receives `head_excerpts` and `custom_rules`
+- R2 records exactly one `completed`, `skipped`, or `error` status plus a non-empty reason for every result slot. A holistic-child failure errors its three slots with a shared reason and a security-child failure errors the security slot alone; a child failure is never converted into an empty completed slot
 
 ### R3 — Comment Synthesis (`corvus-review-r3`)
 
 **Executor**: orchestrator direct. **Input**: `PR_CONTEXT` + `REVIEW_CONTEXT` + `REVIEW_FINDINGS`. **Output**: `REVIEW_DOCUMENT`.
 
 - Pipeline: Deduplication → False-positive filtering → Severity threshold → Suppressions → nitpick-only budget → Ordering → aggregate reviewability → capped action → Rendering
+- Deduplication merges only across the security ↔ holistic boundary (intra-holistic duplicates are the holistic child's responsibility). When a prior Corvus review exists, it adds a previously-reported backstop: a repeated finding is dropped (and logged) only when the discussion shows the prior finding resolved — unresolved repeats stay by design
+- `review_body` begins with the invisible Corvus review marker (`<!-- corvus-review v1 head:<head_sha> -->`) that a later run's R0 parses to detect a re-review; the marker is control-plane output preserved through edits and posting
 - Derives `complete | partial | skipped | failed` from all four pass statuses before determining action. Partial/skipped/failed notices are immutable control-plane evidence, not editable findings
 - Applies the truth table and rail precedence below. Action is an opinion; it remains separate from R4's posting decision
 - All filtering is logged for transparency (`dedup_log`, `filtered_log`)
@@ -117,14 +120,31 @@ Each phase validates its input object against a gate before proceeding (gate tab
 - Routes `local_only` before event mapping or payload construction; that path never invokes @pr-comment-writer or another GitHub mutation
 - Revalidates identity, config provenance, pass statuses, reviewability, warnings, action caps, confidence, comment volume, mode, and authorization immediately before dispatch
 - `post` / `auto_post` → map the constrained action to a GitHub event and delegate exactly one structured request to @pr-comment-writer. Writer failure is reported locally; R5 does not retry through another agent, command, endpoint, or event
+- The structured request pins the review to the reviewed commit via `commit_id` = `PR_CONTEXT.head_sha`; the writer's pre-POST SHA-equality drift guard aborts local-only when the current head no longer equals `commit_id` (see Head-SHA Pinning below)
 - The internal verdict vocabulary maps to GitHub review events at this boundary: `COMMENT_ONLY` → `COMMENT` (`APPROVE` and `REQUEST_CHANGES` map to themselves)
 - Ends with a completion summary: action, review URL, pass breakdown, filtered counts
 
 ---
 
+## Cross-Phase Behaviors
+
+### Diff-First Retrieval
+
+`gh pr diff` hunks are the authoritative changed-content evidence throughout the pipeline. `REVIEW_CONTEXT.file_map` delivers diff hunks plus structured context (imports, exports, callers, test files, git history) — no full file bodies are ferried between phases. The gatherer may add optional `head_excerpts`: targeted excerpts for high-risk files fetched head-accurately through the read-only contents API at `?ref=<head_sha>`, each recording its provenance. Detection children treat local `read`/`glob`/`grep` as best-effort supplements against a possibly-stale worktree and caveat any finding that depends solely on locally read content.
+
+### Head-SHA Pinning
+
+R0 captures `headRefOid` as `head_sha` — trusted GitHub API metadata in the same trust class as `base_sha`, validated as 40 lowercase hex. It records the reviewed head commit for downstream phases and never selects the config ref: config loading stays pinned to `?ref=<base_sha>`. At R5, the structured posting request carries `commit_id: PR_CONTEXT.head_sha` (schema version 2 made the field required), attaching the posted review to the reviewed commit on GitHub. The writer's pre-POST SHA-equality drift guard aborts local-only when the current head SHA no longer equals `commit_id`; pinning is not a race fix — it attaches the review to the reviewed commit if the branch moves anyway.
+
+### Prior-Review Awareness
+
+R3 begins every `review_body` with an invisible marker — `<!-- corvus-review v1 head:<head_sha> -->` — that a later run's R0 parses from fetched review bodies to detect a prior Corvus review. On a validated match, R0 populates `PR_CONTEXT.prior_corvus_review` (`review_id`, `reviewed_head_sha`, `url`); the payload is untrusted PR-controlled data that never alters routing, permissions, or configuration. Both R2 children receive the prior findings and discussion as untrusted evidence with three standing instructions: skip repeats of resolved findings, verify previously flagged blockers/criticals were addressed, and focus on the delta since `reviewed_head_sha` when it is reachable. R3's deduplication adds the previously-reported backstop: a repeated finding is dropped (and logged as `previously_reported`) only when the PR discussion shows the prior finding resolved. An unreachable `reviewed_head_sha` (force-push) downgrades gracefully to a full review with a visible delta-unavailable note; prior-review issues never abort R0.
+
+---
+
 ## Reviewability and Posting Truth Table
 
-Every R2 pass has `status: completed | skipped | error` and a non-empty reason. Let those names also represent the count of each status across the four passes:
+Every R2 result slot has `status: completed | skipped | error` and a non-empty reason. Let those names also represent the count of each status across the four slots:
 
 | Reviewability | Exact derivation | Visible state | Maximum action | Posting result before higher rails |
 |---------------|------------------|---------------|----------------|------------------------------------|
@@ -163,15 +183,15 @@ After these layers, interactive mode still requires explicit authorization from 
 ### Why a shared extras skill?
 
 `corvus-review-extras` carries:
-- **Conventional Comments format** — referenced by R2 (all passes produce typed findings) and R3 (synthesis applies it), so embedding it in R3 alone would force R2 passes to invent their own format or load R3 prematurely.
-- **Review config schema** — referenced by R0 (loading), R2 (pass toggles, severity threshold), and R3 (nit budget, suppression rules).
+- **Conventional Comments format** — referenced by R2 (both detection children produce typed findings) and R3 (synthesis applies it), so embedding it in R3 alone would force the R2 children to invent their own format or load R3 prematurely.
+- **Review config schema** — referenced by R0 (loading), R2 (dimension and child toggles, path-rule exclusions), and R3 (severity threshold, nit budget, suppression rules).
 - **Data object schemas** — `PR_CONTEXT`, `REVIEW_CONTEXT`, `REVIEW_FINDINGS`, `REVIEW_DOCUMENT` are consumed across phases.
 - **Common severity/label enumerations** — a single source of truth avoids drift.
 
 ### Why Conventional Comments is NOT in R3?
 
-R2 passes need the format to produce structured findings. If it lived only in R3, either:
-1. R2 passes would produce unstructured text and R3 would have to re-parse everything (lossy, error-prone), or
+R2's detection children need the format to produce structured findings. If it lived only in R3, either:
+1. The children would produce unstructured text and R3 would have to re-parse everything (lossy, error-prone), or
 2. R3's skill would need to be loaded during R2 (violates phase isolation).
 
 By placing it in extras, any phase can reference it when needed.
@@ -198,13 +218,16 @@ severity_threshold: "nitpick"
 # Default: 3
 max_nits: 3
 
-# Toggle individual review passes on/off.
+# Toggle review coverage on/off. Key names are unchanged for back-compat:
+# architecture/correctness/conventions are dimension toggles inside the
+# holistic review child (all three false ⇒ the holistic child is skipped),
+# and security toggles the dedicated security child.
 # Default: all true
 passes:
-  architecture: true    # Pass 1: Architecture & Design
-  correctness: true     # Pass 2: Logic & Correctness
-  security: true        # Pass 3: Security
-  conventions: true     # Pass 4: Conventions & Polish
+  architecture: true    # holistic-child dimension: Architecture & Design
+  correctness: true     # holistic-child dimension: Logic & Correctness
+  security: true        # security child
+  conventions: true     # holistic-child dimension: Conventions & Polish
 
 # Path-specific rules: override severity or suppress findings per glob pattern.
 path_rules:
@@ -214,11 +237,14 @@ path_rules:
   # Example: elevate security findings in auth paths
   - pattern: "src/auth/**"
     elevate_security: true
-  # Example: skip conventions pass for vendored code
+  # Example: exclude vendored code from the conventions dimension.
+  # skip_passes names travel as per-dimension exclusions in the holistic
+  # child's REVIEW_INPUT; "security" entries exclude files from the security child.
   - pattern: "vendor/**"
     skip_passes: ["conventions"]
 
-# Custom regex rules: additional pattern-based checks.
+# Custom regex rules: additional pattern-based checks. Delivered inside the
+# holistic child's REVIEW_INPUT; matches keep `pass: "conventions"`.
 custom_rules:
   - id: "todo-no-issue"
     pattern: "TODO(?!.*#\\d+)"
@@ -381,7 +407,7 @@ For the review summary body:
 | Empty diff | Skip the review entirely ("Review Skipped") |
 | Confirmed missing/invalid config at verified base SHA | Use the defined built-in fallback (whole document or individual fields), record provenance, and retain the prominent warning through R5 |
 | R1 workstream failure | @pr-context-gatherer: retry once, then abort. @researcher: proceed with partial context, note the gap |
-| R2 pass failure | Mark that pass `error` with a reason, settle all other statuses, then derive aggregate reviewability |
+| R2 child failure | Record `error` for every slot the failed child owns (the three holistic slots share one reason; the security slot stands alone), settle the other child's slots normally, then derive aggregate reviewability |
 | R3 synthesis failure | Force `local_only`, display available evidence, and terminate the posting path; autonomous mode never asks for recovery |
 | R5/writer failure | Display the full review locally and report remote state; do not start another agent, direct command, endpoint, event, or interactive retry path |
 | Large PR | Per `config.large_pr_strategy`: `"warn"` (note + proceed), `"split-suggestion"` (suggest splitting + proceed), `"proceed"` (silent) |

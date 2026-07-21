@@ -48,7 +48,7 @@ For a candidate `post` or `auto_post`, revalidate the final REVIEW_ACTION, REVIE
    - `auto_post` requires autonomous mode.
    - Require non-empty `decision_reason`, an array of `rails_applied`, no pending edits/rerun, and no earlier local-only state.
 2. **Metadata/trust and no-post rails**
-   - Require canonical validated `owner/repository`, a positive integer PR number, a full base SHA matching config provenance, valid config provenance, and exactly four pass statuses/reasons.
+   - Require canonical validated `owner/repository`, a positive integer PR number, a full base SHA matching config provenance, valid config provenance, a full validated `PR_CONTEXT.head_sha` (40 lowercase hex from R0 — the value Step 3 emits as `commit_id`), and exactly four pass statuses/reasons.
    - Require a schema-valid REVIEW_DOCUMENT whose action and warnings match its source state.
    - If `inline_comments.length > safety_rail_threshold`, apply the comment-volume rail and convert to `local_only`.
    - Any missing, malformed, contradictory, or untrusted control value converts to `local_only`.
@@ -81,11 +81,12 @@ Build one structured object. Pass review body and comment bodies as opaque untru
 
 ```yaml
 POST_REQUEST:
-  schema_version: 1
+  schema_version: 2
   repository:
     owner: "<validated owner>"
     name: "<validated repository>"
   pr_number: <positive integer>
+  commit_id: "<PR_CONTEXT.head_sha>"
   event: "APPROVE" | "REQUEST_CHANGES" | "COMMENT"
   changed_files: ["<validated PR_CONTEXT.changed_files path>"]
   body: <REVIEW_DOCUMENT.review_body as an opaque string>
@@ -96,6 +97,8 @@ POST_REQUEST:
       side: "RIGHT"
       body: <rendered comment as an opaque string>
 ```
+
+`commit_id` is `PR_CONTEXT.head_sha` — trusted GitHub API metadata, already validated as 40 lowercase hex in R0. It pins the posted review to the reviewed commit on GitHub. Schema version 2 made the field required; the writer accepts only version 2. Pinning is not a race fix: the writer's pre-POST SHA-equality drift guard narrows the head-moved race window, and `commit_id` attaches the review to the reviewed commit if the branch moves anyway.
 
 For `partial` and `skipped`, the structured `body` must include the exact immutable warning/notice validated in Step 2. Do not summarize it away or replace it with an action override explanation.
 
@@ -114,7 +117,8 @@ Delegate exactly once to `@pr-comment-writer` with only the structured POST_REQU
 [The structured POST_REQUEST object from Step 3 — the only input]
 
 **MUST DO**:
-- Validate identity, event, changed-file paths, and diff lines before posting
+- Validate identity, event, `commit_id`, changed-file paths, and diff lines before posting
+- Abort local-only before the POST when the current head SHA no longer equals `commit_id` (SHA-equality drift guard)
 - JSON-encode all review body and comment text as data
 - Submit one atomic body-plus-comments review via the approved GitHub Pull Request Review endpoint
 - Return a structured POST_RESULT
@@ -160,7 +164,8 @@ Display the final summary to the user:
 ### Summary
 | Metric | Value |
 |--------|-------|
-| Passes run | [N] of 4 |
+| Holistic dimensions run | [N] of 3 |
+| Security child | [completed/skipped/error] |
 | Total findings | [N] |
 | Inline comments | [N] posted |
 | Blockers | [N] |
@@ -168,13 +173,13 @@ Display the final summary to the user:
 | Nits shown / suppressed | [N] / [M] |
 | Findings filtered | [N] (false positive: [a], below threshold: [b], nit budget: [c], suppressed: [d]) |
 
-### Review Breakdown by Pass
-| Pass | Findings | Status |
-|------|----------|--------|
-| Architecture & Design | [N] | [completed/skipped/error] |
-| Logic & Correctness | [N] | [completed/skipped/error] |
-| Security | [N] | [completed/skipped/error] |
-| Conventions & Polish | [N] | [completed/skipped/error] |
+### Review Breakdown
+| Dimension / Child | Slot | Findings | Status |
+|-------------------|------|----------|--------|
+| Architecture & Design (holistic) | `architecture` | [N] | [completed/skipped/error] |
+| Logic & Correctness (holistic) | `correctness` | [N] | [completed/skipped/error] |
+| Conventions & Polish (holistic) | `conventions` | [N] | [completed/skipped/error] |
+| Security (security child) | `security` | [N] | [completed/skipped/error] |
 
 [If any notable edge cases were encountered:]
 ### Notes
@@ -221,7 +226,7 @@ Findings: [N] total | [blockers]B [criticals]C [majors]M | [action]
 todowrite([
   { id: "r0-intake", content: "R0: Parse PR and load config", status: "completed", priority: "high" },
   { id: "r1-context", content: "R1: Gather context", status: "completed", priority: "high" },
-  { id: "r2-review", content: "R2: Multi-pass review", status: "completed", priority: "high" },
+  { id: "r2-review", content: "R2: Two-child review", status: "completed", priority: "high" },
   { id: "r3-synthesis", content: "R3: Synthesize comments", status: "completed", priority: "high" },
   { id: "r4-gate", content: "R4: User gate", status: "completed", priority: "medium" },
   { id: "r5-post", content: "R5: Post review", status: "completed", priority: "medium" },
@@ -246,7 +251,7 @@ After R5, the Corvus-Review workflow is complete. Any follow-up request starts a
 ## Edge Cases
 
 ### Review Already Exists
-If the user has already reviewed this PR, the authorized review is still one atomic post. Inform the user that previous reviews remain; do not issue a duplicate-detection post or alternate mutation.
+Prior reviews on the PR — including a prior Corvus review (`PR_CONTEXT.prior_corvus_review` non-null, detected via the R0 marker scan) — are the expected re-review scenario, not a duplicate error: R2/R3 already consumed the prior findings for delta focus, and the authorized review is still one atomic post. Inform the user that previous reviews remain on the PR; do not issue a duplicate-detection post, edit or delete a prior review, or run an alternate mutation. When the prior reviewed commit was unreachable (force-push fallback), `review_body` already carries the R3 note — "A prior Corvus review exists, but its reviewed commit is no longer reachable (force-push). A full review was performed; delta-focus was unavailable." — and it must survive posting like every other required notice.
 
 ### PR Closed/Merged During Review
 Revalidate current control state before dispatch. A merged PR is capped at `COMMENT_ONLY` with an informational note. Any state mismatch or posting failure becomes local-only; never retry through another route.

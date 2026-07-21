@@ -157,7 +157,7 @@ Invoke the `question()` tool only after Step 1 returned eligible and displayed t
   1. label: "Post Review", description: "Post to GitHub as [constrained ACTION] with [N] inline comments"
   2. label: "Edit Comments", description: "Modify findings before posting (add, remove, or edit)"
   3. label: "Save Locally", description: "Don't post to GitHub. Display full review in terminal only"
-  4. label: "Re-run Review", description: "Re-run specific passes with adjusted parameters"
+  4. label: "Re-run Review", description: "Re-run the full review, a single holistic dimension, or the security child"
 
 ### Step 3: Handle User Decision
 
@@ -231,14 +231,14 @@ Proceed to R5, which performs no posting work for `local_only`.
 
 Use the `question()` tool to select the scope only because the review already passed posting eligibility:
 
-- question: "Which review passes should be re-run?"
+- question: "Which parts of the review should be re-run?"
 - header: "Re-run Review"
 - options:
-  1. label: "All Passes", description: "Re-run the complete review from R2"
-  2. label: "Architecture Only", description: "Re-run Pass 1: Architecture & Design"
-  3. label: "Correctness Only", description: "Re-run Pass 2: Logic & Correctness"
-  4. label: "Security Only", description: "Re-run Pass 3: Security"
-  5. label: "Conventions Only", description: "Re-run Pass 4: Conventions & Polish"
+  1. label: "Full Review", description: "Re-run both children — holistic and security — from R2"
+  2. label: "Architecture Dimension", description: "Re-run the holistic child with the one-element `dimensions` set: architecture"
+  3. label: "Correctness Dimension", description: "Re-run the holistic child with the one-element `dimensions` set: correctness"
+  4. label: "Conventions Dimension", description: "Re-run the holistic child with the one-element `dimensions` set: conventions"
+  5. label: "Security Child", description: "Re-run the dedicated security child"
 
 ```yaml
 REVIEW_ACTION:
@@ -246,8 +246,10 @@ REVIEW_ACTION:
   decision_reason: "User selected a review re-run"
   rails_applied: []
   edits: []
-  rerun_scope: ["<selected passes>"]
+  rerun_scope: ["<selected scope — see mapping below>"]
 ```
+
+Map the selected option to `rerun_scope`: Full Review → `["architecture", "correctness", "conventions", "security"]`; Architecture Dimension → `["architecture"]`; Correctness Dimension → `["correctness"]`; Conventions Dimension → `["conventions"]`; Security Child → `["security"]`.
 
 Return to R2 with `rerun_scope`, retain non-rerun pass results, and then flow through R3 and R4 again. Re-derive reviewability, warnings, action, and every rail from the new complete status set.
 

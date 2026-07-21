@@ -165,7 +165,7 @@ Corvus contains **38 prompt files**: 16 agents, 4 commands, and 18 skills.
 | `@corvus-review-auto` | **Autonomous PR Review** — zero-interruption PR review with safety rails |
 | `@security-reviewer` | Dedicated security analysis: OWASP Top 10, CWE, taint analysis |
 | `@pr-context-gatherer` | PR-specific context gathering: diffs, dependencies, conventions |
-| `@pr-code-reviewer` | Internal mechanically read-only R2 detection for architecture, correctness, and conventions |
+| `@pr-code-reviewer` | Internal mechanically read-only R2 holistic detection: architecture, correctness, and conventions in one invocation |
 | `@pr-comment-writer` | GitHub review posting: API payloads, error recovery, line validation |
 
 ### Commands (4)
@@ -201,7 +201,7 @@ Skills are loaded on-demand to minimize initial context size. Each Corvus phase 
 |-------|---------|
 | `corvus-review-r0` | PR intake, triage, config loading |
 | `corvus-review-r1` | Parallel context gathering |
-| `corvus-review-r2` | Multi-pass review orchestration |
+| `corvus-review-r2` | Parallel two-child review orchestration (holistic + security) |
 | `corvus-review-r3` | Comment synthesis and filtering |
 | `corvus-review-r4` | User gate / autonomous auto-proceed |
 | `corvus-review-r5` | GitHub posting and completion |
@@ -283,7 +283,7 @@ Key features:
 
 ## Corvus PR Review
 
-Corvus PR Review is a multi-pass code review system that brings the same structured, multi-agent approach to pull request reviews. It runs dedicated review passes in parallel, synthesizes findings, and posts formatted reviews to GitHub — either interactively with user gates or fully autonomously.
+Corvus PR Review is a multi-pass code review system that brings the same structured, multi-agent approach to pull request reviews. It runs two detection children in parallel — a holistic reviewer and a dedicated security reviewer — synthesizes their dimension-tagged findings, and posts formatted reviews to GitHub — either interactively with user gates or fully autonomously.
 
 ### When to Use
 
@@ -314,11 +314,10 @@ R1: Context Gathering [parallel]
     └── @researcher (issues, CI, advisories)
     │
     ▼
-R2: Multi-Pass Review
-    ├── Pass 1: Architecture (@pr-code-reviewer, read-only) ─┐
-    ├── Pass 2: Correctness (@pr-code-reviewer, read-only)   ├─ parallel
-    ├── Pass 3: Security (@security-reviewer, read-only)     ─┘
-    └── Pass 4: Conventions (@pr-code-reviewer, read-only)   ─ sequential
+R2: Two-Child Review [parallel]
+    ├── Holistic: architecture + correctness + conventions (@pr-code-reviewer, read-only)
+    └── Security (@security-reviewer, read-only)
+        → dimension-tagged findings fan into four result slots
     │
     ▼
 R3: Comment Synthesis (dedup, filter, severity, nit budget)
@@ -332,11 +331,12 @@ R5: Authorized post via @pr-comment-writer, or local-only completion
 
 ### Key Features
 
-- **Multi-pass review** across architecture, correctness, security, and conventions
+- **Two parallel review children** — a holistic reviewer covering the architecture, correctness, and conventions dimensions plus a dedicated security reviewer, fanned into four result slots
 - **Dedicated security agent** with OWASP Top 10 and CWE knowledge base
 - **Aggressive false-positive filtering** with confidence scores and nit budget enforcement
 - **Conventional Comments format** for consistent, actionable feedback
 - **Trusted configuration** from `.opencode/review-config.yaml` at the PR's verified immutable base SHA, with safe built-in fallback and visible provenance
+- **Delta re-reviews** — a hidden review marker records the reviewed commit, so a later run skips resolved findings, verifies prior blockers were addressed, and focuses on what changed; posts pin to the reviewed head SHA (`commit_id`) behind a pre-post drift guard
 - **Least-privilege detection** — untrusted PR content is analyzed only by mechanically read-only R2 reviewers; `@code-quality` remains on the implementation-validation path
 - **Interactive and autonomous modes** — preview before posting, or let it run hands-free
 - **Fail-closed posting** — failed/invalid reviews stay local; eligible posts go only through the structured, command-safe `@pr-comment-writer` boundary

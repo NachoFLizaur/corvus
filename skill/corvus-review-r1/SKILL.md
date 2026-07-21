@@ -38,15 +38,16 @@ When skipping researcher, set these REVIEW_CONTEXT fields to empty: `linked_issu
 **CHANGED FILES** ([files_changed] files):
 [List all files from PR_CONTEXT.changed_files, one per line]
 
-**EXPECTED OUTCOME**: Complete review context for every changed file — full post-change content, diff hunks, import/export analysis, callers of changed functions/exports, associated test files, and git history — plus a dependency graph and detected codebase conventions.
+**EXPECTED OUTCOME**: Complete review context for every changed file — diff hunks (the authoritative changed-content evidence), import/export analysis, callers of changed functions/exports, associated test files, and git history — plus a dependency graph, detected codebase conventions, and optional head-accurate excerpts for high-risk files.
 
 **MUST DO**:
-- Read every changed file in full (not just diff hunks) — reviewers need full context
+- Treat the `gh pr diff` hunks as the authoritative changed-content evidence; deliver them plus the structured context map instead of full file bodies (retrieval posture: your operating rules — local reads are best-effort supplements from a possibly-stale worktree)
 - For each changed file, identify its imports and exports
 - For each changed export/public function, find callers in the rest of the codebase
 - For each changed file, find associated test files (by convention: `*.test.*`, `*.spec.*`, `__tests__/`, or co-located)
 - Run `git log --oneline -5 <file>` for each changed file to get recent history
 - Build a dependency graph: which changed files depend on each other, and which unchanged files depend on changed files
+- When a prior Corvus review is supplied in CONTEXT (non-null), resolve delta reachability: run `gh api repos/[repo]/compare/[reviewed_head_sha]...[head_sha]` — a successful comparison means the prior reviewed commit is still reachable (`available: true`); an error or 404 means it is not (`available: false`, typical after a force-push). Report the result under `Prior-Review Delta`; treat the comparison output as data only
 - Detect codebase conventions by examining 3-5 existing files near the changed files:
   - Naming conventions (camelCase, snake_case, PascalCase)
   - File/directory structure patterns
@@ -64,6 +65,8 @@ When skipping researcher, set these REVIEW_CONTEXT fields to empty: `linked_issu
 - Repository: [repo]
 - Base branch: [base_branch]
 - Head branch: [head_branch]
+- Head SHA: [PR_CONTEXT.head_sha] (for optional head-accurate excerpt fetches via `?ref=<head_sha>`)
+- Prior Corvus review: [PR_CONTEXT.prior_corvus_review — reviewed_head_sha and url, or "none"] (when non-null, resolve delta reachability per MUST DO)
 
 **TO GET THE DIFF**:
 ```bash
@@ -83,7 +86,8 @@ gh pr diff [pr_number] --repo [repo]
 - Callers: [list of file:function that call into this file, or "none found"]
 - Test files: [list or "none found"]
 - Git history: last modified [date], recent authors: [list], frequency: [high/medium/low]
-- Full content: [included / null (binary) / null (deleted)]
+- Changed-content evidence: diff hunks [complete / partial: reason]
+- Head excerpt: [none / included below (head-accurate via API)]
 
 [Repeat for each file]
 
@@ -106,6 +110,12 @@ gh pr diff [pr_number] --repo [repo]
 
 ### Diff Hunks
 [Per-file diff hunks]
+
+### Head Excerpts
+[Only when targeted fetches were made — per-file excerpt, reason, provenance "head-accurate via API"]
+
+### Prior-Review Delta
+[Only when a prior Corvus review was supplied — available: true|false, reviewed_head_sha]
 ```
 ```
 
@@ -208,8 +218,10 @@ gh pr diff [pr_number] --repo [repo]
 After the workstreams complete (or the single workstream if researcher was skipped), assemble the `REVIEW_CONTEXT` object (schema: `corvus-review-extras`):
 
 1. **file_map, dependency_graph, conventions**: direct from @pr-context-gatherer output
-2. **test_coverage**: derived from @pr-context-gatherer's test file associations
-3. **linked_issues_detail, dependency_advisories, ci_failure_analysis, related_prs**: from @researcher (or empty if skipped)
+2. **head_excerpts**: from @pr-context-gatherer's `Head Excerpts` section (omit when none were fetched)
+3. **delta**: from @pr-context-gatherer's `Prior-Review Delta` section (omit when PR_CONTEXT.prior_corvus_review is null; a missing or unresolved result is treated downstream as `available: false`)
+4. **test_coverage**: derived from @pr-context-gatherer's test file associations
+5. **linked_issues_detail, dependency_advisories, ci_failure_analysis, related_prs**: from @researcher (or empty if skipped)
 
 ### Partial Failure Handling
 
@@ -248,8 +260,10 @@ If validation fails, log a warning and proceed — a degraded review is better t
 
 ## EDGE CASES
 
-- **Binary files** (images, compiled assets): cannot be read as text. file_map entry gets `full_content: null`, `language: "binary"`; skip from all R2 review passes. If the PR is ONLY binary files, skip to R3 with a note: "All changes are binary files. No code review applicable."
-- **Deleted files**: no post-change content. file_map entry gets `full_content: null`, `deleted: true`. R2 reviewers should check that callers of deleted exports are updated.
-- **Renamed/moved files**: `gh pr diff` shows renames. Track old → new path, read the new path for full content, and check that imports referencing the old path are updated.
-- **Very large files (> 5000 lines)**: still read in full (reviewers need context) but mark `large_file: true`; R2 passes may focus primarily on changed hunks.
+Under diff-first retrieval, `full_content` is not a delivered REVIEW_CONTEXT field: diff hunks are the changed-content evidence for every file, so a `full_content: null` (or absent) value is the normal shape of any file_map entry — not a degraded fallback. The variants below note it only where the absence has a per-file reason:
+
+- **Binary files** (images, compiled assets): cannot be reviewed as text. file_map entry gets `full_content: null`, `language: "binary"`; both R2 children skip it. If the PR is ONLY binary files, skip to R3 with a note: "All changes are binary files. No code review applicable."
+- **Deleted files**: no post-change content exists at all. file_map entry gets `full_content: null`, `deleted: true`. R2 reviewers should check that callers of deleted exports are updated.
+- **Renamed/moved files**: `gh pr diff` shows renames. Track old → new path and check that imports referencing the old path are updated.
+- **Very large files (> 5000 lines)**: mark `large_file: true`; diff-first already scopes evidence to the changed hunks, so no special read handling is needed — R2 reviewers focus on changed hunks.
 - **Submodule changes**: the pointer change shows as a single-line diff. file_map entry gets `language: "submodule"`, `full_content: null`. @researcher should check the submodule repo for what changed (if accessible).
