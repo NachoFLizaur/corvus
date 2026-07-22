@@ -120,6 +120,7 @@ Delegate exactly once to `@pr-comment-writer` with only the structured POST_REQU
 - Validate identity, event, `commit_id`, changed-file paths, and diff lines before posting
 - Abort local-only before the POST when the current head SHA no longer equals `commit_id` (SHA-equality drift guard)
 - JSON-encode all review body and comment text as data
+- Serialize the encoded payload to the approved payload file (write tool) and submit via the fixed `--input .corvus/review-payload.json` argument
 - Submit one atomic body-plus-comments review via the approved GitHub Pull Request Review endpoint
 - Return a structured POST_RESULT
 

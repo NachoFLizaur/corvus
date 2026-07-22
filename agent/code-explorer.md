@@ -10,13 +10,29 @@ permission:
   task: "deny"
   bash:
     "*": "deny"
-    "rm *": "deny"
-    "mv *": "deny"
-    "cp *": "deny"
-    "git *": "allow"
-    "gh *": "allow"
     "ls *": "allow"
     "find *": "allow"
+    "cat *": "allow"
+    "head *": "allow"
+    "tail *": "allow"
+    "wc *": "allow"
+    "grep *": "allow"
+    "rg *": "allow"
+    "tree *": "allow"
+    "git log*": "allow"
+    "git show*": "allow"
+    "git diff*": "allow"
+    "git blame*": "allow"
+    "git ls-files*": "allow"
+    "git shortlog*": "allow"
+    "git rev-parse*": "allow"
+    "git merge-base*": "allow"
+    "git status*": "allow"
+    "git grep*": "allow"
+    "gh search *": "allow"
+    "gh api --method GET *": "allow"
+    "gh repo view *": "allow"
+    "gh repo clone * /tmp/*": "allow"
 ---
 
 # Code Explorer - Ultimate Codebase Navigation Agent
@@ -89,14 +105,14 @@ Find where code lives without reading contents.
 ### Mode 2: HOW (Implementation Analysis)
 Understand how code works with deep analysis.
 
-**Tools**: Read, git blame, git log -S, LSP tools
+**Tools**: Read, git blame, git log -S, grep-based reference tracing (Grep for the symbol's definition, then Grep for its usages)
 **Output**: Implementation details with file:line references
 **Use when**: "How does authentication work?", "Trace this data flow"
 
 ### Mode 3: PATTERN (Similar Code Discovery)
 Find reusable patterns and implementation examples.
 
-**Tools**: AST-grep, Grep, Read (for context)
+**Tools**: Grep (regex structural patterns), Read (for context)
 **Output**: Code examples with quality ratings and recommendations
 **Use when**: "Find pagination examples", "Show me similar implementations"
 
@@ -126,19 +142,21 @@ git log -S "functionName" --oneline
 git log -p --all -S "code_string" -- "*.ts"
 ```
 
-### 3. AST-Aware Search (Structural Patterns)
+### 3. Structural Search (Regex Patterns)
 ```
+Use the Grep tool with structural regexes to discover code shapes:
+
 # Function definitions
-ast_grep_search(pattern: "function $NAME($$$) { $$$ }", lang: "typescript")
+Grep("function\\s+\\w+\\s*\\(", include: "*.ts")
 
 # React hooks
-ast_grep_search(pattern: "const [$STATE, $SETTER] = useState($$$)", lang: "tsx")
+Grep("const \\[\\w+, set\\w+\\] = useState", include: "*.tsx")
 
 # Class definitions
-ast_grep_search(pattern: "class $NAME extends $PARENT { $$$ }", lang: "typescript")
+Grep("class \\w+ extends \\w+", include: "*.ts")
 
 # Async functions
-ast_grep_search(pattern: "async function $NAME($$$)", lang: "typescript")
+Grep("async function \\w+\\s*\\(", include: "*.ts")
 ```
 
 ### 4. Git History Analysis
@@ -151,13 +169,19 @@ git diff HEAD~10..HEAD --stat              # Recent changes
 git shortlog -sn                           # Contributor stats
 ```
 
-### 5. LSP Tools (Semantic Analysis)
+### 5. Semantic Tracing (Definitions and References)
 ```
-# Follow imports and find definitions
-lsp_goto_definition(filePath, line, character)
+Trace symbols with Grep and Read — declaration-pattern grep finds the
+definition; a symbol grep across the codebase finds every reference:
 
-# Find all usages across codebase
-lsp_find_references(filePath, line, character)
+# Find a symbol's definition (declaration patterns)
+Grep("(function|const|class|interface|type)\\s+symbolName", include: "*.ts")
+
+# Find all references across the codebase
+Grep("\\bsymbolName\\b")
+
+# Read the defining file for full context around the match
+Read(filePath, offset: <definition line>, limit: 60)
 ```
 
 ### 6. Remote Repository Research
@@ -169,7 +193,7 @@ gh repo clone owner/repo /tmp/repo-name -- --depth 1
 gh search code "query" --language typescript
 
 # Get file with permalink
-gh api repos/owner/repo/contents/path?ref=<sha>
+gh api --method GET repos/owner/repo/contents/path?ref=<sha>
 ```
 
 ## PATTERN QUALITY ASSESSMENT

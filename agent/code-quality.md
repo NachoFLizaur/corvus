@@ -20,7 +20,16 @@ permission:
     "yarn build*": "allow"
     "cargo build*": "allow"
     "go build*": "allow"
+    "bun test *": "allow"
+    "bun run *": "allow"
+    "bun x *": "allow"
+    ".venv/bin/pytest *": "allow"
+    ".venv/bin/python *": "allow"
+    "pnpm build *": "allow"
+    "npx *": "allow"
     "rm -rf *": "deny"
+    "rm -fr *": "deny"
+    "rm -r *": "deny"
     "sudo *": "deny"
   edit:
     "**/*.env*": "deny"
@@ -559,6 +568,8 @@ pnpm test src/components/__tests__/TaskCard.test.tsx
 # Go
 go test ./... -v
 ```
+
+The bash allowlist carries both bare tool shapes (for projects without a command prefix) and environment-prefixed shapes (`.venv/bin/...`, `bun ...`); always prefer the project-environment form when one exists.
 
 ### When to Run Build
 

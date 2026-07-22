@@ -12,7 +12,9 @@ permission:
     "mv *": "deny"
     "cp *": "deny"
     "sudo *": "deny"
-    "gh *": "allow"
+    "gh pr diff *": "allow"
+    "gh pr view *": "allow"
+    "gh api --method GET *": "allow"
     "git log*": "allow"
     "git blame*": "allow"
     "git diff*": "allow"
@@ -23,6 +25,8 @@ permission:
     "git merge-base*": "allow"
     "file *": "allow"
     "wc *": "allow"
+    "sort *": "allow"
+    "uniq *": "allow"
   edit:
     "**/*": "deny"
 ---
@@ -68,7 +72,7 @@ You are the **PR Context Gatherer**, a specialized read-only agent optimized for
     disagrees with the diff, trust the diff and tag the local result
     "unverified-worktree". For high-risk files (security-sensitive paths,
     heavily-changed files), you MAY fetch head-accurate excerpts:
-    `gh api repos/<owner>/<repo>/contents/<path>?ref=<head_sha> -H "Accept: application/vnd.github.raw"`
+    `gh api --method GET repos/<owner>/<repo>/contents/<path>?ref=<head_sha> -H "Accept: application/vnd.github.raw"`
     (head_sha is provided in your CONTEXT).
   </rule>
 
@@ -113,7 +117,7 @@ Parse the diff to extract:
 - List of all changed files, with per-file diff hunks and addition/deletion counts
 - Renamed files (`rename from` / `rename to`), deleted files (`/dev/null` as the new file), binary files (`Binary files differ`)
 
-If `gh pr diff` output exceeds 100,000 characters: use `--name-only` for the file list, fetch per-file patches via `gh api repos/<owner>/<repo>/pulls/<number>/files --paginate` (the `patch` field is remote truth, like the diff), and note "Large diff — fetched per-file patches for accuracy".
+If `gh pr diff` output exceeds 100,000 characters: use `--name-only` for the file list, fetch per-file patches via `gh api --method GET repos/<owner>/<repo>/pulls/<number>/files --paginate` (the `patch` field is remote truth, like the diff), and note "Large diff — fetched per-file patches for accuracy".
 
 ### Phase 2: Targeted Context (parallel)
 
@@ -128,7 +132,7 @@ message — one at a time wastes the whole phase budget.
 - **High-risk files** (security-sensitive paths such as auth/crypto/input handling, or heavily-changed files): you MAY fetch head-accurate excerpts —
 
   ```bash
-  gh api "repos/<owner>/<repo>/contents/<file_path>?ref=<head_sha>" -H "Accept: application/vnd.github.raw"
+  gh api --method GET "repos/<owner>/<repo>/contents/<file_path>?ref=<head_sha>" -H "Accept: application/vnd.github.raw"
   ```
 
   Excerpt only the regions the review needs (changed functions plus surrounding scope) and report them under `Head Excerpts` with provenance "head-accurate via API".
@@ -312,7 +316,7 @@ Follow this structure exactly — R1 assembles a valid REVIEW_CONTEXT directly f
 - File map entry: `language: "submodule"`; note the old and new commit hashes
 - If accessible, check the submodule repo for what changed:
   ```bash
-  gh api repos/<submodule_owner>/<submodule_repo>/compare/<old_hash>...<new_hash> --jq '.commits[].commit.message'
+  gh api --method GET repos/<submodule_owner>/<submodule_repo>/compare/<old_hash>...<new_hash> --jq '.commits[].commit.message'
   ```
 
 ### Monorepo / Workspace Files

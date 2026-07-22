@@ -53,7 +53,7 @@ const frontmatterBlock = (relPath: string): string => {
 /** One nested map under a top-level frontmatter key (for mechanical policy checks). */
 const nestedFrontmatterBlock = (
   relPath: string,
-  key: "bash" | "task",
+  key: "bash" | "task" | "edit" | "write",
 ): string => {
   const lines = frontmatterBlock(relPath).split("\n")
   const start = lines.indexOf(`  ${key}:`)
@@ -870,13 +870,14 @@ describe("prompt contracts: review trust + deterministic state", () => {
 
     expect(bashPolicy).toContain('    "*": "deny"')
     expect(allowedCommands).toEqual([
-      `'gh api --method GET "repos/*/pulls/*" -H "Accept: application/vnd.github.v3.diff"'`,
-      `'gh api --method POST "repos/*/pulls/*/reviews" --input -'`,
+      `'gh api --method GET repos/*/pulls/* -H Accept:*'`,
+      `'gh api --method POST repos/*/pulls/*/reviews --input .corvus/review-payload.json'`,
     ])
     expectContains(COMMENT_WRITER, [
       "Accept only one structured POST_REQUEST delegated by R5",
       "Use a real JSON encoder (`JSON.stringify` or an equivalent typed encoder)",
-      "stdin = jsonEncode(api_payload)",
+      "--input .corvus/review-payload.json",
+      "bytes = jsonEncode(api_payload)",
       "Never use `eval`, `sh -c`, `bash -c`, command substitution",
     ])
     expectContains(REVIEW_R5, [
@@ -1672,7 +1673,7 @@ describe("review pipeline redesign — phase 1 pins", () => {
 
       // The head-accurate excerpt escape hatch pins the exact fetch command.
       expectContains(PR_GATHERER, [
-        'gh api "repos/<owner>/<repo>/contents/<file_path>?ref=<head_sha>" -H "Accept: application/vnd.github.raw"',
+        'gh api --method GET "repos/<owner>/<repo>/contents/<file_path>?ref=<head_sha>" -H "Accept: application/vnd.github.raw"',
       ])
     })
 
@@ -2030,8 +2031,9 @@ describe("review-pipeline-redesign: phase 3 contracts", () => {
 
     test("writer bash allowlist stays two frozen command shapes", () => {
       // Requirement 6: the Phase G toEqual pin owns the exact command bytes
-      // (frozen — zero diff in this feature). This structural re-assertion
-      // guards the same closed two-command shape without duplicating bytes.
+      // (now the file-input shapes from permissions-alignment Task 01). This
+      // structural re-assertion guards the same closed two-command shape
+      // without duplicating bytes.
       const bashPolicy = nestedFrontmatterBlock(COMMENT_WRITER, "bash")
       const allowedCommands = [
         ...bashPolicy.matchAll(/^    (.+): "allow"$/gm),
@@ -2987,5 +2989,477 @@ describe("architectural-wave — phase 4 pins", () => {
     // Trailing whitespace sweep stays owned by "has no trailing whitespace
     // in hardened prompts, commands, or docs" (the PHASE_H_SAFETY_TEXT_FILES
     // mechanism) — comment cross-reference only, no duplicate here.
+  })
+})
+
+// ============================================================================
+// Permissions alignment — Phase 1 (Tasks 01-02): writer payload contract
+// ============================================================================
+
+describe("permissions-alignment: writer payload contract", () => {
+  const PAYLOAD_PATH = ".corvus/review-payload.json"
+
+  test("writer edit and write maps allow only the payload path", () => {
+    for (const key of ["edit", "write"] as const) {
+      const block = nestedFrontmatterBlock(COMMENT_WRITER, key)
+      expect(block).not.toBe("")
+
+      expect(block).toContain('    "*": "deny"')
+      const allowedPaths = [
+        ...block.matchAll(/^    (.+): "allow"$/gm),
+      ].map(([, path]) => path ?? "")
+      // Captured raw text includes the YAML double quotes around the key
+      // (mirrors the Phase G bash toEqual, which keeps the single quotes).
+      expect(allowedPaths).toEqual([`"${PAYLOAD_PATH}"`])
+    }
+  })
+
+  test("writer bash catch-all precedes every allow", () => {
+    // LAW rule 4: last matching rule wins, so the catch-all deny must be
+    // the FIRST entry — a moved anchor must fail, not vacuously pass.
+    const bashPolicy = nestedFrontmatterBlock(COMMENT_WRITER, "bash")
+    expect(bashPolicy).not.toBe("")
+
+    const lines = bashPolicy.split("\n")
+    expect(lines.indexOf('    "*": "deny"')).toBe(0)
+    const allowIndexes = lines.flatMap((line, index) =>
+      line.endsWith(': "allow"') ? [index] : [],
+    )
+    expect(allowIndexes.length).toBeGreaterThanOrEqual(1)
+    for (const index of allowIndexes) {
+      expect(index).toBeGreaterThan(0)
+    }
+  })
+
+  test("writer bash patterns are quote-free", () => {
+    const bashPolicy = nestedFrontmatterBlock(COMMENT_WRITER, "bash")
+    expect(bashPolicy).not.toBe("")
+
+    const allowedKeys = [
+      ...bashPolicy.matchAll(/^    (.+): "allow"$/gm),
+    ].map(([, key]) => key ?? "")
+    expect(allowedKeys.length).toBeGreaterThanOrEqual(1)
+    for (const key of allowedKeys) {
+      // YAML single quotes AROUND a key are YAML syntax, not pattern bytes
+      // (LAW rule 2) — strip them, then require zero quotes INSIDE.
+      const pattern = key.replace(/^'([\s\S]*)'$/, "$1")
+      expect(pattern).not.toBe("")
+      expect(pattern).not.toContain('"')
+      expect(pattern).not.toContain("'")
+    }
+  })
+
+  test("payload path consistent across all three surfaces", () => {
+    // three-surface-artifact: writer RECEIVER carries the path in the bash
+    // POST key, the edit map, the write map, and the Step 5 dispatch prose;
+    // the r5 DISPATCH Step 4 bullet names the same fixed --input path.
+    expect(countOccurrences(COMMENT_WRITER, PAYLOAD_PATH)).toBeGreaterThanOrEqual(4)
+    expect(countOccurrences(REVIEW_R5, PAYLOAD_PATH)).toBeGreaterThanOrEqual(1)
+  })
+
+  test("no stdin channel returns to the writer", () => {
+    // LAW rule 6: the Bash tool has no stdin channel — the old
+    // `--input -` + stdin design was mechanically impossible.
+    expectAbsent(COMMENT_WRITER, ["stdin"])
+    expectAbsent(REVIEW_R5, ["--input -"])
+  })
+})
+
+// ============================================================================
+// Permissions alignment — Phase 2 (Tasks 03-05): read-only postures
+// ============================================================================
+
+describe("permissions-alignment: read-only postures", () => {
+  const EXPLORER = "agent/code-explorer.md"
+
+  test("explorer bash map enumerates read shapes only", () => {
+    const bashPolicy = nestedFrontmatterBlock(EXPLORER, "bash")
+    expect(bashPolicy).not.toBe("")
+
+    // LAW rule 4: catch-all deny FIRST; enumerated read shapes come after.
+    const lines = bashPolicy.split("\n")
+    expect(lines.indexOf('    "*": "deny"')).toBe(0)
+
+    // Extract-and-compare enumeration pin (captured raw text keeps the YAML
+    // double quotes, mirroring the writer payload-map pin). This freezes the
+    // D2 enumeration — future widening must be a deliberate pin update.
+    const allowedKeys = [
+      ...bashPolicy.matchAll(/^    (.+): "allow"$/gm),
+    ].map(([, key]) => key ?? "")
+    expect(allowedKeys.length).toBeGreaterThanOrEqual(1)
+    expect([...allowedKeys].sort()).toEqual([
+      '"cat *"',
+      '"find *"',
+      '"gh api --method GET *"',
+      '"gh repo clone * /tmp/*"',
+      '"gh repo view *"',
+      '"gh search *"',
+      '"git blame*"',
+      '"git diff*"',
+      '"git grep*"',
+      '"git log*"',
+      '"git ls-files*"',
+      '"git merge-base*"',
+      '"git rev-parse*"',
+      '"git shortlog*"',
+      '"git show*"',
+      '"git status*"',
+      '"grep *"',
+      '"head *"',
+      '"ls *"',
+      '"rg *"',
+      '"tail *"',
+      '"tree *"',
+      '"wc *"',
+    ])
+  })
+
+  test("explorer has no broad git/gh allows", () => {
+    // Read-only is mechanically true only without blanket VCS allows —
+    // `git *` would cover push/reset; `gh *` would cover pr merge.
+    const bashPolicy = nestedFrontmatterBlock(EXPLORER, "bash")
+    expect(bashPolicy).not.toBe("")
+    expect(bashPolicy).not.toContain('"git *"')
+    expect(bashPolicy).not.toContain('"gh *"')
+  })
+
+  test("explorer instructs no phantom tools", () => {
+    // D2c: the prompt must not reference tools that do not exist in this
+    // environment (they caused silent capability gaps, not denials).
+    expect(read(EXPLORER)).not.toBe("")
+    expectAbsent(EXPLORER, [
+      "ast_grep_search",
+      "lsp_goto_definition",
+      "lsp_find_references",
+    ])
+  })
+
+  test("explorer gh api examples carry --method GET", () => {
+    // LAW rule 5 alignment: every instructed `gh api` byte shape must match
+    // the read-only allow key `gh api --method GET *`.
+    const ghApiLines = read(EXPLORER)
+      .split("\n")
+      .filter((line) => line.includes("gh api "))
+    expect(ghApiLines.length).toBeGreaterThanOrEqual(1)
+    for (const line of ghApiLines) {
+      expect(line).toContain("--method GET")
+    }
+  })
+
+  test("gatherer bash map is GET-only with pipeline shapes", () => {
+    const bashPolicy = nestedFrontmatterBlock(PR_GATHERER, "bash")
+    expect(bashPolicy).not.toBe("")
+
+    // LAW rule 4: catch-all deny FIRST; specific rules after.
+    const lines = bashPolicy.split("\n")
+    expect(lines.indexOf('    "*": "deny"')).toBe(0)
+
+    // D3: the only gh shapes are pr diff/view + the method-pinned api form;
+    // sort/uniq cover the instructed pipeline segments (LAW rule 3 splits
+    // pipelines per segment).
+    for (const allow of [
+      '    "gh pr diff *": "allow"',
+      '    "gh pr view *": "allow"',
+      '    "gh api --method GET *": "allow"',
+      '    "sort *": "allow"',
+      '    "uniq *": "allow"',
+    ]) {
+      expect(lines).toContain(allow)
+    }
+    expect(bashPolicy).not.toContain('"gh *"')
+  })
+
+  test("no bare gh api instruction on gatherer surfaces", () => {
+    // Three-surface GET rewrite: RECEIVER (gatherer prompt) and DISPATCH
+    // (r1 skill) instruct only method-pinned `gh api --method GET` shapes.
+    // extras is EXCLUDED from the bare scan: it carries one sanctioned
+    // generic `gh api ... ?ref=<head_sha>` doc mention — its compare
+    // command is pinned positively instead.
+    for (const surface of [PR_GATHERER, REVIEW_R1]) {
+      const content = read(surface)
+      expect(content).not.toBe("")
+      // Non-vacuous: each surface still instructs at least one gh api call.
+      const total = [...content.matchAll(/gh api /g)].length
+      expect(total).toBeGreaterThanOrEqual(1)
+      const bareOffsets = [
+        ...content.matchAll(/gh api (?!--method GET)/g),
+      ].map((match) => `${surface}@${match.index}`)
+      expect(bareOffsets).toEqual([])
+    }
+    expectContains(REVIEW_EXTRAS, [
+      "gh api --method GET repos/<owner>/<repo>/compare/<reviewed_head_sha>...<head_sha>",
+    ])
+  })
+
+  test("plan-reviewer instructs no bash", () => {
+    // D7: bash is denied for this agent — the prompt teaches grep-tool
+    // probes instead of a bash fence it could never run.
+    const content = read(PLAN_REVIEWER)
+    expect(content).not.toBe("")
+    expect(content).toContain("### Example Probes (grep tool)")
+    expectAbsent(PLAN_REVIEWER, ["```bash", "### Example Commands"])
+
+    const bashPolicy = nestedFrontmatterBlock(PLAN_REVIEWER, "bash")
+    expect(bashPolicy).toBe('    "*": "deny"')
+  })
+})
+
+// ============================================================================
+// Permissions alignment — Phase 3 (Tasks 07-09): deny hardening + validation
+// allowlists
+// ============================================================================
+
+describe("permissions-alignment: deny hardening + validation allowlists", () => {
+  test("corvus-auto git denies are trailing-star hardened", () => {
+    // LAW rule 9: `git init*` (no space before `*`) covers bare `git init`
+    // AND `git init --bare …` in one pattern — the star-less form was
+    // bypassable by any argument.
+    const bashPolicy = nestedFrontmatterBlock(CORVUS_AUTO, "bash")
+    expect(bashPolicy).not.toBe("")
+    for (const deny of [
+      '"git init*": "deny"',
+      '"git reset --hard*": "deny"',
+      '"git push --force*": "deny"',
+      '"git push -f*": "deny"',
+    ]) {
+      expect(bashPolicy).toContain(deny)
+    }
+    // Fixed-string full-entry negative: this exact byte run (quote closing
+    // directly after `init`, then the colon) cannot false-positive on the
+    // hardened `"git init*": "deny"` form.
+    expect(bashPolicy).not.toContain('"git init": "deny"')
+  })
+
+  test("rm deny variants present in both orchestrators", () => {
+    // LAW rule 9: `rm -r *` does NOT match `rm -rf x` (literal `-r ` prefix)
+    // — recursive-delete denies need all three explicit variants.
+    for (const file of [CORVUS, CORVUS_AUTO]) {
+      const bashPolicy = nestedFrontmatterBlock(file, "bash")
+      expect(bashPolicy).not.toBe("")
+      for (const deny of [
+        '"rm -rf *": "deny"',
+        '"rm -fr *": "deny"',
+        '"rm -r *": "deny"',
+      ]) {
+        expect(bashPolicy).toContain(deny)
+      }
+    }
+  })
+
+  test("orchestrator catch-all precedes every deny (load-bearing order)", () => {
+    // LAW rule 4 (last-match-wins): the broad `"*": "allow"` must be entry 0
+    // so every deny after it wins. A reordered map FAILS here: if the
+    // catch-all is not first, the index-0 pin breaks; if a deny is hoisted
+    // above it, the catch-all silently overrides that deny at runtime.
+    for (const file of [CORVUS, CORVUS_AUTO]) {
+      const lines = nestedFrontmatterBlock(file, "bash")
+        .split("\n")
+        .filter((line) => line.trim() !== "")
+      expect(lines.length).toBeGreaterThanOrEqual(2)
+      expect(lines[0]).toBe('    "*": "allow"')
+      const denyLines = lines.filter((line) => line.endsWith(': "deny"'))
+      expect(denyLines.length).toBeGreaterThanOrEqual(1)
+      for (const deny of denyLines) {
+        expect(lines.slice(1)).toContain(deny)
+        expect(lines.indexOf(deny)).toBeGreaterThan(0)
+      }
+    }
+  })
+
+  test("corvus bash map is a subset of corvus-auto map (mirror parity)", () => {
+    // Mirrored-pair parity: the interactive orchestrator's map is exactly
+    // corvus-auto's minus the git-delivery denies — every corvus entry
+    // exists verbatim (same bytes, same indent) in corvus-auto.
+    const corvusLines = nestedFrontmatterBlock(CORVUS, "bash")
+      .split("\n")
+      .filter((line) => line.trim() !== "")
+    const autoLines = nestedFrontmatterBlock(CORVUS_AUTO, "bash")
+      .split("\n")
+      .filter((line) => line.trim() !== "")
+    expect(corvusLines.length).toBeGreaterThanOrEqual(1)
+    const missing = corvusLines.filter((line) => !autoLines.includes(line))
+    expect(missing).toEqual([])
+  })
+
+  test("no inert redirection denies anywhere", () => {
+    // LAW rule 3: redirections are part of their segment's raw text — no
+    // sub-command's source begins with `>`, so a `> /dev/*` deny key can
+    // never match anything and only feigns protection.
+    for (const file of [CORVUS, CORVUS_AUTO, CODE_IMPLEMENTER]) {
+      expect(read(file)).not.toBe("")
+      expectAbsent(file, ['"> /dev/*"'])
+    }
+  })
+
+  test("implementer bash has no ask and denies chmod", () => {
+    // Autonomy fix (D5): an `ask` value would block delegated-mode runs on
+    // a prompt no one is watching; chmod joins the destructive-command
+    // denies.
+    const bashPolicy = nestedFrontmatterBlock(CODE_IMPLEMENTER, "bash")
+    expect(bashPolicy).not.toBe("")
+    expect(bashPolicy).toContain('"chmod *": "deny"')
+    expect(bashPolicy).not.toContain(': "ask"')
+  })
+
+  test("implementer validation toolset spot pins", () => {
+    // D5 byte-real shapes (LAW rule 5: `.venv/bin/` and friends are literal
+    // prefixes). Spot pins only — the full allow-list may widen with future
+    // byte-real additions without pin churn.
+    const bashPolicy = nestedFrontmatterBlock(CODE_IMPLEMENTER, "bash")
+    expect(bashPolicy).not.toBe("")
+    for (const allow of [
+      '".venv/bin/*": "allow"',
+      '"sed -n *": "allow"',
+      '"rg *": "allow"',
+      '"bun *": "allow"',
+    ]) {
+      expect(bashPolicy).toContain(allow)
+    }
+    // Only the read-only sed shape is allowed: a broad `sed *` would cover
+    // write-capable in-place edits (`sed -i`).
+    expect(bashPolicy).not.toContain('"sed *": "allow"')
+  })
+
+  test("code-quality carries contract-named runner shapes", () => {
+    // D4 back-compat + additions: the byte-real runners this repo's
+    // workflow names (bun/venv/npx) joined the baseline shapes, which
+    // survive untouched.
+    const bashPolicy = nestedFrontmatterBlock(CODE_QUALITY, "bash")
+    expect(bashPolicy).not.toBe("")
+    for (const entry of [
+      '"bun test *": "allow"',
+      '"bun run *": "allow"',
+      '".venv/bin/pytest *": "allow"',
+      '".venv/bin/python *": "allow"',
+      '"npx *": "allow"',
+      '"rm -fr *": "deny"',
+      '"rm -r *": "deny"',
+      '"pytest*": "allow"',
+      '"tsc*": "allow"',
+    ]) {
+      expect(bashPolicy).toContain(entry)
+    }
+    // This map has NO catch-all: enumerated allows with trailing denies.
+    // Order guard is deny-last (catch-all-first does not apply here).
+    expect(bashPolicy).not.toContain('"*"')
+    const lines = bashPolicy.split("\n").filter((line) => line.trim() !== "")
+    expect(lines.length).toBeGreaterThanOrEqual(2)
+    const lastAllowIndex = lines
+      .map((line) => line.endsWith(': "allow"'))
+      .lastIndexOf(true)
+    const firstDenyIndex = lines.findIndex((line) => line.endsWith(': "deny"'))
+    expect(lastAllowIndex).toBeGreaterThanOrEqual(0)
+    expect(firstDenyIndex).toBeGreaterThan(lastAllowIndex)
+  })
+})
+
+// ============================================================================
+// Permissions alignment — Phase 4 (Tasks 11-12): structural sweep guards
+// ============================================================================
+//
+// Structural (not byte-frozen) invariants over the 8 agents this feature
+// edited, so the core disciplines survive future prompt edits. Byte-freezing
+// belongs to the per-contract pins from Tasks 01/02/06/10; the untouched
+// agents (reviewers/researcher/task-planner/…) are governed by their own
+// dedicated pins and are intentionally NOT swept here (unowned-region rule).
+// The Task 11 Phase 4 delta recorded ZERO matrix-discovered pin gaps beyond
+// the four guards specified below.
+
+const EDITED_PERMISSION_AGENTS = [
+  "agent/pr-comment-writer.md",
+  "agent/code-explorer.md",
+  "agent/pr-context-gatherer.md",
+  "agent/plan-reviewer.md",
+  "agent/code-quality.md",
+  "agent/code-implementer.md",
+  "agent/corvus.md",
+  "agent/corvus-auto.md",
+]
+
+/** Bash-map entry lines (non-empty) of one edited agent's frontmatter. */
+const bashMapLines = (relPath: string): string[] =>
+  nestedFrontmatterBlock(relPath, "bash")
+    .split("\n")
+    .filter((line) => line.trim() !== "")
+
+/**
+ * Pattern content of one bash-map entry line with ONE layer of YAML quoting
+ * stripped (`"key": "value"` or `'key': "value"`), or null for non-entry
+ * lines. YAML quotes AROUND a key are syntax, not pattern bytes (LAW rule 2).
+ */
+const bashPatternContent = (line: string): string | null => {
+  const match = line
+    .trim()
+    .match(/^(?:"(.*)"|'(.*)'):\s*"(?:allow|deny|ask)"$/)
+  if (!match) return null
+  return match[1] ?? match[2] ?? ""
+}
+
+describe("permissions-alignment: structural guards", () => {
+  test("no quote characters inside any bash pattern", () => {
+    // LAW rule 2: patterns match RAW source text — quote characters inside a
+    // pattern rarely byte-align with real commands and drift silently.
+    const files_with_bash_map = EDITED_PERMISSION_AGENTS.filter(
+      (file) => bashMapLines(file).length > 0,
+    )
+    // Non-vacuity: a helper that silently extracts nothing must fail the
+    // test, not pass it (plan-reviewer's map is a single `"*": "deny"` line;
+    // all others are multi-entry).
+    expect(files_with_bash_map.length).toBeGreaterThanOrEqual(6)
+
+    const offenders = files_with_bash_map.flatMap((file) =>
+      bashMapLines(file).flatMap((line) => {
+        const content = bashPatternContent(line)
+        if (content === null) return [`${file}: unparsed entry ${line.trim()}`]
+        return content.includes('"') || content.includes("'")
+          ? [`${file}: ${line.trim()}`]
+          : []
+      }),
+    )
+    expect(offenders).toEqual([])
+  })
+
+  test("catch-alls come first in every bash map that has one", () => {
+    // LAW rule 4: LAST matching rule wins — a catch-all placed after
+    // specific rules would swallow every override.
+    const withCatchAll = EDITED_PERMISSION_AGENTS.filter((file) =>
+      bashMapLines(file).some(
+        (line) => bashPatternContent(line) === "*",
+      ),
+    )
+    // Non-vacuity: six of the eight edited maps carry a catch-all today.
+    expect(withCatchAll.length).toBeGreaterThanOrEqual(1)
+
+    const misplaced = withCatchAll.filter(
+      (file) => bashPatternContent(bashMapLines(file)[0] ?? "") !== "*",
+    )
+    expect(misplaced).toEqual([])
+  })
+
+  test("read-only agents never regain broad git/gh", () => {
+    // Requirement 3 durability: explorer and gatherer stay enumerated —
+    // no blanket `git *` / `gh *` reopening mutation or network surface.
+    for (const file of [
+      "agent/code-explorer.md",
+      "agent/pr-context-gatherer.md",
+    ]) {
+      const patterns = bashMapLines(file)
+        .map(bashPatternContent)
+        .filter((content): content is string => content !== null)
+      expect(patterns.length).toBeGreaterThanOrEqual(1)
+      expect(patterns).not.toContain("git *")
+      expect(patterns).not.toContain("gh *")
+    }
+  })
+
+  test("singular permission survives feature-wide", () => {
+    // Cheap redundancy on the edited set only — the authoritative 38-file
+    // singular-key sweep lives in the Phase A block and is not duplicated.
+    for (const file of EDITED_PERMISSION_AGENTS) {
+      const frontmatter = frontmatterBlock(file)
+      expect(frontmatter).not.toBe("")
+      expect(/^permission:$/m.test(frontmatter)).toBe(true)
+      expect(/^permissions:$/m.test(frontmatter)).toBe(false)
+    }
   })
 })

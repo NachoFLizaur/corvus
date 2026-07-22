@@ -387,7 +387,7 @@ REVIEW_CONTEXT:
   related_prs: [<RelatedPR>]
 ```
 
-Changed-content evidence is `diff_hunks` (remote truth from `gh pr diff`) — the schema carries no full file bodies. `head_excerpts` is optional and normally absent: the gatherer MAY populate it with targeted excerpts for high-risk files, fetched head-accurately via `gh api ... ?ref=<head_sha>` (head_sha from PR_CONTEXT). `delta` records prior-review delta reachability, resolved during R1 by the gatherer (via `gh api repos/<owner>/<repo>/compare/<reviewed_head_sha>...<head_sha>`) when `PR_CONTEXT.prior_corvus_review` is non-null; downstream phases treat a missing or unresolved `delta` as `available: false` (full review with the force-push note).
+Changed-content evidence is `diff_hunks` (remote truth from `gh pr diff`) — the schema carries no full file bodies. `head_excerpts` is optional and normally absent: the gatherer MAY populate it with targeted excerpts for high-risk files, fetched head-accurately via `gh api ... ?ref=<head_sha>` (head_sha from PR_CONTEXT). `delta` records prior-review delta reachability, resolved during R1 by the gatherer (via `gh api --method GET repos/<owner>/<repo>/compare/<reviewed_head_sha>...<head_sha>`) when `PR_CONTEXT.prior_corvus_review` is non-null; downstream phases treat a missing or unresolved `delta` as `available: false` (full review with the force-push note).
 
 ### REVIEW_FINDINGS (produced by R2)
 

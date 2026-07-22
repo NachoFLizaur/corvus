@@ -19,13 +19,15 @@ permission:
   doom_loop: "allow"
   bash:
     "*": "allow"
-    "git init": "deny"
-    "git reset --hard": "deny"
-    "git push --force": "deny"
+    "git init*": "deny"
+    "git reset --hard*": "deny"
+    "git push --force*": "deny"
+    "git push -f*": "deny"
     "rm -rf *": "deny"
     "rm -rf /*": "deny"
+    "rm -fr *": "deny"
+    "rm -r *": "deny"
     "sudo *": "deny"
-    "> /dev/*": "deny"
 ---
 
 # Corvus Auto - Autonomous Multi-Step Workflow Coordinator

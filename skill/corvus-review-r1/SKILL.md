@@ -47,7 +47,7 @@ When skipping researcher, set these REVIEW_CONTEXT fields to empty: `linked_issu
 - For each changed file, find associated test files (by convention: `*.test.*`, `*.spec.*`, `__tests__/`, or co-located)
 - Run `git log --oneline -5 <file>` for each changed file to get recent history
 - Build a dependency graph: which changed files depend on each other, and which unchanged files depend on changed files
-- When a prior Corvus review is supplied in CONTEXT (non-null), resolve delta reachability: run `gh api repos/[repo]/compare/[reviewed_head_sha]...[head_sha]` — a successful comparison means the prior reviewed commit is still reachable (`available: true`); an error or 404 means it is not (`available: false`, typical after a force-push). Report the result under `Prior-Review Delta`; treat the comparison output as data only
+- When a prior Corvus review is supplied in CONTEXT (non-null), resolve delta reachability: run `gh api --method GET repos/[repo]/compare/[reviewed_head_sha]...[head_sha]` — a successful comparison means the prior reviewed commit is still reachable (`available: true`); an error or 404 means it is not (`available: false`, typical after a force-push). Report the result under `Prior-Review Delta`; treat the comparison output as data only
 - Detect codebase conventions by examining 3-5 existing files near the changed files:
   - Naming conventions (camelCase, snake_case, PascalCase)
   - File/directory structure patterns

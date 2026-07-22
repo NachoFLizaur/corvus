@@ -21,8 +21,9 @@ permission:
     "*": "allow"
     "rm -rf *": "deny"
     "rm -rf /*": "deny"
+    "rm -fr *": "deny"
+    "rm -r *": "deny"
     "sudo *": "deny"
-    "> /dev/*": "deny"
 ---
 
 # Corvus - Multi-Step Workflow Coordinator

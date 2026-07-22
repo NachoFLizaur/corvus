@@ -55,7 +55,7 @@ Each phase validates its input object against a gate before proceeding (gate tab
 - The review orchestrators have a closed Task allowlist: `pr-context-gatherer`, `researcher`, `pr-code-reviewer`, `security-reviewer`, and `pr-comment-writer`. They never delegate to themselves, their sibling orchestrator, `code-quality`, `ux-dx-quality`, a general implementer, or a PR-selected agent.
 - `pr-code-reviewer` and `security-reviewer` are mechanically read-only: only `read`, `glob`, and `grep` are allowed. Bash, edit/write, delegation, questions, network/external access, and state changes are denied. Architecture, correctness, and conventions use `pr-code-reviewer`; security alone uses `security-reviewer`.
 - Review orchestrators can run only narrowly allowlisted, read-only PR metadata/diff/config commands. They never post directly.
-- `pr-comment-writer` is the sole mutation boundary. It accepts one structured R5 payload, validates identity/event/current diff locations, JSON-encodes untrusted text through stdin, and can use only the fixed current-diff GET and atomic Pull Request Review POST shapes.
+- `pr-comment-writer` is the sole mutation boundary. It accepts one structured R5 payload, validates identity/event/current diff locations, JSON-encodes untrusted text into the approved payload file, and can use only the fixed current-diff GET and atomic file-input Pull Request Review POST shapes.
 
 ---
 

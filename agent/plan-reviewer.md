@@ -141,14 +141,14 @@ Grep all `*.md` files in the task directory for the patterns below (case-insensi
 - "determine the best", "figure out", "decide later"
 - "handle accordingly", "as appropriate"
 
-### Example Commands
-```bash
-# Scan for vague language in task files
-grep -in "appropriately\|properly\|correctly\|as needed\|adequate" .corvus/tasks/[feature]/*.md
+### Example Probes (grep tool)
 
-# Scan for deferred decisions
-grep -in "TODO\|TBD\|to be determined\|determine the best" .corvus/tasks/[feature]/*.md
-```
+Run these as grep TOOL calls (bash is denied for this agent), case-insensitive, scoped to `.corvus/tasks/[feature]/*.md`:
+
+- Vague language: pattern `appropriately|properly|correctly|as needed|adequate`
+- Deferred decisions: pattern `TODO|TBD|to be determined|determine the best`
+
+Show each tool call and its matches (file, line, context) in your output, per the Show-your-work rule.
 
 ## Known Failure Classes (Learnings Probe)
 
