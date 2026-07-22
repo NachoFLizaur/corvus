@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
-import plugin, { PROTECTED_AGENTS } from "../index"
+import plugin from "../index"
+import { PROTECTED_AGENTS } from "../protected-agents"
 
 /** Run the config hook with no user agent config to capture plugin defaults. */
 const loadPluginAgents = async (): Promise<Record<string, any>> => {

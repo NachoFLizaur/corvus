@@ -27,6 +27,20 @@ describe("built plugin", () => {
     expect(typeof plugin).toBe("function")
   })
 
+  test("every entry-module export is a plugin function (opencode loader contract)", async () => {
+    // opencode's plugin loader (getLegacyPlugins) iterates Object.values(mod)
+    // over the ENTRY module and throws TypeError("Plugin export is not a
+    // function") if any export is not a plugin function. A stray constant
+    // export (e.g. PROTECTED_AGENTS, shipped in 0.8.0-beta.0) breaks the
+    // entire plugin at load time even though the default export is valid.
+    const mod = await import(resolve(DIST, "index.js"))
+    const entries = Object.entries(mod)
+    expect(entries.length).toBeGreaterThanOrEqual(1)
+    for (const [name, value] of entries) {
+      expect(`${name}:${typeof value}`).toBe(`${name}:function`)
+    }
+  })
+
   test("config hook loads agents", async () => {
     const config = { agent: {}, command: {}, skills: { paths: [] } } as any
     const hooks = await plugin({})

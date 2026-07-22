@@ -19,20 +19,9 @@ interface ConfigWithSkills {
 
 type PlainObject = Record<string, unknown>
 
-/**
- * Security-boundary agents that ingest untrusted content (PR diffs, review
- * text). Their `permission` and `prompt` are load-bearing guarantees — e.g.
- * "mechanically read-only", or pr-comment-writer's two-command bash
- * allowlist — so user/project config must never widen or replace them.
- * All other keys (model, color, temperature, ...) still merge user-wins.
- */
-export const PROTECTED_AGENTS = [
-  "pr-code-reviewer",
-  "security-reviewer",
-  "pr-comment-writer",
-] as const
-
-const PROTECTED_AGENT_KEYS = ["permission", "prompt"] as const
+// Kept in a separate module: the opencode plugin loader rejects any
+// non-function export on this entry module (see src/protected-agents.ts).
+import { PROTECTED_AGENTS, PROTECTED_AGENT_KEYS } from "./protected-agents"
 
 const isPlainObject = (value: unknown): value is PlainObject => {
   if (value === null || typeof value !== "object") return false
