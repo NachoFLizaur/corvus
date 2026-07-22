@@ -38,7 +38,7 @@ description: Completion - success extraction and final summary
 - Document patterns discovered
 - Assess overall estimate accuracy
 - Note what could be improved for future similar features
-- Update MASTER_PLAN.md Learnings Log
+- Append distilled learnings to `.corvus/tasks/learnings.md` (feature/date header, terse bullets) and leave a one-line pointer in MASTER_PLAN.md's Learnings Log
 
 **REPORT BACK**:
 - Reusable components (with file paths)

@@ -74,6 +74,10 @@ Does the plan agree with itself?
 - [ ] Dependencies in task files match MASTER_PLAN dependency section
 - [ ] No two tasks modify the same file section without an explicit dependency between them (cross-task file conflict detection)
 - [ ] Quick Reference section matches actual task list
+- [ ] A `### Workstreams` section exists in MASTER_PLAN and every task's Meta `Workstream:` value maps to exactly one row in its table (LIGHTWEIGHT exemption: see Workstream Verification)
+- [ ] No workstream exceeds 5 tasks
+- [ ] Workstreams marked parallel have pairwise-disjoint file sets (cross-check each stream's union of "Files to Change" paths)
+- [ ] Workstream ordering is consistent with every member task's `Depends On` (a dependency on a task in a parallel sibling stream → FAIL)
 
 ## MULTI-PASS REVIEW
 
@@ -83,7 +87,7 @@ Execute these 3 passes sequentially. Each pass builds on the previous.
 
 **Goal**: Confirm the plan's structure holds together.
 
-Read MASTER_PLAN.md and all task files (in parallel), then run the **Consistency** sub-checklist: task-file count vs MASTER_PLAN count, phase groupings, dependency-graph acyclicity (trace all `Depends On` fields), and `tests_enabled`/`tests_deferred` compliance (test tasks present/absent as expected; deferred mode still requires test tasks).
+Read MASTER_PLAN.md and all task files (in parallel), then run the **Consistency** sub-checklist: task-file count vs MASTER_PLAN count, phase groupings, dependency-graph acyclicity (trace all `Depends On` fields), the four workstream sub-checks (see Workstream Verification), and `tests_enabled`/`tests_deferred` compliance (test tasks present/absent as expected; deferred mode still requires test tasks).
 
 **Output**: Consistency sub-checklist results with evidence.
 
@@ -91,7 +95,7 @@ Read MASTER_PLAN.md and all task files (in parallel), then run the **Consistency
 
 **Goal**: Confirm every reference is real and every requirement is covered.
 
-Glob EVERY file path in every task file; grep every referenced function/class/config key; confirm acceptance criteria are binary and validation commands use the correct project environment; run Weasel Word Detection and User Requirements Traceability. Then run the **Executability**, **Reference Validity**, and **Completeness** sub-checklists.
+Glob EVERY file path in every task file; grep every referenced function/class/config key; confirm acceptance criteria are binary and validation commands use the correct project environment; run Weasel Word Detection and User Requirements Traceability. Then run the **Executability**, **Reference Validity**, and **Completeness** sub-checklists. When the CONTEXT FILE exists, use its Key Anchors and Repo State as verification aids — anchors are approximate after edits; on-disk glob/grep evidence remains the source of truth.
 
 **Output**: Executability + Reference Validity + Completeness sub-checklist results with evidence.
 
@@ -99,7 +103,7 @@ Glob EVERY file path in every task file; grep every referenced function/class/co
 
 **Goal**: Find what would cause this plan to fail during implementation.
 
-Re-read each task asking "what would make this task fail?" — implicit assumptions not documented, missing error-handling considerations, gaps between tasks (things that fall through the cracks). Synthesize findings from Pass 1 and Pass 2.
+Re-read each task asking "what would make this task fail?" — implicit assumptions not documented, missing error-handling considerations, gaps between tasks (things that fall through the cracks). Run the Known Failure Classes probe (see Known Failure Classes (Learnings Probe)) — check the plan against every defect class recorded in `.corvus/tasks/learnings.md` when the file exists. Synthesize findings from Pass 1 and Pass 2.
 
 **Output**: Final verdict with evidence.
 
@@ -146,6 +150,16 @@ grep -in "appropriately\|properly\|correctly\|as needed\|adequate" .corvus/tasks
 grep -in "TODO\|TBD\|to be determined\|determine the best" .corvus/tasks/[feature]/*.md
 ```
 
+## Known Failure Classes (Learnings Probe)
+
+When `.corvus/tasks/learnings.md` exists, read it and check the plan against every recorded defect class. The seeded classes:
+
+- **phantom-pin** — a task pins a string against a file that lacks it. Probe: for each literal string a task asserts against a target file, grep the target for those bytes; a pin whose target lacks them → FAIL the Executability sub-check.
+- **unowned-region** — a contract string duplicated without a single owner. Probe: any contract string the plan restates in 2+ files must name one owning file (other copies verified by extract-and-compare); an unowned duplicate → FAIL the Consistency sub-check.
+- **undetermined-assertion** — an extraction test that can pass vacuously. Probe: any planned check that extracts a region before asserting on it must first assert the extraction is non-empty; a check that passes on an empty extraction → FAIL the Executability sub-check.
+
+A plan exhibiting an unaddressed recorded class → FAIL the matching sub-check (Executability or Consistency) with evidence, following the standard Evidence Citation Format. The file may record classes beyond the seeded three — probe every entry it contains. When the file is absent, skip the probe and record "learnings file not present" as a non-blocking note.
+
 ## `tests_enabled` / `tests_deferred` Flag Validation
 
 The delegation template includes `tests_enabled: true/false` and `tests_deferred: true/false`. Verify the plan matches the flags; a mismatch → FAIL the Completeness sub-check.
@@ -166,6 +180,25 @@ Extract all file paths from "Files to Change" tables across all tasks and group 
 |------|-------------------|-------------|--------|
 | `path/to/file` | 01, 03 | 01 → 03 | PASS |
 | `path/to/other` | 02, 04 | None | FAIL |
+
+## Workstream Verification
+
+Verify the four workstream sub-checks under Consistency. Read the `### Workstreams` table in MASTER_PLAN (columns: `| Workstream | Phase | Tasks | File Set (disjointness justification) | Execution |`) and cross-check it against every task's Meta `Workstream:` field:
+
+1. **Membership agreement** — every task's Meta `Workstream:` value maps to exactly one row in the table, and every row's Tasks list matches the tasks that claim it (each task in exactly one workstream). A phase test task must either belong to the workstream that owns its validated files or form its own barrier workstream sequenced after all the streams it covers.
+2. **Size ceiling** — no workstream lists more than 5 tasks.
+3. **Pairwise disjointness** — for each pair of workstreams whose Execution marks them parallel with each other, compute each stream's union of "Files to Change" paths and confirm the intersection is empty.
+4. **Ordering vs dependencies** — every member task's `Depends On` targets a task in the same stream (earlier in stream order) or in a stream sequenced before it; a dependency on a task in a parallel sibling stream → FAIL.
+
+**Output format**:
+
+| Workstream | Tasks | Size ≤ 5 | File Set | Disjoint From Parallel Siblings? | Status |
+|------------|-------|----------|----------|----------------------------------|--------|
+| WS-1A | 01, 02 | PASS | [paths] | PASS / FAIL (shared: [path]) | PASS/FAIL |
+
+Note: a shared file between parallel-marked workstreams is a Consistency FAIL — shared-file edits (e.g. a pinned contract test file) must be serialized into one stream or ordered sequentially.
+
+**Missing Workstreams section**: for STANDARD/SPEC_DRIVEN plans, FAIL the first workstream sub-check. For LIGHTWEIGHT plans, a single implicit workstream is acceptable — record it as a non-blocking note, not a FAIL.
 
 ## Validation Command Correctness
 
@@ -208,6 +241,8 @@ Read the "User Requirements (Immutable)" section from the delegation context. Fo
   - Evidence: [specific verification]
 - [x] No cross-task file conflicts without dependencies
   - Evidence: [conflict table or "no overlapping files"]
+- [x] Workstream sub-checks (membership, size ≤ 5, parallel disjointness, ordering)
+  - Evidence: [see Workstream Verification table]
 - [x] Quick Reference section matches actual task list
   - Evidence: [specific verification]
 
@@ -254,11 +289,17 @@ Read the "User Requirements (Immutable)" section from the delegation context. Fo
 ### Pass 3: Adversarial Review
 - [Adversarial findings and assessment]
 
+### Known Failure Classes Probe
+- [Per-class results (phantom-pin, unowned-region, undetermined-assertion, plus any further recorded classes) — or "learnings file not present" (non-blocking)]
+
 ### Weasel Word Scan
 - [Results of grep scan — matches found or clean]
 
 ### Cross-Task File Conflicts
 [Conflict detection table]
+
+### Workstream Verification
+[Workstream verification table — or the LIGHTWEIGHT single-implicit-workstream note]
 
 ### User Requirements Traceability
 [Traceability table]
@@ -312,11 +353,17 @@ Read the "User Requirements (Immutable)" section from the delegation context. Fo
 ### Pass 3: Adversarial Review
 - [Adversarial findings]
 
+### Known Failure Classes Probe
+- [Per-class results (phantom-pin, unowned-region, undetermined-assertion, plus any further recorded classes) — or "learnings file not present" (non-blocking)]
+
 ### Weasel Word Scan
 - [Results]
 
 ### Cross-Task File Conflicts
 [Conflict detection table]
+
+### Workstream Verification
+[Workstream verification table — or the LIGHTWEIGHT single-implicit-workstream note]
 
 ### User Requirements Traceability
 [Traceability table]
@@ -343,6 +390,7 @@ This is the receiver contract. The canonical sender copy lives in the corvus-pha
 
 **MASTER PLAN**: `.corvus/tasks/[feature]/MASTER_PLAN.md`
 **TASK FILES**: `.corvus/tasks/[feature]/*.md`
+**CONTEXT FILE**: `.corvus/tasks/[feature]/CONTEXT.md` (discovery context — read when present; may be absent on legacy plans)
 
 **TESTS_ENABLED**: [true/false] (from Phase 2 question() tool)
 **TESTS_DEFERRED**: [true/false] (from Phase 2 question() tool)

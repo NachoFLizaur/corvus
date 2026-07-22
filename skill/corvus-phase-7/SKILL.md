@@ -5,7 +5,7 @@ description: Follow-up triage - handling requests after feature completion
 
 ## Phase 7: FOLLOW-UP TRIAGE
 
-**When**: After Phase 6 completes and the user makes a new request in the same session.
+**When**: After Phase 6 completes and the user makes a new request — in the same session, or in a new session where resume detection (orchestrator rule `resume_detection`) found the feature's MASTER_PLAN marked `[x] Complete`.
 
 **Goal**: Assess the new request and route it appropriately without abandoning the structured workflow. Triage every follow-up before acting, and route all changes through subagents.
 
@@ -14,6 +14,11 @@ description: Follow-up triage - handling requests after feature completion
 ```
 New request received after completion
     |
+    ├─ Does the request reference a plan still marked [~] In Progress?
+    │   └─ YES → RESUME (hand back to the orchestrator's resume flow:
+    │            first incomplete step, re-run last gate unless recorded PASS —
+    │            this is unfinished work, not a follow-up)
+    │
     ├─ Is this related to the just-completed feature?
     │   │
     │   ├─ YES, small fix/tweak (< 3 files, clear scope)
@@ -38,9 +43,13 @@ New request received after completion
 - Complexity: [trivial/small/significant/large]
 - Existing task coverage: [fully covered/partially/not covered]
 
-**Routing decision**: [LIGHTWEIGHT / PARTIAL RESTART / FULL RESTART]
+**Routing decision**: [RESUME / LIGHTWEIGHT / PARTIAL RESTART / FULL RESTART]
 **Reasoning**: [brief justification]
 ```
+
+### RESUME (Unfinished Work)
+
+A request referencing a plan still marked `[~] In Progress` is unfinished work, not a follow-up: hand it back to the orchestrator's resume flow (the `resume_detection` rule and RESUME section), which re-enters at the first incomplete step and re-runs the last quality gate unless MASTER_PLAN.md records its PASS with evidence.
 
 ### LIGHTWEIGHT PATH (Small Follow-ups)
 

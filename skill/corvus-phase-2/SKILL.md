@@ -78,6 +78,7 @@ Invoke **task-planner** with the resolved inputs and available context:
 **EXPECTED OUTCOME**:
 - Master plan document at `.corvus/tasks/[feature-name]/MASTER_PLAN.md`
 - Individual task files at `.corvus/tasks/[feature-name]/NN-task-name.md`
+- Discovery context artifact at .corvus/tasks/[feature-name]/CONTEXT.md
 [If SPEC_DRIVEN: - Spec files at `.corvus/tasks/[feature-name]/specs/*.md`]
 
 **USER REQUIREMENTS (IMMUTABLE)**:
@@ -91,14 +92,15 @@ Incorporate these into MASTER_PLAN.md and all relevant task files. Do not substi
 
 **TEST PREFERENCE**: `tests_enabled: [true/false], tests_deferred: [true/false]` (resolved before Phase 2; full semantics in the canonical table above)
 
-**CONTEXT FROM RESEARCH**:
-[Paste summary of researcher findings, or "N/A - no external research needed"]
+**CONTEXT FILE**: `.corvus/tasks/[feature-name]/CONTEXT.md`
+(task-planner creates it in Stage 4 from the digest below — schema owner: agent/task-planner.md. Downstream dispatches reference it by path instead of re-pasting discovery.)
 
-**CONTEXT FROM CODE EXPLORATION**:
-[Paste summary of code-explorer findings]
+**DISCOVERY DIGEST**:
+- Research: [summary of researcher findings, or "N/A - no external research needed"]
 - Files to modify: [list]
 - Patterns to follow: [list]
 - Risks identified: [list]
+- Project environment: [venv, package manager, etc.]
 
 **PROJECT ENVIRONMENT**:
 [Paste environment details from code-explorer]
@@ -110,6 +112,8 @@ Incorporate these into MASTER_PLAN.md and all relevant task files. Do not substi
 **MUST DO**:
 - Create MASTER_PLAN.md with phases, dependencies, and progress tracking
 - Create individual task files with detailed steps and acceptance criteria
+- Create CONTEXT.md from the DISCOVERY DIGEST (schema: task-planner)
+- Read `.corvus/tasks/learnings.md` (when present) and apply relevant entries to task design
 - Include validation commands for each task using the project environment above (venv path, package manager) — not bare `python`/`pytest`/`npm`
 - Estimate effort for each task and phase
 - Group related tasks into logical phases
@@ -214,6 +218,7 @@ This is the canonical sender template for the plan-reviewer dispatch. It mirrors
 
 **MASTER PLAN**: `.corvus/tasks/[feature]/MASTER_PLAN.md`
 **TASK FILES**: `.corvus/tasks/[feature]/*.md`
+**CONTEXT FILE**: `.corvus/tasks/[feature]/CONTEXT.md` (discovery context — read when present; may be absent on legacy plans)
 
 **TESTS_ENABLED**: [true/false] (from the resolved Phase 2 input tuple)
 **TESTS_DEFERRED**: [true/false] (from the resolved Phase 2 input tuple)

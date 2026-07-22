@@ -34,6 +34,8 @@ differs by flags. The three-valued subjective contract applies only to 5b.
 
 **ALL TASK FILES**: `.corvus/tasks/[feature]/*.md`
 
+**CONTEXT FILE**: `.corvus/tasks/[feature]/CONTEXT.md` (discovery context — read when present; may be absent on legacy plans)
+
 **TEST SCOPE**: `test_scope: [full|none]` — full when `tests_enabled: true`; none when `tests_enabled: false`
 
 **MUST DO**:
@@ -67,6 +69,8 @@ differs by flags. The three-valued subjective contract applies only to 5b.
 **TASK**: Final UX/DX review of [feature name] implementation
 
 **MASTER PLAN**: `.corvus/tasks/[feature]/MASTER_PLAN.md`
+
+**CONTEXT FILE**: `.corvus/tasks/[feature]/CONTEXT.md` (discovery context — read when present; may be absent on legacy plans)
 
 **TASKS REQUIRING UX/DX REVIEW**:
 - Task NN: [name] - [focus area: UI/API/docs/architecture]

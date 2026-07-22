@@ -86,6 +86,7 @@ Always required to understand the target codebase.
 - Identify potential risks or blockers
 - Detect project environment (venv, package manager, scripts)
 - Investigate only DISCOVERY_SCOPE gaps not answered by EXISTING_FINDINGS
+- Optionally flag entries in `.corvus/tasks/learnings.md` relevant to the explored area (when the file exists)
 
 **MUST NOT DO**:
 - Make any file modifications

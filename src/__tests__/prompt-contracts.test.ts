@@ -2313,3 +2313,679 @@ describe("review-pipeline-redesign: phase 4 contracts", () => {
     })
   })
 })
+
+// ============================================================================
+// Architectural wave — Phase 1 (Tasks 01-05)
+// ============================================================================
+
+const PLAN_REVIEWER = "agent/plan-reviewer.md"
+
+describe("architectural-wave — phase 1 pins", () => {
+  describe("task-planner emission (Task 01)", () => {
+    test("planner emits workstreams", () => {
+      // D4: exactly two heading copies (Execution Strategy template + planning
+      // summary) and two Meta field copies (STANDARD + LIGHTWEIGHT templates).
+      expect(countOccurrences(TASK_PLANNER, "### Workstreams")).toBe(2)
+      expect(
+        countOccurrences(TASK_PLANNER, "- **Workstream**: WS-{phase}{letter}"),
+      ).toBe(2)
+      expectContains(TASK_PLANNER, [
+        // Size-ceiling sentence is LINE-WRAPPED on disk — pin the contiguous
+        // first-line fragment, never the unwrapped full sentence.
+        "1-5 related tasks (batch 2-5 where possible; ceiling: 5)",
+        "| Workstream | Phase | Tasks | File Set (disjointness justification) | Execution |",
+        "## WORKSTREAM ASSIGNMENT",
+      ])
+    })
+
+    test("planner drops parallel-opportunities emission", () => {
+      // D4 replacement complete: Workstreams is now the emitted grouping.
+      expectAbsent(TASK_PLANNER, ["### Parallel Opportunities"])
+    })
+  })
+
+  describe("implementer workstream mode (Task 02)", () => {
+    test("implementer carries workstream mode", () => {
+      // D1: one mode section; per-task fix scope; PASS/FAIL/BLOCKED partial
+      // failure; report skeleton = summary line + per-task headings.
+      expect(
+        countOccurrences(CODE_IMPLEMENTER, "## WORKSTREAM DELEGATED MODE"),
+      ).toBe(1)
+      expectContains(CODE_IMPLEMENTER, [
+        "- **Fix rule scope**: the 2-attempt fix rule scopes PER TASK — each member task gets its own two attempts.",
+        "- **Partial failure**: when a task fails after its attempts, continue member tasks whose dependencies are unaffected; mark direct and transitive dependents of the failed task BLOCKED (do not start them). Report every task as PASS, FAIL, or BLOCKED.",
+        "**Workstream**: WS-[id] — [N] PASS / [N] FAIL / [N] BLOCKED",
+        "### Task [NN] — [PASS | FAIL | BLOCKED]",
+      ])
+    })
+
+    test("workstream mode restates the per-task validation contract", () => {
+      // Regression companion to "implementer validates per task, never per
+      // step" (cadence phase 1 block): only strings NOT already pinned there —
+      // the workstream-mode restatement of the unchanged per-task authority.
+      expectContains(CODE_IMPLEMENTER, [
+        "(VALIDATION AUTHORITY applies per task, unchanged)",
+        "- **Per-task validation**: validate each task with ONLY that task's allowlist at that task's completion. Never pool commands across tasks; never widen `test_scope`.",
+      ])
+    })
+  })
+
+  describe("phase-4 dispatch (Task 03)", () => {
+    test("workstream template pinned with own test scope", () => {
+      // D2: one new template with its own TEST SCOPE line. Its "applies per
+      // member task: ... that task" wording is deliberately distinct from the
+      // single-task "this task" line (byte-pinned in "phase-4 dispatch
+      // templates carry an explicit test_scope") — each wording appears
+      // exactly once, so neither pin can silently match the other's line.
+      expect(
+        countOccurrences(PHASE_4, "#### Workstream Delegation Template"),
+      ).toBe(1)
+
+      const workstreamScopeLine =
+        "**TEST SCOPE**: `test_scope: [targeted|none]` — applies per member task: targeted = only tests scoped to that task (its own new/modified test files); none when `tests_deferred: true` or `tests_enabled: false`. Full semantics: corvus-phase-2 skill, Test Scope section."
+      const singleTaskScopeLine =
+        "**TEST SCOPE**: `test_scope: [targeted|none]` — targeted = only tests scoped to this task (its own new/modified test files); none when `tests_deferred: true` or `tests_enabled: false`. Full semantics: corvus-phase-2 skill, Test Scope section."
+      expect(countOccurrences(PHASE_4, workstreamScopeLine)).toBe(1)
+      expect(countOccurrences(PHASE_4, singleTaskScopeLine)).toBe(1)
+    })
+
+    test("workstream template sits outside anchored spans", () => {
+      // D2 placement: the new template lives after the Worked Example, never
+      // inside the pinned Single-Task extraction span, and its own region is
+      // clean of full-suite scope. The three EXISTING anchored regions keep
+      // their non-empty/no-full assertions in "test_scope full stays
+      // exclusive to Phase 5a contexts" — not re-asserted here.
+      const source = read(PHASE_4)
+
+      const singleTaskRegion =
+        source.match(
+          /#### Single-Task Delegation Template\n([\s\S]*?)\n#### Worked Example/,
+        )?.[1] ?? ""
+      expect(singleTaskRegion).not.toBe("")
+      expect(singleTaskRegion).not.toContain("Workstream Delegation Template")
+
+      const workstreamRegion =
+        source.match(
+          /#### Workstream Delegation Template\n([\s\S]*?)\n### Pre-4b/,
+        )?.[1] ?? ""
+      expect(workstreamRegion).not.toBe("")
+      expect(workstreamRegion).not.toMatch(/test_scope:\s*full/)
+    })
+
+    test("phase-4 sheds superseded vocabulary", () => {
+      // D3/D4: the never-emitted consumer field and the old per-task rule
+      // heading never return.
+      expectAbsent(PHASE_4, ["Parallel With", "One Task Per Code-Implementer"])
+    })
+  })
+
+  describe("orchestrator mirror pair (Task 04)", () => {
+    test("workstream sentence in mirror lockstep", () => {
+      // Extract-and-compare (no hardcoded duplicate): the rewritten 4a rule
+      // paragraph and the workflow-diagram 4a line stay byte-identical
+      // across the mirrored orchestrators.
+      const ruleLine = (relPath: string): string =>
+        read(relPath).match(/^One workstream = one code-implementer .*$/m)?.[0] ??
+        ""
+      const interactiveRule = ruleLine(CORVUS)
+      expect(interactiveRule).not.toBe("")
+      expect(ruleLine(CORVUS_AUTO)).toBe(interactiveRule)
+
+      const diagramLine = (relPath: string): string =>
+        read(relPath).match(/^4a: code-implementer \(workstreams.*$/m)?.[0] ?? ""
+      const interactiveDiagram = diagramLine(CORVUS)
+      expect(interactiveDiagram).not.toBe("")
+      expect(diagramLine(CORVUS_AUTO)).toBe(interactiveDiagram)
+    })
+
+    test("old sentence never returns", () => {
+      // D3 scope: the two orchestrators only — docs/CORVUS-STATE-MACHINE.md
+      // keeps the sentence until task 17, so no repo-wide sweep here.
+      for (const file of [CORVUS, CORVUS_AUTO]) {
+        expectAbsent(file, ["One task = one code-implementer"])
+      }
+    })
+  })
+
+  describe("plan-reviewer checks (Task 05)", () => {
+    test("reviewer verifies workstream disjointness", () => {
+      // Requirement 4: the h2 verification section (newline-delimited so the
+      // two h3 verdict-template rows cannot satisfy it), the pairwise and
+      // size-ceiling sub-checks, and the shared-file serialization note
+      // (pinned without its em-dash lead-in).
+      expectContains(PLAN_REVIEWER, [
+        "\n## Workstream Verification\n",
+        "2. **Size ceiling** — no workstream lists more than 5 tasks.",
+        "3. **Pairwise disjointness** — for each pair of workstreams whose Execution marks them parallel with each other, compute each stream's union of \"Files to Change\" paths and confirm the intersection is empty.",
+        "must be serialized into one stream or ordered sequentially",
+      ])
+      expect(
+        countOccurrences(PLAN_REVIEWER, "### Workstream Verification"),
+      ).toBe(2)
+    })
+  })
+})
+
+// ============================================================================
+// Architectural wave — Phase 2 (Tasks 07-10)
+// ============================================================================
+
+describe("architectural-wave — phase 2 pins", () => {
+  describe("context schema owner (Task 07)", () => {
+    test("planner owns the context schema", () => {
+      // D5 single-owner pattern: the CONTEXT.md schema lives in task-planner
+      // ONLY — consumers reference it by path and never restate it, so no
+      // schema string is pinned against any other file (unowned-region
+      // discipline). Section heading, schema H1, and Phase Deltas heading
+      // appear exactly once each.
+      expect(
+        countOccurrences(TASK_PLANNER, "## CONTEXT.MD (DISCOVERY CONTEXT ARTIFACT)"),
+      ).toBe(1)
+      expect(
+        countOccurrences(TASK_PLANNER, "# {feature} — Discovery Context (CONTEXT.md)"),
+      ).toBe(1)
+      expect(countOccurrences(TASK_PLANNER, "## Phase Deltas")).toBe(1)
+
+      // Receiver rewrite (CORVUS INTEGRATION): one pointer field + one digest
+      // field replace the old paste blocks.
+      expect(countOccurrences(TASK_PLANNER, "**CONTEXT FILE**")).toBe(1)
+      expect(countOccurrences(TASK_PLANNER, "**DISCOVERY DIGEST**")).toBe(1)
+      expectContains(TASK_PLANNER, [
+        "**CONTEXT FILE**: `.corvus/tasks/[feature]/CONTEXT.md`",
+      ])
+
+      // The delta field recurs across PROGRESS_UPDATE prose (payload, defaults,
+      // allowlist, rejection, drift note, schema) — presence only, not an
+      // exact count, so added prose never breaks this pin.
+      expect(
+        countOccurrences(TASK_PLANNER, "**CONTEXT DELTA**"),
+      ).toBeGreaterThanOrEqual(1)
+
+      // Two variants, picked deliberately: bracketed `[N]` in the operative
+      // PROGRESS_UPDATE rules (allowlist item 3 + drift note); unbracketed `N`
+      // once inside the schema's Phase Deltas placeholder.
+      expect(countOccurrences(TASK_PLANNER, "## Phase [N] Delta")).toBe(2)
+      expect(countOccurrences(TASK_PLANNER, "## Phase N Delta")).toBe(1)
+    })
+
+    test("planner sheds paste-block receiver", () => {
+      // D5 receiver rewrite complete: the old Phase-1 paste-block headers
+      // never return to the CORVUS INTEGRATION section.
+      expectAbsent(TASK_PLANNER, [
+        "CONTEXT FROM RESEARCH",
+        "CONTEXT FROM CODE EXPLORATION",
+      ])
+    })
+
+    test("progress-update allowlist pins survive", () => {
+      // Regression companion to "confines PROGRESS_UPDATE to authorized
+      // planning state" (Phase H block): the frontmatter glob and the
+      // existing PROGRESS_UPDATE sentences stay pinned THERE — only the NEW
+      // delta-append strings are asserted here (no duplicate pins). All three
+      // pins carry the on-disk line wraps byte-for-byte.
+      expectContains(TASK_PLANNER, [
+        "Every field is required except `EVIDENCE TASK FILE` and `**CONTEXT DELTA**`,\nwhich default to `NONE`.",
+        "3. When the caller supplies a `**CONTEXT DELTA**`, the same feature directory's\n   `CONTEXT.md`, only to append one `## Phase [N] Delta` section.",
+        "Reject a `**CONTEXT DELTA**` when the feature directory has no\nCONTEXT.md — this mode appends delta sections, it never creates or restructures\nthe artifact.",
+      ])
+    })
+  })
+
+  describe("phase-2 dispatch pointer (Task 08)", () => {
+    test("phase-2 dispatch points at the context file", () => {
+      // D5 dispatch rewrite: pointer field + slim digest remnants replace the
+      // paste blocks. The dispatch pointer is backtick-ended with a
+      // `[feature-name]` path — deliberately distinct from the parenthesized
+      // 3.5/4a/5a pointer line, so the lockstep extraction below can never
+      // match it. `**CONTEXT**` absence is already owned by "phase-skill
+      // dispatch markers (§C2)" (expectAbsent on phase-2) — not re-pinned;
+      // the new field names were verified non-matching (after `**CONTEXT`
+      // comes ` F`, not `**`).
+      expectContains(PHASE_2, [
+        "**CONTEXT FILE**: `.corvus/tasks/[feature-name]/CONTEXT.md`",
+        "(task-planner creates it in Stage 4 from the digest below — schema owner: agent/task-planner.md. Downstream dispatches reference it by path instead of re-pasting discovery.)",
+        "**DISCOVERY DIGEST**:",
+        "- Research:",
+        "- Files to modify:",
+        "- Patterns to follow:",
+        "- Risks identified:",
+        "- Project environment:",
+        "- Discovery context artifact at .corvus/tasks/[feature-name]/CONTEXT.md",
+        "- Create CONTEXT.md from the DISCOVERY DIGEST (schema: task-planner)",
+      ])
+      expectAbsent(PHASE_2, ["CONTEXT FROM"])
+    })
+  })
+
+  describe("pointer lockstep + 4c delta (Tasks 09-10)", () => {
+    // Anchored-region integrity (phase-4 template spans re-extract non-empty
+    // and stay free of test_scope: full) remains owned by "test_scope full
+    // stays exclusive to Phase 5a contexts" — not duplicated here.
+
+    test("context pointer line in lockstep everywhere", () => {
+      // Extract-and-compare (never hardcoded twice): the canonical pointer
+      // line is extracted ONCE from the phase-2 3.5 sender and counted
+      // byte-equal in every copy. Counts: plan-reviewer receiver = 1,
+      // corvus.md orchestrator = 1, phase-4 = 6 (single-task + workstream +
+      // 2×4b + F-step retry templates + 4c dispatch surface), phase-5 = 2
+      // (5a + 5b). corvus-auto carries NO pointer copy at all.
+      const canonical =
+        read(PHASE_2).match(/^\*\*CONTEXT FILE\*\*: .*legacy plans\)$/m)?.[0] ??
+        ""
+      expect(canonical).not.toBe("")
+
+      expect(countOccurrences(PHASE_2, canonical)).toBeGreaterThanOrEqual(1)
+      expect(countOccurrences(PLAN_REVIEWER, canonical)).toBe(1)
+      expect(countOccurrences(CORVUS, canonical)).toBe(1)
+      expect(countOccurrences(PHASE_4, canonical)).toBe(6)
+      expect(countOccurrences(PHASE_5, canonical)).toBe(2)
+      expectAbsent(CORVUS_AUTO, ["CONTEXT FILE"])
+
+      // The reviewer consumes the pointer as a verification aid (Pass 2).
+      expectContains(PLAN_REVIEWER, [
+        "When the CONTEXT FILE exists, use its Key Anchors and Repo State as verification aids — anchors are approximate after edits; on-disk glob/grep evidence remains the source of truth.",
+      ])
+    })
+
+    test("4c carries the delta field", () => {
+      // Producer/receiver pairing: the phase-4 PROGRESS_UPDATE dispatch emits
+      // the field (:559) and the return verification names it (:573) —
+      // exactly two occurrences, so the field cannot silently spread. The
+      // task-planner receiver field line is byte-distinct ("new-surface
+      // notes" vs "new surfaces for CONTEXT.md").
+      expect(countOccurrences(PHASE_4, "**CONTEXT DELTA**")).toBe(2)
+      expectContains(PHASE_4, [
+        "**CONTEXT DELTA**: [anchor drift / new surfaces for CONTEXT.md `## Phase [N] Delta` | NONE]",
+        "When a context delta is supplied (not NONE), task-planner appends it to the same feature directory's CONTEXT.md as a `## Phase [N] Delta` section (receiver contract: task-planner PROGRESS_UPDATE mode); when the field is omitted or NONE, no CONTEXT.md write occurs.",
+      ])
+      expectContains(TASK_PLANNER, [
+        "**CONTEXT DELTA**: [anchor drift / new-surface notes | NONE]",
+      ])
+    })
+
+    test("verifier authorizes the delta write", () => {
+      // The EXTENDED return-verification step 2: the CONTEXT.md allowance is
+      // appended after "the one evidence task file" on the 3-space-indented
+      // continuation line, so the verifier authorizes the 4c delta append
+      // (no verifier deadlock). The step-2 prefix "Verify the returned diff
+      // is confined to the supplied MASTER_PLAN.md" is owned by "delegates
+      // Phase 4c progress only after a passing gate" and stays satisfied by
+      // prefix preservation — not re-pinned here.
+      expectContains(PHASE_4, [
+        "   when named, the one evidence task file and, when a `**CONTEXT DELTA**` was supplied, the same feature directory's CONTEXT.md (append-only `## Phase [N] Delta`).",
+      ])
+      expect(
+        countOccurrences(PHASE_4, "(append-only `## Phase [N] Delta`)"),
+      ).toBe(1)
+    })
+  })
+})
+
+// ============================================================================
+// Architectural wave — Phase 3 (Tasks 12-13)
+// ============================================================================
+
+describe("architectural-wave — phase 3 pins", () => {
+  // CI-safety (load-bearing): `.corvus/` is gitignored, so the learnings
+  // artifact is per-machine and absent in CI. Every pin below targets the
+  // prompt-file surfaces that REFERENCE `.corvus/tasks/learnings.md`; no test
+  // ever reads the artifact itself.
+
+  describe("learnings producers (Task 12)", () => {
+    test("learnings file referenced by producers", () => {
+      // D6 retarget: both producers point at the shared file. The path count
+      // is pinned as >= 2 so additional references never break it; the
+      // operative surfaces (Stage 1 batch read, extraction heading, template
+      // header, MASTER_PLAN pointer with its on-disk line wrap) are
+      // byte-pinned individually.
+      expect(
+        countOccurrences(TASK_PLANNER, ".corvus/tasks/learnings.md"),
+      ).toBeGreaterThanOrEqual(2)
+      expectContains(TASK_PLANNER, [
+        "`.corvus/tasks/learnings.md` (apply relevant entries to task design; handle a missing file gracefully — it may not exist yet)",
+        "### Learnings Entry (append to .corvus/tasks/learnings.md)",
+        "## {feature} — {YYYY-MM-DD}",
+        "leave a one-line pointer in the plan's Learnings Log (\"Learnings distilled to\n`.corvus/tasks/learnings.md`\")",
+      ])
+
+      // phase-6 6a MUST DO: the full retargeted bullet, byte-derived.
+      expectContains("skill/corvus-phase-6/SKILL.md", [
+        "- Append distilled learnings to `.corvus/tasks/learnings.md` (feature/date header, terse bullets) and leave a one-line pointer in MASTER_PLAN.md's Learnings Log",
+      ])
+    })
+
+    test("curation rule pinned", () => {
+      // D6 curation contract with its on-disk line wraps: newest entry per
+      // defect class wins, superseded entries pruned; plus the local-only
+      // rationale that anchors the CI-safety constraint above.
+      expectContains(TASK_PLANNER, [
+        "Curate on every touch: the newest entry per\ndefect class wins — prune superseded entries.",
+        "`.corvus/` is gitignored, so the\nfile is per-machine/local-only by design.",
+      ])
+    })
+
+    test("old learnings target never returns", () => {
+      // Retarget complete: the superseded phase-6 MUST DO target and the old
+      // task-planner extraction heading are both gone.
+      expectAbsent("skill/corvus-phase-6/SKILL.md", [
+        "Update MASTER_PLAN.md Learnings Log",
+      ])
+      expectAbsent(TASK_PLANNER, ["### Learnings Log Entry (for MASTER_PLAN.md)"])
+    })
+
+    // phase-6 stays MUST-NOT-DO-free: owned by "phase-skill dispatch markers
+    // (§C2)" (expectAbsent on phase-6) — not re-pinned here. The three
+    // "Phase 6 alone owns" ownership strings stay owned by "removes obsolete
+    // progress and success-learning states".
+  })
+
+  describe("learnings consumers (Task 13)", () => {
+    test("reviewer probes recorded failure classes", () => {
+      // Mandatory consumer #2 (D6): extract the probe section (its h2 to the
+      // next h2) and assert non-empty BEFORE asserting its contents —
+      // undetermined-assertion discipline.
+      const probe =
+        read(PLAN_REVIEWER).match(
+          /\n## Known Failure Classes \(Learnings Probe\)\n([\s\S]*?)\n## /,
+        )?.[1] ?? ""
+      expect(probe).not.toBe("")
+      expect(
+        countOccurrences(
+          PLAN_REVIEWER,
+          "## Known Failure Classes (Learnings Probe)",
+        ),
+      ).toBe(1)
+
+      // The three seeded classes lead their probe bullets exactly once each,
+      // inside the extracted region.
+      const leadIns = [
+        "- **phantom-pin** — a task pins a string against a file that lacks it.",
+        "- **unowned-region** — a contract string duplicated without a single owner.",
+        "- **undetermined-assertion** — an extraction test that can pass vacuously.",
+      ]
+      expect(leadIns.filter((leadIn) => !probe.includes(leadIn))).toEqual([])
+      for (const leadIn of leadIns) {
+        expect(countOccurrences(PLAN_REVIEWER, leadIn)).toBe(1)
+      }
+
+      // CI-safety absence note: a missing artifact skips the probe and
+      // records a non-blocking note.
+      expect(probe).toContain(
+        "When the file is absent, skip the probe and record \"learnings file not present\" as a non-blocking note.",
+      )
+
+      // Both verdict templates carry the per-class results section; the
+      // reviewer references the learnings path exactly twice (Pass 2 pointer
+      // + probe intro), so the probe cannot silently spread.
+      expect(
+        countOccurrences(PLAN_REVIEWER, "### Known Failure Classes Probe"),
+      ).toBe(2)
+      expect(
+        countOccurrences(PLAN_REVIEWER, ".corvus/tasks/learnings.md"),
+      ).toBe(2)
+    })
+
+    test("phase-2 dispatch reads learnings", () => {
+      // Mandatory consumer #1 (D6): the MUST DO bullet in the phase-2
+      // dispatch template, byte-derived; the path appears in phase-2 exactly
+      // once, keeping the read a dispatch-level instruction.
+      expectContains(PHASE_2, [
+        "- Read `.corvus/tasks/learnings.md` (when present) and apply relevant entries to task design",
+      ])
+      expect(countOccurrences(PHASE_2, ".corvus/tasks/learnings.md")).toBe(1)
+    })
+
+    test("phase-1 optional mention", () => {
+      // Optional-mention scope (D6): exactly ONE occurrence — the optional
+      // code-explorer flag bullet — so phase-1 can never silently grow into a
+      // third mandatory consumer.
+      expectContains("skill/corvus-phase-1/SKILL.md", [
+        "- Optionally flag entries in `.corvus/tasks/learnings.md` relevant to the explored area (when the file exists)",
+      ])
+      expect(
+        countOccurrences(
+          "skill/corvus-phase-1/SKILL.md",
+          ".corvus/tasks/learnings.md",
+        ),
+      ).toBe(1)
+    })
+
+    // Ownership sweep still clean: the reworded task-planner learnings lines
+    // stay covered by "removes obsolete progress and success-learning states"
+    // (the obsolete-pattern sweep over PHASE_H_OWNERSHIP_FILES) — not
+    // duplicated here. `### Workstream Verification` = 2 stays owned by
+    // "plan-reviewer checks (Task 05)"; the canonical CONTEXT FILE pointer
+    // count = 1 in plan-reviewer stays owned by "context pointer line in
+    // lockstep everywhere".
+  })
+})
+
+// ============================================================================
+// Architectural wave — Phase 4 (Tasks 15-18)
+// ============================================================================
+
+describe("architectural-wave — phase 4 pins", () => {
+  describe("resume orchestrators (Task 15)", () => {
+    test("both orchestrators detect in-progress plans", () => {
+      // D7 detection: one rule per orchestrator. Only the fragments that are
+      // genuinely byte-identical in BOTH files are asserted here (glob target,
+      // grep target on the `**Status**:` line, `**Progress**:` counts, and the
+      // intake diagram branch) — the full rule bodies DIVERGE by design and
+      // are never parity-compared (see the divergence test below).
+      for (const file of [CORVUS, CORVUS_AUTO]) {
+        expect(countOccurrences(file, '<rule id="resume_detection">')).toBe(1)
+        expectContains(file, [
+          "At intake, before Phase 0, glob `.corvus/tasks/*/MASTER_PLAN.md` and grep the",
+          "for `[~] In Progress` on the `**Status**:` line. When an in-progress plan",
+          "feature, phase statuses, `**Progress**:` counts, and",
+          "[Resume Detection] glob `.corvus/tasks/*/MASTER_PLAN.md`; grep `[~] In Progress`",
+        ])
+      }
+    })
+
+    test("interactive resumes via question, auto deterministically", () => {
+      // Mirror divergence (D7): extract each rule body per file; each must be
+      // non-empty before its contents are asserted. Interactive asks via
+      // question(); auto is question-free and resumes only on the
+      // reference-the-feature condition (byte-derived with its on-disk wrap).
+      const resumeRule = (relPath: string): string =>
+        read(relPath).match(
+          /<rule id="resume_detection">([\s\S]*?)<\/rule>/,
+        )?.[1] ?? ""
+
+      const interactiveRule = resumeRule(CORVUS)
+      expect(interactiveRule).not.toBe("")
+      expect(interactiveRule).toContain("question()")
+      expect(interactiveRule).toContain(
+        "Mirror divergence: corvus-auto decides deterministically and never asks.",
+      )
+
+      const autonomousRule = resumeRule(CORVUS_AUTO)
+      expect(autonomousRule).not.toBe("")
+      expect(autonomousRule).not.toContain("question()")
+      expect(autonomousRule).toContain(
+        "decide deterministically: resume it when the request references that\n    in-progress feature by name or path",
+      )
+
+      // The autonomy_contract decision table carries the Resume row on one
+      // single line (deterministic, question-free).
+      expect(
+        countOccurrences(
+          CORVUS_AUTO,
+          "    - Resume → glob for in-progress plans; resume when the request references that feature, else report and proceed",
+        ),
+      ).toBe(1)
+    })
+
+    test("shared resume procedure in mirror lockstep", () => {
+      // Extract-and-compare (never hardcoded twice): the RESUME
+      // (CROSS-SESSION) prose is byte-identical up to the divergence marker —
+      // corvus-auto appends delivery rules behind `> **Mirror divergence**`,
+      // while corvus continues straight into Read vs Write Operations.
+      const interactiveResume =
+        read(CORVUS).match(
+          /## RESUME \(CROSS-SESSION\)\n([\s\S]*?)\n## Read vs Write Operations/,
+        )?.[1] ?? ""
+      const autonomousResume =
+        read(CORVUS_AUTO).match(
+          /## RESUME \(CROSS-SESSION\)\n([\s\S]*?)\n> \*\*Mirror divergence\*\*/,
+        )?.[1] ?? ""
+
+      expect(interactiveResume).not.toBe("")
+      expect(interactiveResume).toContain(
+        "Re-run the last quality gate (4b, 5a, or 5b) before continuing, unless MASTER_PLAN.md records that gate's PASS with evidence",
+      )
+      expect(autonomousResume).toBe(interactiveResume)
+    })
+
+    test("auto delivery resume stays checkpoint-free", () => {
+      // Delivery safety (D7): pinned against corvus-auto ONLY — corvus has no
+      // delivery route. A resumed session invalidates in-memory delivery
+      // checkpoints ("never the same run"); Git delivery needs a fresh
+      // explicit re-opt-in plus a from-scratch preflight, else the run
+      // completes local_only.
+      expectContains(CORVUS_AUTO, [
+        "> **Mirror divergence**: the delivery rules below exist only in corvus-auto.",
+        "### Delivery State on Resume",
+        "A resumed run holds no valid delivery checkpoints: the \"same run\" and \"in-memory checkpoint\" conditions (Delivery Branch Gate step 6, Phase 6b) invalidate stored delivery state by design — a resumed session is never the same run.",
+        "A resumed run therefore defaults to `local_only` unless the resuming invocation itself explicitly re-opts into Git delivery; prior opt-in, plan content, and child output cannot carry delivery across sessions.",
+        "On explicit re-opt-in, re-run the full clean preflight and every Delivery Branch Gate step from scratch before any Git mutation. Any check that cannot pass afresh — a dirty mid-implementation worktree, an ahead or divergent feature branch — blocks delivery, and the run completes as `local_only`, reporting why.",
+      ])
+      expectAbsent(CORVUS, ["### Delivery State on Resume"])
+    })
+
+    // Preselected regions untouched: the resume rule is a SIBLING of
+    // preselected_inputs (D7 — never inside it), and the non-greedy
+    // extraction in "consumes preselected plan and test inputs without
+    // repeat questions" still stops at that rule's own closing tag — comment
+    // cross-reference only, no duplicate pin.
+  })
+
+  describe("phase-7 cross-session case (Task 16)", () => {
+    test("phase-7 gains the cross-session case", () => {
+      const PHASE_7 = "skill/corvus-phase-7/SKILL.md"
+
+      // D7 triage: the generalized When-clause, the byte-exact tree route
+      // (box-drawing characters copied from disk), the routing line, and the
+      // RESUME hand-back section. `**CONTEXT**` presence and `**MUST NOT DO**`
+      // absence stay owned by "phase-skill dispatch markers (§C2)" — not
+      // re-pinned here.
+      expectContains(PHASE_7, [
+        "**When**: After Phase 6 completes and the user makes a new request — in the same session, or in a new session where resume detection (orchestrator rule `resume_detection`) found the feature's MASTER_PLAN marked `[x] Complete`.",
+        "    ├─ Does the request reference a plan still marked [~] In Progress?\n    │   └─ YES → RESUME (hand back to the orchestrator's resume flow:\n    │            first incomplete step, re-run last gate unless recorded PASS —\n    │            this is unfinished work, not a follow-up)",
+        "**Routing decision**: [RESUME / LIGHTWEIGHT / PARTIAL RESTART / FULL RESTART]",
+        "### RESUME (Unfinished Work)",
+        "A request referencing a plan still marked `[~] In Progress` is unfinished work, not a follow-up: hand it back to the orchestrator's resume flow (the `resume_detection` rule and RESUME section), which re-enters at the first incomplete step and re-runs the last quality gate unless MASTER_PLAN.md records its PASS with evidence.",
+      ])
+
+      // The RESUME route surfaces on exactly four lines (tree route, routing
+      // line, section heading, hand-back sentence) — it cannot silently
+      // spread into the follow-up paths.
+      const resumeLines = read(PHASE_7)
+        .split("\n")
+        .filter((line) => line.includes("RESUME"))
+      expect(resumeLines).toHaveLength(4)
+    })
+  })
+
+  describe("docs sync (Task 17)", () => {
+    test("state machine speaks workstreams", () => {
+      // D3/D4 summary surface: the rewritten 4a rule appears exactly once;
+      // the CANNOT row, Phase-2 planning row, 4c delta sentence, and the
+      // learnings bullet fragment are byte-derived. The doc's 4c sentence is
+      // a third, doc-local variant — never cross-pinned with the byte-distinct
+      // phase-4/task-planner field lines ("4c carries the delta field").
+      expect(
+        countOccurrences(
+          STATE_MACHINE_DOC,
+          "**Rule**: One workstream = one code-implementer (1-5 tasks, dependency-ordered inside the stream)",
+        ),
+      ).toBe(1)
+      expectContains(STATE_MACHINE_DOC, [
+        "| Workstreams sharing any file | Conflict risk — serialize or merge into one stream |",
+        "| 2 | Planning | Create master plan, CONTEXT.md (discovery context artifact), and task files | @task-planner |",
+        "when the dispatch supplies a `**CONTEXT DELTA**` — the feature's CONTEXT.md, appending a `## Phase [N] Delta` section (omitted or NONE means no CONTEXT.md write)",
+        "learnings are extracted after success and distilled to the local-only `.corvus/tasks/learnings.md`",
+      ])
+      // Task 17 completed the D3 sweep: these negatives are safe here now
+      // (the phase-1 block deliberately scoped its sweep to the orchestrators
+      // because this doc kept the sentence until task 17).
+      expectAbsent(STATE_MACHINE_DOC, [
+        "Parallel With",
+        "One task = one code-implementer",
+      ])
+
+      // AGENTS.md routing note (summary surface).
+      expectContains("AGENTS.md", [
+        "Both dispatch Phase 4 in workstream batches (one code-implementer per workstream of 1-5 dependency-ordered tasks)",
+      ])
+
+      // The README diagram line is @-prefixed — pinned separately and NEVER
+      // compared to the orchestrator diagram lines ("workstream sentence in
+      // mirror lockstep" owns those un-prefixed copies).
+      expectContains("README.md", [
+        "4a: @code-implementer (workstreams of phase tasks, parallel when file sets are disjoint)",
+      ])
+    })
+
+    test("docs mention resume", () => {
+      // D7 summary surface — one byte-derived fragment per doc that actually
+      // gained the text (per-file, no cross-doc comparison).
+      expect(
+        countOccurrences(
+          STATE_MACHINE_DOC,
+          "At intake, before Phase 0, both orchestrators detect an in-progress MASTER_PLAN (`[~] In Progress`) and can resume it at the first incomplete step — interactive Corvus asks via a question; Corvus Auto decides deterministically and question-free.",
+        ),
+      ).toBe(1)
+      expectContains("README.md", [
+        "- **Cross-session resume**: An in-progress MASTER_PLAN is detected at intake and resumed at the first incomplete step (`@corvus` asks first; `@corvus-auto` decides deterministically)",
+      ])
+      expectContains("AGENTS.md", [
+        "detect an in-progress MASTER_PLAN at intake for cross-session resume — `@corvus` asks before resuming; `@corvus-auto` decides deterministically.",
+      ])
+    })
+  })
+
+  describe("promoted sweep negatives (Task 18)", () => {
+    test("superseded phrasing never returns", () => {
+      // Task 18's zero-hit ledger promoted to per-file pins (never
+      // directory-wide) — only combos NOT already pinned. Existing owners
+      // (cross-references, no duplicates):
+      //   "One task = one code-implementer" in corvus/corvus-auto → "old
+      //     sentence never returns"; in state-machine → "state machine
+      //     speaks workstreams" above.
+      //   "Parallel With"/"One Task Per Code-Implementer" in phase-4 →
+      //     "phase-4 sheds superseded vocabulary".
+      //   "CONTEXT FROM RESEARCH"/"CONTEXT FROM CODE EXPLORATION" in
+      //     task-planner → "planner sheds paste-block receiver"; in phase-2
+      //     the broader "CONTEXT FROM" → "phase-2 dispatch points at the
+      //     context file".
+      //   "Update MASTER_PLAN.md Learnings Log" in phase-6 → "old learnings
+      //     target never returns".
+      //   "AND `tests_deferred: true`" in both orchestrators → "5a full run
+      //     is unconditional for enabled modes in both orchestrators".
+      //   "**MUST NOT DO**" in phase-6/phase-7 and "**CONTEXT**" in phase-2
+      //     → "phase-skill dispatch markers (§C2)".
+      //   "PHASE GATE STATUS" in phase-4 → "phase-4 trio gate strings".
+      //   The cadence trio → "old cadence phrases never reappear" and its
+      //     named companions.
+      //   `question: "deny"` stays frontmatter-contains-only → "auto
+      //     variants deny question".
+      expectAbsent(PHASE_4, ["One task = one code-implementer"])
+      expectAbsent(TASK_PLANNER, ["Update MASTER_PLAN.md Learnings Log"])
+
+      // The other two Phase-3.5 template copies (task 09 three-copy sync)
+      // never regain the paste-block headers.
+      for (const file of [CORVUS, PLAN_REVIEWER]) {
+        expectAbsent(file, [
+          "CONTEXT FROM RESEARCH",
+          "CONTEXT FROM CODE EXPLORATION",
+        ])
+      }
+    })
+
+    // Trailing whitespace sweep stays owned by "has no trailing whitespace
+    // in hardened prompts, commands, or docs" (the PHASE_H_SAFETY_TEXT_FILES
+    // mechanism) — comment cross-reference only, no duplicate here.
+  })
+})

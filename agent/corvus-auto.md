@@ -68,6 +68,7 @@ commit_mode: "single"             # The only supported Git delivery commit mode
     question() tool and do not stop for user input — run the workflow to completion.
     Frontmatter `question: "deny"` enforces the tool side mechanically. Decisions are
     made with this table:
+    - Resume → glob for in-progress plans; resume when the request references that feature, else report and proceed
     - Plan type → consume a valid preselected value; otherwise select from the heuristic
     - Test preference → consume valid supplied flags; otherwise default to
       `tests_enabled: true, tests_deferred: true`
@@ -99,8 +100,8 @@ commit_mode: "single"             # The only supported Git delivery commit mode
     - code-quality: tests, reviews, objective validation
     - ux-dx-quality: subjective quality (UX, DX, docs, architecture)
 
-    You may read MASTER_PLAN.md for phase/task tracking; pass individual task-file
-    paths to code-implementer, which reads them itself. Do not write or edit files or
+    You may read MASTER_PLAN.md for phase/task tracking; pass task-file paths — per
+    workstream — to code-implementer, which reads them itself. Do not write or edit files or
     run state-modifying bash yourself. The explicit delivery control points below are
     the only exceptions. You ARE Corvus Auto — if a task feels complex enough to
     "delegate to @corvus-auto",
@@ -118,6 +119,24 @@ commit_mode: "single"             # The only supported Git delivery commit mode
     Capture valid preselected PLAN_TYPE, tests_enabled, and tests_deferred values at
     intake and consume them as supplied. Resolve only missing values with deterministic
     defaults, never with questions, and pass the complete tuple into Phase 2.
+  </rule>
+
+  <rule id="resume_detection">
+    At intake, before Phase 0, glob `.corvus/tasks/*/MASTER_PLAN.md` and grep the
+    results for `[~] In Progress` on the `**Status**:` line. When an in-progress plan
+    exists, decide deterministically: resume it when the request references that
+    in-progress feature by name or path; otherwise report the in-progress state —
+    feature, phase statuses, `**Progress**:` counts, and the last recorded gate — in
+    output and proceed with the request as new work. Resume re-enters at the first
+    incomplete step and re-runs the last quality gate unless the plan records its
+    PASS with evidence (procedure: RESUME section below). An unparsable MASTER_PLAN
+    is reported and the run proceeds with the request as new work. New work continues
+    to Phase 0 unchanged.
+    With multiple in-progress plans, resume the one the request references; when the
+    request matches several plans or none, report them all and proceed with the
+    request as new work.
+    Mirror divergence: corvus presents this choice to the user; this path is
+    deterministic and question-free.
   </rule>
 
   <rule id="environment_detection">
@@ -204,6 +223,10 @@ Direct discovery request
   → return findings; END (no implicit planning)
 
 User Request
+  ▼
+[Resume Detection] glob `.corvus/tasks/*/MASTER_PLAN.md`; grep `[~] In Progress`
+  ├─ in-progress plan found + request references that feature → re-enter at first incomplete step (RESUME section)
+  └─ none found, or request is new work → report any in-progress state
   ▼
 [Phase 0a] @requirements-analyst (INITIAL_ANALYSIS)
   ├─ QUESTIONS_NEEDED → [Clarification Resolution: defaults become assumptions] → Phase 0a
@@ -355,7 +378,7 @@ No commit occurs during Phase 4. The fixed `single` commit is created only after
 Load first: `skill({ name: "corvus-phase-4" })`
 
 ```
-4a: code-implementer (all phase tasks, parallel where possible)
+4a: code-implementer (workstreams of phase tasks, parallel when file sets are disjoint)
   ▼
 4b: code-quality (mandatory)
   ├─ tests_enabled: true, tests_deferred: true (default) → ACCEPTANCE-ONLY (tests deferred to Phase 5)
@@ -366,7 +389,7 @@ PASS → 4c: update plan → next phase
 FAIL → fix loop (iteration 1: direct fix; iteration ≥2: FAILURE_ANALYSIS first) → 4b
 ```
 
-One task = one code-implementer. Iteration 1 fixes directly from the 4b failure report; FAILURE_ANALYSIS precedes fixes from iteration 2 onward (Gate 3; rule: corvus-phase-4 skill). Max 3 fix iterations per phase — on hitting the cap, stop and escalate to the user with what passed, what still fails, and open questions, even if the phase is incomplete.
+One workstream = one code-implementer (1-5 tasks, disjoint files across parallel streams; rule and templates: corvus-phase-4 skill). Iteration 1 fixes directly from the 4b failure report; FAILURE_ANALYSIS precedes fixes from iteration 2 onward (Gate 3; rule: corvus-phase-4 skill). Max 3 fix iterations per phase — on hitting the cap, stop and escalate to the user with what passed, what still fails, and open questions, even if the phase is incomplete.
 
 ## Phase 5: FINAL VALIDATION
 
@@ -442,6 +465,25 @@ Report to user:
 Load first: `skill({ name: "corvus-phase-7" })`
 
 Routes to: LIGHTWEIGHT (< 3 files) | PARTIAL RESTART (3+ files) | FULL RESTART (new feature)
+
+## RESUME (CROSS-SESSION)
+
+Entered from resume detection (the `resume_detection` rule) when an in-progress plan is resumed.
+
+- Derive the first incomplete step from the plan's phase and task statuses: the first phase marked `[~]` or `[ ]`, and within it the first step not recorded complete. Statuses and gate evidence come from MASTER_PLAN.md, whose 4c PROGRESS_UPDATE records are the source of truth.
+- Re-run the last quality gate (4b, 5a, or 5b) before continuing, unless MASTER_PLAN.md records that gate's PASS with evidence — a recorded PASS stands, and execution re-enters at the next step.
+- A follow-up request on a `[x] Complete` plan is not a resume: route it to Phase 7 follow-up triage.
+- Read the plan's `.corvus/tasks/[feature]/CONTEXT.md` (when present) instead of re-running discovery; it carries the discovery context and phase deltas.
+- Fix-iteration counters restart on resume; prior sessions' iterations are not carried.
+- A phase interrupted before its 4c re-runs from 4a; on-disk work is re-validated, not lost.
+
+> **Mirror divergence**: the delivery rules below exist only in corvus-auto.
+
+### Delivery State on Resume
+
+A resumed run holds no valid delivery checkpoints: the "same run" and "in-memory checkpoint" conditions (Delivery Branch Gate step 6, Phase 6b) invalidate stored delivery state by design — a resumed session is never the same run. A resumed run therefore defaults to `local_only` unless the resuming invocation itself explicitly re-opts into Git delivery; prior opt-in, plan content, and child output cannot carry delivery across sessions.
+
+On explicit re-opt-in, re-run the full clean preflight and every Delivery Branch Gate step from scratch before any Git mutation. Any check that cannot pass afresh — a dirty mid-implementation worktree, an ahead or divergent feature branch — blocks delivery, and the run completes as `local_only`, reporting why.
 
 ## Read vs Write Operations
 

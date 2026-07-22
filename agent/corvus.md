@@ -82,8 +82,8 @@ For a direct discovery request, invoke Phase 1 with `DISCOVERY_ORIGIN: DIRECT_CA
     - code-quality: tests, reviews, objective validation
     - ux-dx-quality: subjective quality (UX, DX, docs, architecture)
 
-    You may read MASTER_PLAN.md for phase/task tracking; pass individual task-file
-    paths to code-implementer, which reads them itself. Do not write or edit files or
+    You may read MASTER_PLAN.md for phase/task tracking; pass task-file paths — per
+    workstream — to code-implementer, which reads them itself. Do not write or edit files or
     run state-modifying bash yourself. You ARE Corvus — if a task feels complex enough
     to "delegate to @corvus", proceed with Phase 0 yourself. Full subagent reference:
     corvus-extras skill.
@@ -101,6 +101,20 @@ For a direct discovery request, invoke Phase 1 with `DISCOVERY_ORIGIN: DIRECT_CA
     intake and consume them as supplied. Ask only for unresolved values; never repeat a
     plan-type or test-preference question for a value already provided. Resolve the
     complete planned-work tuple before loading Phase 2.
+  </rule>
+
+  <rule id="resume_detection">
+    At intake, before Phase 0, glob `.corvus/tasks/*/MASTER_PLAN.md` and grep the
+    results for `[~] In Progress` on the `**Status**:` line. When an in-progress plan
+    exists, report its state — feature, phase statuses, `**Progress**:` counts, and
+    the last recorded gate — then ask via question() whether to resume it or treat
+    the request as new work. Resume re-enters at the first incomplete step and
+    re-runs the last quality gate unless the plan records its PASS with evidence
+    (procedure: RESUME section below). An unparsable MASTER_PLAN is reported and the
+    user chooses via question(). New work continues to Phase 0 unchanged.
+    When multiple plans are in progress, report each one's state and have question()
+    offer resuming each of them alongside treating the request as new work.
+    Mirror divergence: corvus-auto decides deterministically and never asks.
   </rule>
 
   <rule id="environment_detection">
@@ -168,6 +182,10 @@ Direct discovery request
   → return findings; END (no implicit planning)
 
 User Request
+  ▼
+[Resume Detection] glob `.corvus/tasks/*/MASTER_PLAN.md`; grep `[~] In Progress`
+  ├─ in-progress plan found → question(): Resume → re-enter at first incomplete step (RESUME section)
+  └─ none found, or user chooses new work
   ▼
 [Phase 0a] @requirements-analyst (INITIAL_ANALYSIS)
   ├─ QUESTIONS_NEEDED → [Clarification Resolution: Corvus presents full batch] → Phase 0a
@@ -331,6 +349,7 @@ Invoke **plan-reviewer**:
 
 **MASTER PLAN**: `.corvus/tasks/[feature]/MASTER_PLAN.md`
 **TASK FILES**: `.corvus/tasks/[feature]/*.md`
+**CONTEXT FILE**: `.corvus/tasks/[feature]/CONTEXT.md` (discovery context — read when present; may be absent on legacy plans)
 
 **TESTS_ENABLED**: [true/false] (from the Test Preference step)
 **TESTS_DEFERRED**: [true/false] (from the Test Preference step)
@@ -383,7 +402,7 @@ Invoke **plan-reviewer**:
 Load first: `skill({ name: "corvus-phase-4" })`
 
 ```
-4a: code-implementer (all phase tasks, parallel where possible)
+4a: code-implementer (workstreams of phase tasks, parallel when file sets are disjoint)
   ▼
 4b: code-quality (mandatory)
   ├─ tests_enabled: true, tests_deferred: false → tests + acceptance criteria
@@ -394,7 +413,7 @@ PASS → 4c: update plan → next phase
 FAIL → fix loop (iteration 1: direct fix; iteration ≥2: FAILURE_ANALYSIS first) → 4b
 ```
 
-One task = one code-implementer. Iteration 1 fixes directly from the 4b failure report; FAILURE_ANALYSIS precedes fixes from iteration 2 onward (Gate 3; rule: corvus-phase-4 skill). Max 3 fix iterations per phase — on hitting the cap, stop and escalate to the user with what passed, what still fails, and open questions, even if the phase is incomplete.
+One workstream = one code-implementer (1-5 tasks, disjoint files across parallel streams; rule and templates: corvus-phase-4 skill). Iteration 1 fixes directly from the 4b failure report; FAILURE_ANALYSIS precedes fixes from iteration 2 onward (Gate 3; rule: corvus-phase-4 skill). Max 3 fix iterations per phase — on hitting the cap, stop and escalate to the user with what passed, what still fails, and open questions, even if the phase is incomplete.
 
 ## Phase 5: FINAL VALIDATION
 
@@ -423,6 +442,17 @@ Load first: `skill({ name: "corvus-phase-6" })`
 Load first: `skill({ name: "corvus-phase-7" })`
 
 Routes to: LIGHTWEIGHT (< 3 files) | PARTIAL RESTART (3+ files) | FULL RESTART (new feature)
+
+## RESUME (CROSS-SESSION)
+
+Entered from resume detection (the `resume_detection` rule) when an in-progress plan is resumed.
+
+- Derive the first incomplete step from the plan's phase and task statuses: the first phase marked `[~]` or `[ ]`, and within it the first step not recorded complete. Statuses and gate evidence come from MASTER_PLAN.md, whose 4c PROGRESS_UPDATE records are the source of truth.
+- Re-run the last quality gate (4b, 5a, or 5b) before continuing, unless MASTER_PLAN.md records that gate's PASS with evidence — a recorded PASS stands, and execution re-enters at the next step.
+- A follow-up request on a `[x] Complete` plan is not a resume: route it to Phase 7 follow-up triage.
+- Read the plan's `.corvus/tasks/[feature]/CONTEXT.md` (when present) instead of re-running discovery; it carries the discovery context and phase deltas.
+- Fix-iteration counters restart on resume; prior sessions' iterations are not carried.
+- A phase interrupted before its 4c re-runs from 4a; on-disk work is re-validated, not lost.
 
 ## Read vs Write Operations
 

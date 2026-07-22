@@ -54,8 +54,9 @@ Phase 4 operates at the **phase level**, not per-task: tasks within a phase are 
     to the full suite; the Lightweight non-deferred final gate
     revalidates at its dispatched full scope (its sanctioned re-run).
     This confirms fixes did not break sibling tasks.
-  - **Parallelize independent tasks**: tasks with no inter-dependencies (check
-    `Parallel With` / `Depends On` metadata and shared files) run concurrently.
+  - **Parallelize disjoint workstreams**: workstreams whose file sets are pairwise
+    disjoint (check the master plan's Workstreams section and `Depends On` metadata)
+    run concurrently; a shared file forces sequential order.
   - **Update MASTER_PLAN.md at phase boundaries** (4c), not after each task. After
     a phase-wide 4b PASS, delegate the state transition to task-planner in
     `PROGRESS_UPDATE` mode. Corvus never edits the plan directly.
@@ -96,14 +97,16 @@ carries `test_scope: none`.
 
 ---
 
-### 4a. Implementation — One Task Per Code-Implementer
+### 4a. Implementation — One Workstream Per Code-Implementer
 
-One task file = one code-implementer invocation, always. The Task tool runs multiple `task()` calls from a single message concurrently ("use a single message with multiple tool uses" to parallelize), so:
+One workstream (1-5 related tasks from the master plan's `### Workstreams` section) = one code-implementer invocation. The Task tool runs multiple `task()` calls from a single message concurrently ("use a single message with multiple tool uses" to parallelize), so:
 
-- **Parallel** (independent tasks): multiple `task()` calls in ONE message — each for exactly one task
-- **Sequential** (dependent tasks, shared file modifications, output feeding forward): one `task()` call per message; wait for completion between each
+- **Parallel** (workstreams with pairwise-disjoint file sets, per the plan's justification column): multiple `task()` calls in ONE message — each for exactly one workstream
+- **Sequential** (dependent workstreams, shared file modifications, output feeding forward): one `task()` call per message; wait for completion between each
 
-**Success criteria for 4a**: every task in the phase dispatched to its own code-implementer using the template below, and every dispatch reported back with validation results.
+A single-task workstream uses the Single-Task Delegation Template below; a multi-task workstream uses the Workstream Delegation Template after the Worked Example.
+
+**Success criteria for 4a**: every task in the phase dispatched exactly once through its workstream's code-implementer, and every dispatch reported back with per-task validation results.
 
 #### Single-Task Delegation Template
 
@@ -112,6 +115,8 @@ One task file = one code-implementer invocation, always. The Task tool runs mult
 
 **TASK FILE**: `.corvus/tasks/[feature]/[NN-task-name].md`
 ⚠️ READ THIS FILE FIRST - It contains detailed steps, examples, and acceptance criteria.
+
+**CONTEXT FILE**: `.corvus/tasks/[feature]/CONTEXT.md` (discovery context — read when present; may be absent on legacy plans)
 
 **DELEGATED MODE**: Pre-approved via master plan. Do NOT ask for approval.
 
@@ -180,6 +185,45 @@ task(
 )
 ```
 
+#### Workstream Delegation Template
+
+For a workstream of 2-5 tasks. Single-task workstreams use the Single-Task Delegation Template above.
+
+```markdown
+**TASK**: Implement workstream [WS-id] — tasks [NN, NN, NN]
+
+**WORKSTREAM**: WS-[id] from `.corvus/tasks/[feature]/MASTER_PLAN.md` (Workstreams section)
+
+**TASK FILES** (execute in dependency order):
+- `.corvus/tasks/[feature]/[NN-task-name].md`
+- `.corvus/tasks/[feature]/[NN-task-name].md`
+⚠️ READ ALL TASK FILES FIRST — each is the atomic spec for its task.
+
+**CONTEXT FILE**: `.corvus/tasks/[feature]/CONTEXT.md` (discovery context — read when present; may be absent on legacy plans)
+
+**DELEGATED MODE**: Pre-approved via master plan. Do NOT ask for approval.
+
+**TEST MODE**: `tests_enabled: [true|false], tests_deferred: [true|false]`
+**TEST SCOPE**: `test_scope: [targeted|none]` — applies per member task: targeted = only tests scoped to that task (its own new/modified test files); none when `tests_deferred: true` or `tests_enabled: false`. Full semantics: corvus-phase-2 skill, Test Scope section.
+**AUTHORIZED FILE MANIFEST**: per task — the exact `Files to Change` entries from each task file
+**AUTHORIZED VALIDATION**: per task — exactly the commands each task and the active workflow permit
+
+**MUST DO**:
+- Read every listed task file completely before starting
+- Execute member tasks in dependency order; resolve each task's contract independently
+- Validate per task with only that task's allowlist; the 2-attempt fix rule scopes per task
+- On a member-task failure, continue tasks whose dependencies are unaffected and mark dependents BLOCKED
+
+**MUST NOT DO**:
+- Pool validation commands or file manifests across member tasks
+- Run the full test suite; test_scope: targeted is the ceiling
+- Implement tasks outside this workstream
+
+**REPORT BACK** (per-task sections keyed by Task ID):
+- Workstream summary: [N] PASS / [N] FAIL / [N] BLOCKED
+- Per task: Task ID, status (PASS/FAIL/BLOCKED), files changed, authorized validation commands and actual results, commands not run by policy, issues, deviations
+```
+
 ---
 
 ### Pre-4b: Phase Metadata Extraction
@@ -188,7 +232,7 @@ Before invoking code-quality, collect from the phase's task files:
 
 1. The task list for the current phase (IDs + file paths)
 2. Each task's `requires_ux_dx_review` flag — if ANY is true, Phase 5 includes UX/DX review
-3. Each task type, exact file manifest, and reported files changed in 4a
+3. Each task type, exact file manifest, and reported files changed in 4a — read from each dispatch's per-task report sections (workstream reports concatenate one section per member task)
 4. The resolved test flags and every authorized validation result or policy-based omission
 
 ```
@@ -236,6 +280,8 @@ typecheck, build, or test commands ran when an approved task narrowed them.
 **PHASE TASKS**:
 - Task NN: [name] - `.corvus/tasks/[feature]/NN-task.md`
 - Task NN: [name] - `.corvus/tasks/[feature]/NN-task.md`
+
+**CONTEXT FILE**: `.corvus/tasks/[feature]/CONTEXT.md` (discovery context — read when present; may be absent on legacy plans)
 
 **SCOPE**: All files created/modified in 4a for this phase
 
@@ -302,6 +348,8 @@ Only tasks [NN] require fixes. Tasks [NN] should NOT be modified.
 - Task NN: [name] - `.corvus/tasks/[feature]/NN-task.md`
 - Task NN: [name] - `.corvus/tasks/[feature]/NN-task.md`
 
+**CONTEXT FILE**: `.corvus/tasks/[feature]/CONTEXT.md` (discovery context — read when present; may be absent on legacy plans)
+
 **SCOPE**: All files created/modified in 4a for this phase
 
 **MODE**: ACCEPTANCE-ONLY (`tests_enabled: false` OR `tests_deferred: true`)
@@ -359,7 +407,7 @@ Only tasks [NN] require fixes. Tasks [NN] should NOT be modified.
 
 ### On FAIL: Iteration-Aware Fix Cycle
 
-The canonical rule from Operating Rules applies: iteration 1 dispatches a direct fix from the gate's failure report (F1); iteration ≥2 runs FAILURE_ANALYSIS first, then the fix (F2); every iteration ends with revalidation at the original 4b dispatch scope (F3).
+The canonical rule from Operating Rules applies: iteration 1 dispatches a direct fix from the gate's failure report (F1); iteration ≥2 runs FAILURE_ANALYSIS first, then the fix (F2); every iteration ends with revalidation at the original 4b dispatch scope (F3). A fix dispatch may target a subset of a workstream's tasks: scope it to the failing tasks — including tasks the gate reports as BLOCKED or unimplemented — as a single-task dispatch or a subset workstream carrying only those task files.
 
 **Step F1 (Iteration 1): Direct Fix — DELEGATE TO @code-implementer (failing tasks only)**
 
@@ -372,6 +420,8 @@ No task-planner round-trip: the 4b report already attributes failures to tasks.
 - Task NN: [failed criteria/tests from the gate report]
 
 **DO NOT MODIFY**: Tasks [NN, NN] - these passed validation
+
+**CONTEXT FILE**: `.corvus/tasks/[feature]/CONTEXT.md` (discovery context — read when present; may be absent on legacy plans)
 
 **FAILURE REPORT**:
 [4b gate output with task attribution — failing criteria, exact errors, files involved per task]
@@ -446,6 +496,8 @@ Then dispatch the fix to @code-implementer:
 
 **DO NOT MODIFY**: Tasks [NN, NN] - these passed validation
 
+**CONTEXT FILE**: `.corvus/tasks/[feature]/CONTEXT.md` (discovery context — read when present; may be absent on legacy plans)
+
 **FAILURE ANALYSIS**:
 [Root cause and recommended fix approach from the analysis]
 
@@ -503,7 +555,11 @@ Corvus is the caller and verifier, never the plan writer.
 - Validation evidence: [commands/inspection performed, results, and policy-based omissions]
 
 **EVIDENCE TASK FILE**: `.corvus/tasks/[feature]/[NN-task].md` | NONE
+
+**CONTEXT DELTA**: [anchor drift / new surfaces for CONTEXT.md `## Phase [N] Delta` | NONE]
 ```
+
+When a context delta is supplied (not NONE), task-planner appends it to the same feature directory's CONTEXT.md as a `## Phase [N] Delta` section (receiver contract: task-planner PROGRESS_UPDATE mode); when the field is omitted or NONE, no CONTEXT.md write occurs.
 
 Send every completed task ID in the phase, its on-disk prior status, direct
 dependency statuses, the exact gate mode/evidence, and the exact target path. Do
@@ -514,8 +570,9 @@ When task-planner returns:
 1. Require an explicit success result with previous/new states, recalculated
    counts, recorded evidence, and a complete changed-path list.
 2. Verify the returned diff is confined to the supplied MASTER_PLAN.md and, only
-   when named, the one evidence task file. No production, prompt, source, docs,
-   tests, package, Git, generated, or user-local path is allowed.
+   when named, the one evidence task file and, when a `**CONTEXT DELTA**` was supplied, the same feature directory's CONTEXT.md (append-only `## Phase [N] Delta`).
+   No production, prompt, source, docs, tests, package, Git, generated, or
+   user-local path is allowed.
 3. Verify objectives, scope, file manifests, dependencies, and acceptance criteria
    are unchanged; no `[x]` regressed; phase status, task rows, Quick Reference,
    progress counts, and evidence agree.
@@ -528,7 +585,7 @@ MASTER_PLAN.md directly, repair the result silently, or advance to another phase
 
 ### Self-Check Before Leaving a Phase
 
-- [ ] Every task ran through its own code-implementer (one task = one invocation)
+- [ ] Every task ran through exactly one workstream dispatch (one workstream = one code-implementer; per-task report sections present for every member task)
 - [ ] code-quality reported QUALITY GATE STATUS: PASS for the entire phase
 - [ ] Every fix iteration followed the iteration rule (iteration 1: direct fix from the 4b report; iteration ≥2: FAILURE_ANALYSIS first) and re-ran the original 4b dispatch scope
 - [ ] task-planner accepted `PROGRESS_UPDATE`

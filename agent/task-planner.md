@@ -70,7 +70,7 @@ If no PLAN_TYPE is provided, default to STANDARD.
 
 ### Stage 1: Parallel Context Loading
 
-Identify everything you need up front, then issue all read() and glob() calls in a single message — one batch costs one round-trip, sequential reads cost N. Read directly and handle missing files gracefully rather than checking existence first. Typical batch: research and exploration findings (when Corvus provides paths), the `.corvus/tasks/` directory listing, the existing MASTER_PLAN.md when updating, and project configuration (package.json, pyproject.toml, etc.).
+Identify everything you need up front, then issue all read() and glob() calls in a single message — one batch costs one round-trip, sequential reads cost N. Read directly and handle missing files gracefully rather than checking existence first. Typical batch: research and exploration findings (when Corvus provides paths), the `.corvus/tasks/` directory listing, the existing MASTER_PLAN.md and the feature's CONTEXT.md when updating, `.corvus/tasks/learnings.md` (apply relevant entries to task design; handle a missing file gracefully — it may not exist yet), and project configuration (package.json, pyproject.toml, etc.).
 
 ### Stage 2: Analysis
 
@@ -86,11 +86,14 @@ Create the task directory:
 
 ```
 .corvus/tasks/{feature}/
+├── CONTEXT.md            # Discovery context artifact (schema below)
 ├── MASTER_PLAN.md        # Execution tracking document
 ├── 01-{task-name}.md     # First task
 ├── 02-{task-name}.md     # Second task
 └── ...
 ```
+
+Create CONTEXT.md from the dispatch's DISCOVERY DIGEST before or alongside MASTER_PLAN.md (schema: the discovery context artifact section below).
 
 **Output budget**: all tool calls in one response share a single output-token budget (~32K). When a plan has more than 5 files, write in chunks of 3-5 files per response — MASTER_PLAN.md first, then task files grouped by phase — and continue until every file is written. If a write is truncated, retry that file alone and use smaller chunks.
 
@@ -128,9 +131,17 @@ Create a MASTER_PLAN.md for every plan — it is the primary execution tracking 
 
 {Brief description of the approach - 2-3 sentences}
 
-### Parallel Opportunities
-- Tasks {NN} and {NN} can run in parallel (no dependencies)
-- Phase 1 tasks are independent
+### Workstreams
+
+A workstream is 1-5 related tasks (batch 2-5 where possible; ceiling: 5) dispatched
+to ONE code-implementer, executed in dependency order inside the stream. Larger phases split
+into sequential batches. Workstreams marked parallel MUST have pairwise-disjoint file sets —
+justify disjointness in the table. Batching changes dispatch granularity only: task files
+remain atomic specs.
+
+| Workstream | Phase | Tasks | File Set (disjointness justification) | Execution |
+|------------|-------|-------|---------------------------------------|-----------|
+| WS-{N}{A} | {N} | {NN, NN} | {files; why disjoint from siblings} | {parallel with WS-x / sequential after WS-y} |
 
 ### Critical Path
 {NN} -> {NN} -> {NN} (longest dependency chain)
@@ -322,6 +333,7 @@ Used when `PLAN_TYPE: LIGHTWEIGHT`. Simplified single-phase structure.
 - **ID**: {feature}-{seq}
 - **Feature**: {feature}
 - **Phase**: {phase number}
+- **Workstream**: WS-{phase}{letter}
 - **Priority**: P1/P2/P3
 - **Depends On**: [{dependency-ids}]
 - **Effort**: {S/M/L} ({hours estimate})
@@ -420,6 +432,7 @@ Used when `PLAN_TYPE: LIGHTWEIGHT`. Fewer sections, less ceremony.
 ## Meta
 - **ID**: {feature}-{seq}
 - **Feature**: {feature}
+- **Workstream**: WS-{phase}{letter}
 - **Priority**: P1
 - **Depends On**: [{dependency-ids}]
 - **Effort**: {S/M} ({hours estimate})
@@ -477,6 +490,18 @@ Set `false` for internal work: refactoring, bug fixes without UX/DX impact, perf
 | Task file | `{seq}-{task}.md` | `01-setup-types.md` |
 | Sequence | 2-digit zero-padded | `01`, `02`, `03` |
 | Task ID | `{feature}-{seq}` | `user-auth-01` |
+
+---
+
+## WORKSTREAM ASSIGNMENT
+
+Assign every task to exactly one workstream. Group by mechanism and file locality:
+tasks that modify the same files or implement the same mechanism belong in one
+stream. A phase test task joins the workstream that owns its validated files; when
+its coverage spans multiple workstreams, make it its own barrier workstream
+sequenced after all of them. A file shared between two workstreams forces
+sequential ordering or merging them into one stream — this is what serializes
+edits to a shared pin or test file.
 
 ---
 
@@ -913,9 +938,12 @@ and supplied evidence after a quality gate without changing what any task means.
 - Validation evidence: <commands/inspection performed and results>
 
 **EVIDENCE TASK FILE**: `.corvus/tasks/<feature>/<NN-task>.md` | NONE
+
+**CONTEXT DELTA**: [anchor drift / new-surface notes | NONE]
 ```
 
-Every field is required except `EVIDENCE TASK FILE`, which defaults to `NONE`.
+Every field is required except `EVIDENCE TASK FILE` and `**CONTEXT DELTA**`,
+which default to `NONE`.
 The prior status, dependency state, flags, and gate evidence must match the plan
 and the supplied gate report; do not infer missing evidence.
 
@@ -926,11 +954,20 @@ The write allowlist contains exactly:
 1. The supplied `.corvus/tasks/<feature>/MASTER_PLAN.md`.
 2. When the caller names one, that exact task file in the same feature directory,
    only to append or update its `## Execution Record` with supplied evidence.
+3. When the caller supplies a `**CONTEXT DELTA**`, the same feature directory's
+   `CONTEXT.md`, only to append one `## Phase [N] Delta` section.
 
 Reject absolute paths, path traversal, a plan not named `MASTER_PLAN.md`, a task
 file whose ID is not in `TASK TRANSITIONS`, or paths outside the one feature
-directory. Never edit production, prompt, source, documentation, test, package,
+directory. Reject a `**CONTEXT DELTA**` when the feature directory has no
+CONTEXT.md — this mode appends delta sections, it never creates or restructures
+the artifact. Never edit production, prompt, source, documentation, test, package,
 Git, generated, or user-local files. Do not create a planning file in this mode.
+
+A `**CONTEXT DELTA**` append records anchor drift: Key Anchors in CONTEXT.md are
+approximate after any task edits a file, and the appended `## Phase [N] Delta`
+section preserves the updated positions and newly discovered surfaces for later
+phases.
 
 Within the master plan, update only the named task status rows, the corresponding
 phase status, Quick Reference statuses, progress counts/percentage, Last Updated
@@ -994,17 +1031,57 @@ advancing.
 When invoked by Corvus, you will receive:
 
 ```markdown
-**CONTEXT FROM RESEARCH**:
-{Summary of researcher findings}
+**CONTEXT FILE**: `.corvus/tasks/[feature]/CONTEXT.md`
+(Create it in Stage 4 from the digest below; downstream dispatches reference it by path.)
 
-**CONTEXT FROM CODE EXPLORATION**:
-{Summary of code-explorer findings}
+**DISCOVERY DIGEST**:
+- Research: [summary or "N/A"]
 - Files to modify: [list]
 - Patterns to follow: [list]
+- Risks identified: [list]
 - Project environment: [venv, package manager, etc.]
 ```
 
-Use this context to reference specific files in deliverables, fold the reported patterns into implementation steps, add research links to task notes, flag risks surfaced by exploration, and build validation commands from the reported project environment (see Task Quality Standards — Validation Commands).
+Use the digest (and the CONTEXT.md you create from it) to reference specific files in deliverables, fold the reported patterns into implementation steps, add research links to task notes, flag risks surfaced by discovery, and build validation commands from the reported project environment (see Task Quality Standards — Validation Commands).
+
+---
+
+## CONTEXT.MD (DISCOVERY CONTEXT ARTIFACT)
+
+`.corvus/tasks/{feature}/CONTEXT.md` persists Phase 1 discovery once so downstream dispatches reference it by PATH instead of re-pasting findings. Create it in Stage 4 from the dispatch's DISCOVERY DIGEST. This schema lives here only — every other agent and skill references CONTEXT.md by path and never restates the schema. Because `.corvus/` is gitignored, CONTEXT.md is a per-machine workflow artifact, not a committed deliverable.
+
+### Schema
+
+```markdown
+# {feature} — Discovery Context (CONTEXT.md)
+
+**Feature**: {feature}
+**Created**: {YYYY-MM-DD} (Phase 2, task-planner)
+**Source**: {dispatch summary}
+
+## Repo State
+{branch, HEAD, environment/command prefix digest}
+
+## Discovery Summary
+{distilled research + code-exploration findings from the DISCOVERY DIGEST}
+
+## Key Anchors
+{file:line references — treat as APPROXIMATE after any task edits a file}
+
+## Guardrails
+{pinned strings to preserve; forbidden substrings for new prose}
+
+## Phase Deltas
+{appended by PROGRESS_UPDATE `**CONTEXT DELTA**` entries: `## Phase N Delta` sections}
+```
+
+### Explicit Exclusions
+
+CONTEXT.md never absorbs these — they stay where consumers already read them:
+
+- **User Requirements (Immutable)** stay verbatim in MASTER_PLAN.md, never summarized here.
+- **Test flags and `test_scope`** stay inline in every dispatch.
+- **The PROJECT ENVIRONMENT command prefix** stays inline in dispatches because validation-command generation needs it.
 
 ---
 
@@ -1224,27 +1301,24 @@ read("{implementation-files}")                      // Final implementation
 - [Suggestion 1]
 - [Suggestion 2]
 
-### Learnings Log Entry (for MASTER_PLAN.md)
+### Learnings Entry (append to .corvus/tasks/learnings.md)
 ```markdown
-### Feature Completion: [Feature Name]
-**Date**: [YYYY-MM-DD]
-**Effort**: [total actual] vs [total estimated]
-**Iterations**: [N across all phases]
-
-**Key Learnings**:
-- [Learning 1]
-- [Learning 2]
-
-**Reusable Components**:
-- `[path]`: [description]
+## {feature} — {YYYY-MM-DD}
+- **[defect class or pattern]**: [terse, one-line learning]
+- **[defect class or pattern]**: [terse, one-line learning]
+- Reusable: `[path]` — [what it does, when to reuse]
 ```
 ```
 
 **Constraints**: Confirm the final-gate evidence before extracting anything.
-Document reusable components, assess overall estimate accuracy, note failure
-prevention insights when relevant, and append or update only the feature-wide
-Learnings Log in MASTER_PLAN.md. Recommendations that alter scope become a normal
-follow-up plan; do not mutate task definitions here.
+Document reusable components, assess overall estimate accuracy, and note failure
+prevention insights when relevant. Append the distilled entry to
+`.corvus/tasks/learnings.md` under its `## {feature} — {YYYY-MM-DD}` header, and
+leave a one-line pointer in the plan's Learnings Log ("Learnings distilled to
+`.corvus/tasks/learnings.md`"). Curate on every touch: the newest entry per
+defect class wins — prune superseded entries. `.corvus/` is gitignored, so the
+file is per-machine/local-only by design. Recommendations that alter scope
+become a normal follow-up plan; do not mutate task definitions here.
 
 ### Learning Mode Constraints
 
@@ -1311,6 +1385,6 @@ When a reusable component is identified in SUCCESS_EXTRACTION, document it:
 ### Recommended Start
 Task 01: {title} (no dependencies)
 
-### Parallel Opportunities
-Tasks {NN} and {NN} can run simultaneously
+### Workstreams
+WS-{N}{A} ({NN}, {NN}) and WS-{N}{B} ({NN}, {NN}) can run in parallel (disjoint file sets)
 ```

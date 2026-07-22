@@ -233,7 +233,7 @@ Plan Input (consume preselection; otherwise interactive choice/auto heuristic)
               └──► Test Input (consume supplied flags; ask/default only missing values)
     │
     ▼
-Phase 2: Planning (@task-planner creates MASTER_PLAN.md)
+Phase 2: Planning (@task-planner creates MASTER_PLAN.md + CONTEXT.md)
     │
     ▼
 Phase 3: User Approval (single approval gate)
@@ -249,7 +249,7 @@ Phase 3.5: Plan Review (@plan-reviewer) [optional]
     │
     ▼
 Phase 4: Implementation Loop (per-PHASE, not per-task)
-    │   4a: @code-implementer (all phase tasks, parallel where possible)
+    │   4a: @code-implementer (workstreams of phase tasks, parallel when file sets are disjoint)
     │   4b: @code-quality (entire phase, phase-targeted tests, with failure attribution)
     │       FAIL → fix (iteration 1: direct; iteration ≥2: FAILURE_ANALYSIS first) → revalidate
     │   4c: @task-planner PROGRESS_UPDATE → verify plan-only diff → next phase
@@ -269,11 +269,12 @@ Key features:
 - **Test preference**: Choose tests at every quality gate, deferred to final validation only, or skipped entirely (`@corvus-auto` always defers tests to Phase 5)
 - **Predictable test cadence**: Every dispatch carries `test_scope: targeted | full | none` — phase-targeted runs at each 4b gate (when not deferred), then THE single full-suite run at Phase 5a for all test-enabled modes (a Lightweight non-deferred plan carries this run at its final 4b gate)
 - **Phase-level validation**: Quality checks run once per phase, not per task
-- **Parallel execution**: Independent tasks within a phase run simultaneously
+- **Workstream dispatch**: One code-implementer per workstream (1-5 dependency-ordered tasks); workstreams with disjoint file sets run in parallel
+- **Cross-session resume**: An in-progress MASTER_PLAN is detected at intake and resumed at the first incomplete step (`@corvus` asks first; `@corvus-auto` decides deterministically)
 - **Conditional clarification**: Phase 0b skipped when requirements are already clear
 - **Two-tier quality gates**: Objective (@code-quality) at phase boundaries + Subjective (@ux-dx-quality) at feature completion
 - **Failure attribution**: Quality gate identifies exactly which task(s) failed
-- **Learning loops**: Repeated gate failures (iteration ≥2) get FAILURE_ANALYSIS before the next fix; Phase 6 alone extracts feature-wide success learnings
+- **Learning loops**: Repeated gate failures (iteration ≥2) get FAILURE_ANALYSIS before the next fix; Phase 6 alone extracts feature-wide success learnings, distilled to the local-only `.corvus/tasks/learnings.md`
 - **Optional plan review**: Phase 3.5 validates plan quality before implementation begins
 - **Safe autonomous completion**: `@corvus-auto` finishes locally by default; Git delivery requires an explicit trusted opt-in and guarded single-commit route
 

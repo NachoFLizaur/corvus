@@ -6,12 +6,12 @@ Complete state machine documentation for the Corvus workflow, including phase tr
 
 Corvus coordinates complex work through Phases 0-7 plus optional Phase 3.5. Plan and test inputs are resolved before Phase 2. `No Plan` is not a Phase 2 mode: it delegates directly to one specialist and ends without a master plan, test-preference step, or approval gate. Planned work uses `LIGHTWEIGHT`, `STANDARD`, or `SPEC_DRIVEN`, then moves through planning, implementation, final gates, and completion.
 
-This document covers the interactive orchestrator (`agent/corvus.md`) and its mirrored autonomous variant (`agent/corvus-auto.md`). Corvus Auto consumes preselected inputs or deterministic defaults, denies `question()`, auto-approves the plan, requires Phase 3.5, and defaults to `delivery_mode: local_only`. Its guarded Git delivery route runs only after an explicit trusted opt-in.
+This document covers the interactive orchestrator (`agent/corvus.md`) and its mirrored autonomous variant (`agent/corvus-auto.md`). Corvus Auto consumes preselected inputs or deterministic defaults, denies `question()`, auto-approves the plan, requires Phase 3.5, and defaults to `delivery_mode: local_only`. Its guarded Git delivery route runs only after an explicit trusted opt-in. At intake, before Phase 0, both orchestrators detect an in-progress MASTER_PLAN (`[~] In Progress`) and can resume it at the first incomplete step — interactive Corvus asks via a question; Corvus Auto decides deterministically and question-free.
 
 **Key Principles**:
 - **Correctness over speed**: Every phase must complete properly before proceeding
 - **Phase-level operations**: Validation happens per-phase, not per-task
-- **Learning loops**: Repeated gate failures (iteration ≥2) get root-cause analysis before the next fix; learnings are extracted after success
+- **Learning loops**: Repeated gate failures (iteration ≥2) get root-cause analysis before the next fix; learnings are extracted after success and distilled to the local-only `.corvus/tasks/learnings.md`
 - **Single planned-work approval gate**: Interactive plan approval and any Phase 3.5 continuation stay in the Phase 3/3.5 gate
 
 ---
@@ -20,7 +20,10 @@ This document covers the interactive orchestrator (`agent/corvus.md`) and its mi
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Phase0a: User Request
+    [*] --> ResumeDetection: User Request
+
+    ResumeDetection --> Phase0a: New work (no in-progress plan resumed)
+    ResumeDetection --> Phase4: Resume at first incomplete step (re-run last gate unless recorded PASS)
 
     Phase0a --> PlanInput: REQUIREMENTS_CLEAR
     Phase0a --> Phase0a: QUESTIONS_NEEDED (max 3 rounds)
@@ -87,7 +90,7 @@ stateDiagram-v2
 | PI | Plan Input | Consume a preselection or resolve No Plan/Lightweight/Standard/Spec-Driven | Interactive Corvus + User, or Corvus Auto |
 | TI | Test Input | For planned work, resolve normal/deferred/no-test flags once | Interactive Corvus + User, or Corvus Auto |
 | 1 | Discovery | Gather unresolved context once and return to Phase 0b or the direct caller | @researcher + @code-explorer (parallel) |
-| 2 | Planning | Create master plan and task files | @task-planner |
+| 2 | Planning | Create master plan, CONTEXT.md (discovery context artifact), and task files | @task-planner |
 | 2L | Lightweight Planning | Create simplified master plan (1 phase, 3-6 tasks) | @task-planner |
 | 2S | Spec-Driven Planning | Create master plan with mandatory specs | @task-planner |
 | 3 | User Approval | Single approval gate | User |
@@ -200,6 +203,8 @@ Valid preselected `PLAN_TYPE`, `tests_enabled`, and `tests_deferred` values are 
 | Phase 7 | Phase 2 | PARTIAL RESTART (3+ files, builds on completed work) |
 | Phase 7 | Phase 0a | FULL RESTART (new/unrelated feature) |
 
+Phase 7 accepts follow-ups from the same session or a later one: intake resume detection (orchestrator rule `resume_detection`) routes a new request against a MASTER_PLAN marked `[x] Complete` into this triage. A plan still marked `[~] In Progress` takes the RESUME route back to the orchestrator's resume flow instead (first incomplete step, re-run the last quality gate unless the plan records its PASS with evidence) — that is unfinished work, not a follow-up.
+
 ---
 
 ## Phase 4: Implementation Loop
@@ -236,22 +241,22 @@ stateDiagram-v2
 
 ### 4a: Implementation Step
 
-**Agent**: @code-implementer (one per task)
+**Agent**: @code-implementer (one per workstream)
 
-**Rule**: One task = one code-implementer, always
+**Rule**: One workstream = one code-implementer (1-5 tasks, dependency-ordered inside the stream)
 
 ```
-For each task in current phase:
-  - Independent tasks: Multiple task() calls in ONE message (parallel)
-  - Dependent tasks: One task() call per message (sequential)
+For each workstream in current phase (master plan, Workstreams section):
+  - Disjoint workstreams: Multiple task() calls in ONE message (parallel)
+  - Dependent workstreams: One task() call per message (sequential)
 ```
 
 **Parallel Execution Decision**:
 ```
-Check task metadata:
-  - "Parallel With" present → Can run in parallel
+Check the plan's Workstreams table and task metadata:
+  - Pairwise-disjoint file sets → Workstreams can run in parallel
   - "Depends On" present → Must run after dependency
-  - Same files modified → Must run sequentially
+  - Same files modified → Must run sequentially (serialize or merge into one stream)
 ```
 
 ### 4a to 4b Transition
@@ -355,7 +360,7 @@ F3: Loop back to 4b (revalidation at the same scope as the original 4b
 
 **Actions**:
 1. After a phase-wide 4b `PASS`, supply the exact master-plan path, phase/task IDs, prior/requested statuses, dependency statuses, gate mode and evidence, test flags, task-owned files changed, and validation evidence.
-2. Task Planner may update only that `MASTER_PLAN.md` and, when explicitly named, the matching task file's execution record. Production, prompt, source, docs, tests, package, Git, generated, and user-local files are outside the mode's write allowlist.
+2. Task Planner may update only that `MASTER_PLAN.md`, the matching task file's execution record when explicitly named, and — when the dispatch supplies a `**CONTEXT DELTA**` — the feature's CONTEXT.md, appending a `## Phase [N] Delta` section (omitted or NONE means no CONTEXT.md write). Production, prompt, source, docs, tests, package, Git, generated, and user-local files are outside the mode's write allowlist.
 3. Task Planner rejects status regression, completion with unmet dependencies or a non-passing gate, missing evidence, scope/acceptance changes, and any unauthorized path.
 4. Corvus verifies the returned diff is plan-only and that task rows, phase status, Quick Reference, progress counts, and evidence agree. A rejected or inconsistent update blocks the transition; Corvus never repairs the plan directly.
 
@@ -465,55 +470,51 @@ stateDiagram-v2
 
 | Scenario | Example |
 |----------|---------|
-| Independent tasks within a phase | Tasks 03, 04, 05 with no dependencies |
+| Disjoint workstreams within a phase | WS-1A (tasks 03, 04) and WS-1B (tasks 05, 06) with pairwise-disjoint file sets |
 | Discovery agents in Phase 1 | @researcher + @code-explorer |
-| Multiple code-implementers for independent tasks | 4 task() calls in one message |
+| Multiple code-implementers for disjoint workstreams | One task() call per workstream, all in one message |
 
 ### What CANNOT Run in Parallel
 
 | Scenario | Reason |
 |----------|--------|
 | Steps within a phase (4a→4b→4c) | Sequential dependency |
-| Tasks with "Depends On" metadata | Output feeds into next |
-| Tasks modifying same files | Conflict risk |
+| Dependent workstreams ("Depends On" across streams) | Output feeds into the next stream |
+| Workstreams sharing any file | Conflict risk — serialize or merge into one stream |
 | Phases in master plan | Phase order matters |
 | 5a and 5b | 5b depends on 5a passing |
 
 ### Parallel Execution Patterns
 
-**Pattern A: All Independent**
+**Pattern A: Parallel Disjoint Workstreams**
 ```javascript
-// ONE message, FOUR parallel code-implementers
-task({ subagent: "code-implementer", prompt: "Task 03..." })
-task({ subagent: "code-implementer", prompt: "Task 04..." })
-task({ subagent: "code-implementer", prompt: "Task 05..." })
-task({ subagent: "code-implementer", prompt: "Task 06..." })
+// ONE message, TWO parallel code-implementers (one per workstream)
+task({ subagent: "code-implementer", prompt: "Workstream WS-1A — task files 03, 04..." })
+task({ subagent: "code-implementer", prompt: "Workstream WS-1B — task files 05, 06..." })
 ```
 
-**Pattern B: All Sequential**
+**Pattern B: Sequential Dependent Workstreams**
 ```javascript
 // Message 1
-task({ subagent: "code-implementer", prompt: "Task 07..." })
+task({ subagent: "code-implementer", prompt: "Workstream WS-1A — task files 07, 08..." })
 // Wait for completion
 
-// Message 2
-task({ subagent: "code-implementer", prompt: "Task 08..." })
-// Wait for completion
-
-// Message 3
-task({ subagent: "code-implementer", prompt: "Task 09..." })
+// Message 2: WS-1B consumes WS-1A's output
+task({ subagent: "code-implementer", prompt: "Workstream WS-1B — task files 09, 10..." })
 ```
 
 **Pattern C: Mixed**
 ```javascript
-// Message 1: Parallel tasks
-task({ subagent: "code-implementer", prompt: "Task 03..." })
-task({ subagent: "code-implementer", prompt: "Task 04..." })
-// Wait for BOTH to complete
+// Message 1: parallel disjoint workstreams
+task({ subagent: "code-implementer", prompt: "Workstream WS-1A — task files 03, 04..." })
+task({ subagent: "code-implementer", prompt: "Workstream WS-1B — task file 05..." })
+// Wait for BOTH workstreams to complete
 
-// Message 2: Sequential task depending on 03 and 04
-task({ subagent: "code-implementer", prompt: "Task 05..." })
+// Message 2: workstream depending on WS-1A and WS-1B
+task({ subagent: "code-implementer", prompt: "Workstream WS-1C — task files 06, 07..." })
 ```
+
+Every workstream prompt lists all of its member task files and uses the Workstream Delegation Template (single-task workstreams use the Single-Task Delegation Template) from the corvus-phase-4 skill.
 
 ---
 
