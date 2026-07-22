@@ -75,6 +75,8 @@ Invoke **task-planner** with the resolved inputs and available context:
 **PLAN_TYPE**: [LIGHTWEIGHT / STANDARD / SPEC_DRIVEN]
 (Resolved before Phase 2; No Plan is not accepted here)
 
+**REQUIREMENTS ANALYSIS**: [completed — summary attached | requirements-analyst: skipped (spec-complete)]
+
 **EXPECTED OUTCOME**:
 - Master plan document at `.corvus/tasks/[feature-name]/MASTER_PLAN.md`
 - Individual task files at `.corvus/tasks/[feature-name]/NN-task-name.md`
@@ -130,6 +132,8 @@ Incorporate these into MASTER_PLAN.md and all relevant task files. Do not substi
 - Recommended execution order
 - Any concerns or risks
 ```
+
+When the spec-completeness bypass skipped Phase 0a, the `**REQUIREMENTS ANALYSIS**` field carries `requirements-analyst: skipped (spec-complete)`, and the Phase 3.5 plan-reviewer dispatch's USER REQUIREMENTS section notes the same skip so plan-reviewer reviews with that knowledge.
 
 ### Plan-Type Workflow Notes
 

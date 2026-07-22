@@ -104,6 +104,21 @@ For a direct discovery request, invoke Phase 1 with `DISCOVERY_ORIGIN: DIRECT_CA
     complete planned-work tuple before loading Phase 2.
   </rule>
 
+  <rule id="spec_completeness_bypass">
+    Phase 0a dispatch is conditional: skip the requirements-analyst dispatch only
+    when the request is spec-complete — ALL of: explicit scope (files/components
+    enumerated or precisely derivable), verifiable acceptance criteria stated,
+    decision criteria supplied for any open point, and no missing-information
+    question you can articulate. Any doubt means dispatch Phase 0a normally.
+    When bypassed, still present Plan-Type Selection: score the request yourself
+    against the /16 dimension table (rubric owner: requirements-analyst.md,
+    Plan-Type Heuristic) and present the recommendation via question(). Record
+    the bypass so Phase 2 carries `requirements-analyst: skipped (spec-complete)`
+    in the task-planner dispatch (plan-reviewer sees it). QUESTIONS_NEEDED and
+    DISCOVERY_NEEDED handling for dispatched analyses is unchanged.
+    Mirror divergence: corvus-auto scores deterministically instead of asking.
+  </rule>
+
   <rule id="resume_detection">
     At intake, before Phase 0, glob `.corvus/tasks/*/MASTER_PLAN.md` and grep the
     results for `[~] In Progress` on the `**Status**:` line. When an in-progress plan
@@ -165,7 +180,7 @@ Steps within a phase are sequential (4a → 4b → 4c); only independent tasks w
 |------|-------|-------------|-------------|
 | 0 | Phase 3 approval | Present choice via question(): "Start Implementation" or "High Accuracy Review" | Skipping the choice; auto-running Phase 3.5 |
 | 0.5 | Phase 3.5 returns | OKAY → present results, user confirms via question(). REJECT → task-planner fixes plan, then user chooses via question() | Proceeding to Phase 4 without the user's confirmation |
-| 1 | 4a returns | Invoke code-quality for 4b in the mode the resolved test flags select, with the matching `test_scope` (targeted when enabled non-deferred; none when deferred or disabled); Lightweight non-deferred final gate: `test_scope: full`, doubling as final validation (semantics: corvus-phase-2 skill, Test Scope section) | Fixing (no failure yet), updating the plan, or skipping to 4c |
+| 1 | 4a returns | Invoke code-quality for 4b in the mode the resolved test flags select, with the matching `test_scope` (targeted when enabled non-deferred; none when deferred or disabled); Lightweight non-deferred final gate: `test_scope: full`, doubling as final validation (semantics: corvus-phase-2 skill, Test Scope section); acceptance-only gates may be triage-skipped per the corvus-phase-4 skill's Risk-triaged 4b rule (lightweight verification from per-task reports) | Fixing (no failure yet), updating the plan, or skipping to 4c; skipping 4b outside the risk-triage conditions |
 | 2 | 4b PASS | Update MASTER_PLAN.md → next phase or Phase 5 | SUCCESS_EXTRACTION (Phase 6 owns it); skipping the plan update |
 | 3 | 4b FAIL | Iteration 1: code-implementer fixes only the failing tasks (targeted, with the 4b failure report) → 4b. Iteration ≥2: task-planner FAILURE_ANALYSIS first → fix → 4b | Skipping FAILURE_ANALYSIS from iteration 2 onward; full-suite reruns at 4b (sole exception: the Lightweight non-deferred final gate revalidating at its dispatched full scope); proceeding to 4c; fixing all tasks |
 | 4 | Phase 5 PASS | Phase 6 | Skipping Phase 6 / SUCCESS_EXTRACTION |
@@ -188,6 +203,7 @@ User Request
   ├─ in-progress plan found → question(): Resume → re-enter at first incomplete step (RESUME section)
   └─ none found, or user chooses new work
   ▼
+  ├─ spec-complete request → skip 0a/0b → [Plan Input Resolution]
 [Phase 0a] @requirements-analyst (INITIAL_ANALYSIS)
   ├─ QUESTIONS_NEEDED → [Clarification Resolution: Corvus presents full batch] → Phase 0a
   ├─ DISCOVERY_NEEDED → [Phase 1 | PHASE_0A → PHASE_0B]
@@ -217,6 +233,8 @@ Load first: `skill({ name: "corvus-phase-0" })`
 
 Delegate to @requirements-analyst. It returns `REQUIREMENTS_CLEAR`, `QUESTIONS_NEEDED`, or `DISCOVERY_NEEDED` as data and cannot call `question()`.
 
+This dispatch is conditional per the `spec_completeness_bypass` rule: when the request is spec-complete, skip the requirements-analyst dispatch and continue directly to Plan-Type Selection with an orchestrator-scored recommendation.
+
 On `QUESTIONS_NEEDED`:
 1. Put the analyst's entire ordered batch into one `question()` tool call; preserve every ID, priority, option, default, and blocking reason.
 2. Collect the complete result as `ANSWERS_BY_ID` and re-invoke the same mode with the prior analysis and answers.
@@ -244,7 +262,7 @@ Launch researcher + code-explorer in parallel for the unresolved scope. Pass `EX
 
 **Goal**: Present the plan-type recommendation and route to the matching planning mode.
 
-**When**: After requirements-analyst returns REQUIREMENTS_CLEAR (from Phase 0a or 0b). Resolve this input before loading Phase 2.
+**When**: After requirements-analyst returns REQUIREMENTS_CLEAR (from Phase 0a or 0b), or directly after a spec-completeness bypass. Resolve this input before loading Phase 2.
 
 > **Mirror divergence**: corvus-auto auto-selects from the heuristic score instead of asking.
 
@@ -405,7 +423,7 @@ Load first: `skill({ name: "corvus-phase-4" })`
 ```
 4a: code-implementer (workstreams of phase tasks, parallel when file sets are disjoint)
   ▼
-4b: code-quality (mandatory)
+4b: code-quality (mandatory; risk-triaged when acceptance-only)
   ├─ tests_enabled: true, tests_deferred: false → tests + acceptance criteria
   ├─ tests_enabled: true, tests_deferred: true  → acceptance criteria only (tests deferred to Phase 5)
   └─ tests_enabled: false                       → acceptance criteria only (no tests)
@@ -415,6 +433,8 @@ FAIL → fix loop (iteration 1: direct fix; iteration ≥2: FAILURE_ANALYSIS fir
 ```
 
 One workstream = one code-implementer (1-5 tasks, disjoint files across parallel streams; rule and templates: corvus-phase-4 skill). Iteration 1 fixes directly from the 4b failure report; FAILURE_ANALYSIS precedes fixes from iteration 2 onward (Gate 3; rule: corvus-phase-4 skill). Max 3 fix iterations per phase — on hitting the cap, stop and escalate to the user with what passed, what still fails, and open questions, even if the phase is incomplete.
+
+Acceptance-only 4b gates are risk-triaged: the corvus-phase-4 skill's Risk-triaged 4b rule defines the only skip conditions and the lightweight verification that replaces a skipped dispatch; enabled non-deferred phases always run the real gate.
 
 ## Phase 5: FINAL VALIDATION
 

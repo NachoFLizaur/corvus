@@ -25,6 +25,10 @@ Every Phase 1 dispatch carries both fields below; the receiver returns to exactl
 
 Phase 0a always uses `DISCOVERY_ORIGIN: PHASE_0A`. Additional discovery requested by Phase 0b preserves that origin and return target. Pass accumulated findings as `EXISTING_FINDINGS` so Phase 1 investigates only the unresolved delta.
 
+## Spec-Completeness Bypass (Pre-0a)
+
+The orchestrator may skip the Phase 0a dispatch entirely when ALL criteria of its `spec_completeness_bypass` rule hold (the orchestrator rule owns the criteria — apply it as written there; any doubt means dispatching Phase 0a normally). When skipped, control proceeds directly to Plan Selection and Direct Routing below, and the Phase 2 task-planner dispatch must record `requirements-analyst: skipped (spec-complete)` so plan-reviewer knows the analyst never ran.
+
 ## Phase 0a: INITIAL CLARIFICATION
 
 **Goal**: Analyze the request and determine whether clarification is needed before discovery.
@@ -66,6 +70,7 @@ Phase 0a always uses `DISCOVERY_ORIGIN: PHASE_0A`. Additional discovery requeste
 | `REQUIREMENTS_CLEAR` | Continue to plan selection/direct routing below |
 | `QUESTIONS_NEEDED` | Caller resolves the complete batch per Clarification Ownership, then re-invokes Phase 0a with the answer/assumption map |
 | `DISCOVERY_NEEDED` | Invoke Phase 1 with `DISCOVERY_ORIGIN: PHASE_0A` and `RETURN_TARGET: PHASE_0B`; on return, invoke Phase 0b before any selection or planning |
+| *(not dispatched)* | Spec-complete bypass (orchestrator rule `spec_completeness_bypass`): skip 0a/0b and continue to plan selection; record the skip in the Phase-2 dispatch |
 
 **Exit Criteria**: Requirements are clear, or the origin-tagged discovery dispatch has transferred control to Phase 1.
 
@@ -126,7 +131,7 @@ Limit additional Phase 0b discovery passes to 2. At the cap, document unresolved
 
 ## Plan Selection and Direct Routing
 
-This step runs only after `REQUIREMENTS_CLEAR` from Phase 0a or Phase 0b. The orchestrator owns interactive, autonomous, and preselected input handling.
+This step runs after `REQUIREMENTS_CLEAR` from Phase 0a or Phase 0b, or directly via the Spec-Completeness Bypass (Pre-0a). The orchestrator owns interactive, autonomous, and preselected input handling.
 
 | Plan Type | Next route |
 |-----------|------------|

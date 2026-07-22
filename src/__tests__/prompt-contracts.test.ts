@@ -3463,3 +3463,605 @@ describe("permissions-alignment: structural guards", () => {
     }
   })
 })
+
+// ============================================================================
+// flow-streamline — Phase 1 (Task 03): conditional 0a bypass pins
+// ============================================================================
+//
+// Byte-derived pins over the spec-completeness bypass surfaces Phase 1 landed:
+// the sibling rule in both orchestrators (Task 01), the phase-0 skill's
+// pre-0a route, and the phase-2 dispatch skip record (Task 02). Every
+// extraction-based test asserts its region is non-empty before asserting
+// content (undetermined-assertion rule).
+
+const PHASE_0 = "skill/corvus-phase-0/SKILL.md"
+
+/** Body of one orchestrator's spec_completeness_bypass rule (non-greedy). */
+const bypassRuleBody = (relPath: string): string =>
+  read(relPath).match(
+    /<rule id="spec_completeness_bypass">([\s\S]*?)<\/rule>/,
+  )?.[1] ?? ""
+
+describe("flow-streamline: conditional 0a pins", () => {
+  test("bypass rule present once per orchestrator", () => {
+    for (const file of [CORVUS, CORVUS_AUTO]) {
+      expect(
+        countOccurrences(file, '<rule id="spec_completeness_bypass">'),
+      ).toBe(1)
+    }
+  })
+
+  test("bypass criteria in mirror lockstep", () => {
+    const interactiveBody = bypassRuleBody(CORVUS)
+    const autonomousBody = bypassRuleBody(CORVUS_AUTO)
+    expect(interactiveBody).not.toBe("")
+    expect(autonomousBody).not.toBe("")
+
+    // The four ALL-must-hold criteria span the first five body lines and are
+    // byte-identical across the pair (shared canonical criteria text).
+    const criteriaLines = (body: string): string[] =>
+      body.split("\n").slice(1, 6)
+    const interactiveCriteria = criteriaLines(interactiveBody)
+    expect(interactiveCriteria).toHaveLength(5)
+    expect(interactiveCriteria).toContain(
+      "    question you can articulate. Any doubt means dispatch Phase 0a normally.",
+    )
+    expect(criteriaLines(autonomousBody)).toEqual(interactiveCriteria)
+
+    // Interactive divergence: corvus asks; its marker names the auto behavior.
+    expect(interactiveBody).toContain(
+      "present the recommendation via question()",
+    )
+    expect(interactiveBody).toContain(
+      "Mirror divergence: corvus-auto scores deterministically instead of asking.",
+    )
+
+    // Autonomous divergence: corvus-auto never asks. Its own marker reads
+    // "presentS the recommendation" (singular verb), so the imperative form
+    // below is a clean discriminator. Do NOT assert absence of question()
+    // itself — the divergence marker legitimately names it.
+    expect(autonomousBody).toContain("proceed without asking")
+    expect(autonomousBody).not.toContain(
+      "present the recommendation via question()",
+    )
+    expect(autonomousBody).toContain(
+      "Mirror divergence: interactive corvus presents the recommendation via question().",
+    )
+
+    // The workflow diagram carries the bypass route, byte-identical in the pair.
+    const diagramLine =
+      "  ├─ spec-complete request → skip 0a/0b → [Plan Input Resolution]"
+    for (const file of [CORVUS, CORVUS_AUTO]) {
+      expect(read(file).split("\n")).toContain(diagramLine)
+    }
+  })
+
+  test("bypass is a sibling of pinned rules", () => {
+    for (const file of [CORVUS, CORVUS_AUTO]) {
+      const content = read(file)
+      const preselected =
+        content.match(
+          /<rule id="preselected_inputs">([\s\S]*?)<\/rule>/,
+        )?.[1] ?? ""
+      const resume =
+        content.match(
+          /<rule id="resume_detection">([\s\S]*?)<\/rule>/,
+        )?.[1] ?? ""
+      expect(preselected).not.toBe("")
+      expect(resume).not.toBe("")
+      expect(preselected).not.toContain("spec_completeness_bypass")
+      expect(resume).not.toContain("spec_completeness_bypass")
+
+      // Sibling placement: AFTER preselected_inputs, BEFORE resume_detection.
+      const bypassIndex = content.indexOf(
+        '<rule id="spec_completeness_bypass">',
+      )
+      expect(bypassIndex).toBeGreaterThan(
+        content.indexOf('<rule id="preselected_inputs">'),
+      )
+      expect(bypassIndex).toBeLessThan(
+        content.indexOf('<rule id="resume_detection">'),
+      )
+    }
+  })
+
+  test("rubric stays single-owner", () => {
+    // The /16 dimension table lives only in requirements-analyst.md; the
+    // bypass rules POINT at it (Plan-Type Heuristic) without duplicating rows.
+    expectContains(REQUIREMENTS_ANALYST, [
+      "| **File count** | 2x | 1-2 files | 3-5 files | 6+ files |",
+    ])
+    for (const file of [CORVUS, CORVUS_AUTO]) {
+      expectAbsent(file, ["File count"])
+    }
+  })
+
+  test("analyst untouched", () => {
+    expectContains(REQUIREMENTS_ANALYST, [
+      "### Plan-Type Recommendation",
+      "REQUIREMENTS_CLEAR",
+      "QUESTIONS_NEEDED",
+      "DISCOVERY_NEEDED",
+    ])
+    expectAbsent(REQUIREMENTS_ANALYST, ["spec_completeness_bypass"])
+  })
+
+  test("phase-0 skill carries the bypass route", () => {
+    expectContains(PHASE_0, [
+      "## Spec-Completeness Bypass (Pre-0a)",
+      "the orchestrator rule owns the criteria — apply it as written there",
+      "| *(not dispatched)* | Spec-complete bypass (orchestrator rule `spec_completeness_bypass`): skip 0a/0b and continue to plan selection; record the skip in the Phase-2 dispatch |",
+    ])
+    expect(
+      countOccurrences(PHASE_0, "requirements-analyst: skipped (spec-complete)"),
+    ).toBeGreaterThanOrEqual(1)
+  })
+
+  test("phase-2 dispatch records the skip", () => {
+    expectContains(PHASE_2, [
+      "**REQUIREMENTS ANALYSIS**: [completed — summary attached | requirements-analyst: skipped (spec-complete)]",
+      "the `**REQUIREMENTS ANALYSIS**` field carries `requirements-analyst: skipped (spec-complete)`",
+    ])
+    expect(
+      countOccurrences(PHASE_2, "requirements-analyst: skipped (spec-complete)"),
+    ).toBeGreaterThanOrEqual(2)
+  })
+
+  test("questions/discovery flows survive", () => {
+    expectContains(PHASE_0, [
+      "REQUIREMENTS_CLEAR",
+      "QUESTIONS_NEEDED",
+      "DISCOVERY_NEEDED",
+      "**MODE**: INITIAL_ANALYSIS",
+      "**MODE**: POST_DISCOVERY",
+      "**TASK**:",
+      "**MUST DO**:",
+      "**MUST NOT DO**:",
+      "**REPORT BACK**:",
+    ])
+  })
+})
+
+// ============================================================================
+// flow-streamline — Phase 2 (Task 05): code-quality slim pins
+// ============================================================================
+//
+// Byte-derived pins over the slimmed code-quality agent (Task 04): the
+// security-audit checklist stays deleted, the new security-routing sentence
+// sits adjacent to the pinned audit-routing sentence, and MODE 2 stays the
+// compact trusted-code checklist. Canonical cadence pins are owned by earlier
+// blocks — the standalone P1 audit-routing pin ("audit dispatches never route
+// to code-quality"), the Single-test-run row, and the binary PASS/FAIL +
+// IF PASS footer ("keeps objective quality binary and routes PASS to
+// progress") — tests here use adjacent fragments, never duplicates. Every
+// extraction asserts non-empty before content (undetermined-assertion rule).
+
+describe("flow-streamline: code-quality slim pins", () => {
+  test("security checklist never returns", () => {
+    // The SECURITY AUDIT CHECKLIST section (formerly the file's last section)
+    // and its rubric bytes were deleted outright by Task 04; none may
+    // reappear anywhere in the file. Sibling absence pins (NEEDS_IMPROVEMENT,
+    // unified test suite, …) live at their cadence-block owners.
+    expectAbsent(CODE_QUALITY, [
+      "SECURITY AUDIT CHECKLIST",
+      /security audit/i,
+      "SQL injection",
+      "Passwords properly hashed",
+      "Review Focus Areas",
+      "Risk Level: [🟢",
+    ])
+  })
+
+  test("security routing sentence present with audit routing intact", () => {
+    // Two-line pin: the P1 audit-routing sentence (standalone owner in the
+    // cadence block above) followed IMMEDIATELY by the new security-routing
+    // sibling — asserting both sentences byte-present AND adjacent
+    // (sibling-rule-placement: the new sentence lands next to :44, never
+    // inside it).
+    expectContains(CODE_QUALITY, [
+      "Audit and review-only dispatches are out of scope: they route to the mechanically read-only pr-code-reviewer or security-reviewer, never to code-quality.\nSecurity-focused review requests route the same way: dispatch them to security-reviewer rather than reviewing for security here.",
+    ])
+  })
+
+  test("mode 2 is the compact trusted-code checklist", () => {
+    const mode2 =
+      read(CODE_QUALITY).match(
+        /## MODE 2: CODE REVIEW\n([\s\S]*?)\n## MODE 3/,
+      )?.[1] ?? ""
+    expect(mode2).not.toBe("")
+
+    // Compression pin: the whole MODE 2 span stays the ~15-line checklist
+    // (14 lines on disk today; ≤ 20 leaves room for cosmetic drift).
+    expect(mode2.split("\n").length).toBeLessThanOrEqual(20)
+
+    // Byte-derived lede, checklist bullets, and evidence rules survive.
+    for (const pin of [
+      "Trusted-code review for implementation-workflow dispatches (untrusted PR content routes per the sentences above). Read-only: report findings with severity; never apply fixes.",
+      "- **Correctness**: logic matches the task's acceptance criteria; edge cases and boundary values handled",
+      "- **Error handling**: failures are caught, informative, and never silently swallowed",
+      "- **Maintainability**: clear naming, single responsibility, no duplication, right abstraction level",
+      "- **Conventions**: follows existing project patterns and style; consistent with sibling code",
+      "Evidence rules (unchanged): every finding cites file:line; severity is justified — Critical (must fix), Important (should fix), or Minor (consider); findings precede proposed fixes.",
+    ]) {
+      expect(mode2).toContain(pin)
+    }
+
+    // The dropped subsections (Review Output Format, the Security block, the
+    // Risk Level rubric) must not creep back into the span.
+    for (const gone of [
+      "Review Output Format",
+      "#### Security",
+      "Risk Level",
+    ]) {
+      expect(mode2).not.toContain(gone)
+    }
+  })
+
+  test("mode 1 and mode 3 anchors survive", () => {
+    // Cheap survival pins via adjacent fragments — canonical exact pins live
+    // in earlier blocks: bare `QUALITY GATE STATUS` presence (phase-4 pairing
+    // test) and the `**IF PASS**: Corvus proceeds to the Phase 4c progress
+    // update` opener (binary PASS/FAIL test). Fragments here are distinct
+    // bytes from those owners.
+    expectContains(CODE_QUALITY, [
+      "## MODE 1: TEST AUTHORING",
+      "## MODE 3: TEST EXECUTION (PRIMARY MODE)",
+      // Gate banner fragment (inner bytes of the box row).
+      "QUALITY GATE STATUS:  [PASS ✅ / FAIL ❌]",
+      // Continuation line of the wrapped IF PASS footer.
+      "implementation phases complete, final objective validation runs in Phase 5a.",
+      // Iteration-aware IF FAIL sibling footer (previously unpinned).
+      "**IF FAIL**: Corvus runs the iteration-aware fix cycle (iteration 1: direct fix from this report; iteration ≥2: task-planner FAILURE_ANALYSIS first — rule: corvus-phase-4 skill, Operating Rules)",
+    ])
+  })
+
+  test("description sheds security audits", () => {
+    const fm = frontmatterBlock(CODE_QUALITY)
+    expect(fm).not.toBe("")
+    expect(fm.startsWith("description:")).toBe(true)
+    expect(fm).not.toMatch(/security audit/i)
+  })
+})
+
+// ============================================================================
+// flow-streamline — Phase 3 (Task 08): risk-triaged 4b pins
+// ============================================================================
+//
+// Byte-derived pins over the risk-triaged 4b surfaces Phase 3 landed: the
+// canonical skip rule in the phase-4 skill's Operating Rules plus the
+// Pre-Dispatch Triage section and F3 exemption (Task 06), and the
+// orchestrator Gate-1 rows, shared triage sentence, and 4b diagram line
+// (Task 07). Gate-1 rows DIVERGE between the pair by design — only the P13
+// substring and the shared triage fragment are pinned per-file; the rows are
+// never full-line parity-compared (contrast: Gate 3, which IS parity-pinned
+// in the cadence block). Every extraction asserts non-empty before content
+// (undetermined-assertion rule).
+
+describe("flow-streamline: risk-triaged 4b pins", () => {
+  /** Operating Rules Risk-triaged 4b bullet (last bullet before the tag). */
+  const riskTriageBullet = (): string =>
+    read(PHASE_4).match(
+      /- \*\*Risk-triaged 4b\*\* \(canonical statement([\s\S]*?)\n<\/operating_rules>/,
+    )?.[1] ?? ""
+
+  test("canonical skip rule carries all four conditions", () => {
+    const bullet = riskTriageBullet()
+    expect(bullet).not.toBe("")
+    expect(bullet).toContain("may be skipped ONLY when ALL hold")
+    for (const condition of [
+      // (1) acceptance-only gate mode — P14-safe phrasing, no "AND `…`".
+      "the gate mode is acceptance-only",
+      "(tests deferred or disabled)",
+      // (2) single workstream.
+      "the phase executed as a single workstream",
+      // (3) all per-task reports PASS with zero deviations.
+      "per-task report section is PASS with zero deviations",
+      // (4) no pin/parity surface touched.
+      "`prompt-contracts.test.ts` or a mirrored-pair file",
+    ]) {
+      expect(bullet).toContain(condition)
+    }
+  })
+
+  test("never-skip list is explicit", () => {
+    const bullet = riskTriageBullet()
+    expect(bullet).not.toBe("")
+    for (const fragment of [
+      // Multi-workstream and deviation/BLOCKED exclusions (single-line bytes).
+      "NEVER skip: multi-workstream phases, any deviation or BLOCKED task, fix-loop",
+      // Fix-loop re-entry exclusion inside the bullet itself.
+      "(F3 always returns to a real 4b dispatch)",
+      // Enabled non-deferred mode stays unconditional.
+      "4b runs its dispatched test scope unconditionally.",
+    ]) {
+      expect(bullet).toContain(fragment)
+    }
+    // Step F3's own exemption sentence (the REVALIDATION surface).
+    expectContains(PHASE_4, [
+      "Fix-loop re-entries are exempt from the Risk-triaged 4b skip: F3 always returns to a real 4b dispatch, never to lightweight verification.",
+    ])
+  })
+
+  test("lightweight verification record format pinned", () => {
+    // Two unwrapped copies on disk today (the Operating Rules bullet and the
+    // 4c QUALITY GATE triage-skip line); a third copy inside Pre-Dispatch
+    // Triage is line-wrapped and never matches the raw needle — assert ≥2 on
+    // the unwrapped form, never ==3 (stale-count-comment rule).
+    const record = "4b: PASS (lightweight — skip conditions met: [list])"
+    expect(countOccurrences(PHASE_4, record)).toBeGreaterThanOrEqual(2)
+    // Newline-normalized count also sees the wrapped Pre-Dispatch Triage copy.
+    const normalized = read(PHASE_4).replace(/\n\s*/g, " ")
+    expect(normalized.split(record).length - 1).toBeGreaterThanOrEqual(3)
+  })
+
+  test("pre-dispatch triage sits outside the template spans", () => {
+    // Re-runs the three P16 extractions (canonical owner: the cadence block's
+    // "test_scope full stays exclusive to Phase 5a contexts" test) with the
+    // added guarantee that the new Pre-Dispatch Triage section landed OUTSIDE
+    // every template span (between Worked Example and the Standard template).
+    const source = read(PHASE_4)
+    const spans = [
+      /#### Single-Task Delegation Template\n([\s\S]*?)\n#### Worked Example/,
+      /#### 4b Delegation: Standard Mode([\s\S]*?)\n#### 4b Delegation: Acceptance-Only Mode/,
+      /#### 4b Delegation: Acceptance-Only Mode([\s\S]*?)\n\*\*GATE DECISION\*\*/,
+    ].map((anchor) => source.match(anchor)?.[1] ?? "")
+
+    expect(spans).toHaveLength(3)
+    for (const span of spans) {
+      expect(span).not.toBe("")
+      expect(span).not.toContain("Pre-Dispatch Triage")
+      expect(span).not.toMatch(/test_scope:\s*full/)
+    }
+    // The triage section heading exists exactly once, as a real section.
+    expect(
+      countOccurrences(PHASE_4, "#### Pre-Dispatch Triage (Risk-Triaged 4b)"),
+    ).toBe(1)
+  })
+
+  test("cadence row survives", () => {
+    // Cheap survival fragment only — the canonical P19 pin (line-matched
+    // ownership row across the phase-4 skill and code-implementer) lives in
+    // the cadence redesign block above and is not duplicated here.
+    expectContains(PHASE_4, ["4b owns the single phase-targeted gate run."])
+  })
+
+  test("gate-1 rows carry the triage per-file", () => {
+    const triageFragment =
+      "; acceptance-only gates may be triage-skipped per the corvus-phase-4 skill's Risk-triaged 4b rule (lightweight verification from per-task reports)"
+    for (const file of [CORVUS, CORVUS_AUTO]) {
+      const row = read(file).match(/^\| 1 \| 4a returns \|.*$/m)?.[0] ?? ""
+      expect(row).not.toBe("")
+      // P13 clause survives the Gate-1 edit in both files.
+      expect(row).toContain(
+        "with the matching `test_scope` (targeted when enabled non-deferred; none when deferred or disabled)",
+      )
+      expect(row).toContain(triageFragment)
+    }
+  })
+
+  test("shared phase-4 triage sentence in lockstep", () => {
+    const triageSentence = (relPath: string): string =>
+      read(relPath).match(/^Acceptance-only 4b gates are risk-triaged.*$/m)?.[0] ??
+      ""
+
+    const interactiveSentence = triageSentence(CORVUS)
+    expect(interactiveSentence).not.toBe("")
+    // Consumers point at the canonical owner instead of restating conditions.
+    expect(interactiveSentence).toContain(
+      "the corvus-phase-4 skill's Risk-triaged 4b rule defines the only skip conditions",
+    )
+    expect(interactiveSentence).toContain(
+      "enabled non-deferred phases always run the real gate.",
+    )
+    expect(triageSentence(CORVUS_AUTO)).toBe(interactiveSentence)
+  })
+
+  test("deferred-conditional absence pin holds", () => {
+    // Defensive duplicate of the cadence-block P14 guard ("5a full run is
+    // unconditional…" test): the new triage prose must never reintroduce the
+    // old deferred-only conditional bytes. Feature-scoped tripwire.
+    for (const file of [CORVUS, CORVUS_AUTO]) {
+      expectAbsent(file, ["AND `tests_deferred: true`"])
+    }
+  })
+
+  test("rule name and 4b diagram line consistent across surfaces", () => {
+    // Cross-file name consistency: every consumer references the skill's
+    // canonical rule by the exact sentence-case name.
+    for (const file of [PHASE_4, CORVUS, CORVUS_AUTO]) {
+      expectContains(file, ["Risk-triaged 4b"])
+    }
+    // The orchestrators' Phase-4 diagram 4b line is triage-aware and stays in
+    // lockstep across the pair; the old unconditional full line is gone from
+    // both (the phase-4 skill's own diagram is out of this pin's scope).
+    const diagramLine =
+      "4b: code-quality (mandatory; risk-triaged when acceptance-only)"
+    for (const file of [CORVUS, CORVUS_AUTO]) {
+      const lines = read(file).split("\n")
+      expect(lines).toContain(diagramLine)
+      expect(lines).not.toContain("4b: code-quality (mandatory)")
+    }
+  })
+})
+
+// ============================================================================
+// flow-streamline — Phase 4 (Task 11): docs + sweep pins
+// ============================================================================
+//
+// Byte-derived pins over the Phase 4 docs sync (Task 09) and the consistency
+// sweep's fixes plus its zero-hit ledger promoted to per-file negatives
+// (Task 10). AGENTS.md landed ZERO-DIFF in Task 09 (verified: empty
+// `git diff`) — the roster-extraction re-run specified as conditional is
+// therefore not authored; the roster/count owners in the cadence-redesign and
+// two-child blocks keep full coverage over its pre-existing bytes. Every
+// extraction asserts non-empty before content (undetermined-assertion rule);
+// absence pins are per-file, never directory-wide.
+
+describe("flow-streamline: docs + sweep pins", () => {
+  test("state machine documents the 0a bypass", () => {
+    // Byte-derived from the doc's new mermaid transition and the Phase-0a
+    // transitions lede. The bypass criteria owners live in the
+    // conditional-0a block above (orchestrator rules + phase-0 skill route);
+    // the doc is a pointer-style summary naming the rule and the skip record.
+    expectContains(STATE_MACHINE_DOC, [
+      "    ResumeDetection --> PlanInput: Spec-complete request (bypass 0a/0b)",
+      "The Phase 0a dispatch itself is conditional: a spec-complete request bypasses the requirements-analyst dispatch entirely and proceeds directly to Plan Input (orchestrator rule `spec_completeness_bypass` — it owns the criteria; any doubt means dispatching Phase 0a normally).",
+      "The skip is recorded as `requirements-analyst: skipped (spec-complete)` in the Phase-2 task-planner dispatch so plan-reviewer sees it. The transitions below govern a dispatched Phase 0a.",
+    ])
+  })
+
+  test("state machine documents the risk-triaged 4b", () => {
+    const content = read(STATE_MACHINE_DOC)
+
+    // The 4b-section triage paragraph, one byte-derived line: skip
+    // conditions, the lightweight verification record, the F3 exemption, and
+    // the non-deferred guarantee — pointer-style at the phase-4 skill's
+    // canonical rule.
+    const triageParagraph =
+      "Acceptance-only 4b gates are risk-triaged (canonical rule: corvus-phase-4 skill, Operating Rules — Risk-triaged 4b). The dispatch may be skipped only when ALL skip conditions hold: acceptance-only gate mode (tests deferred or disabled), a single-workstream phase, every per-task report PASS with zero deviations, and no task touched `prompt-contracts.test.ts` or a mirrored-pair file. When skipped, the orchestrator performs lightweight verification from the per-task reports it already holds, and the 4c PROGRESS_UPDATE records `4b: PASS (lightweight — skip conditions met: [list])`. Fix-loop re-entries are exempt (F3 always returns to a real 4b dispatch), and enabled non-deferred phases always run the real gate."
+    expect(content).toContain(triageParagraph)
+
+    // Survival of the P29 4b-to-4c region: the paragraph landed BEFORE the
+    // transition table, whose heading and PASS row survive (adjacent
+    // fragments — the exact `test_scope: targeted` row is owned by "state
+    // machine reflects targeted 4b and the single 5a full run").
+    const transitionIndex = content.indexOf("### 4b to 4c Transition (PASS)")
+    expect(transitionIndex).toBeGreaterThan(-1)
+    expect(content.indexOf(triageParagraph)).toBeLessThan(transitionIndex)
+    expect(content).toContain(
+      "| QUALITY GATE STATUS = PASS | Proceed to 4c | Always |",
+    )
+
+    // Gate-1 row extension: the doc row carries the same triage clause as the
+    // orchestrators' rows (per-file owners: "gate-1 rows carry the triage
+    // per-file" above) and corvus.md's Not-allowed suffix form.
+    const gate1Row = content.match(/^\| 1 \| 4a returns \|.*$/m)?.[0] ?? ""
+    expect(gate1Row).not.toBe("")
+    expect(gate1Row).toContain(
+      "; acceptance-only gates may be triage-skipped per the corvus-phase-4 skill's Risk-triaged 4b rule (lightweight verification from per-task reports)",
+    )
+    expect(
+      gate1Row.endsWith("; skipping 4b outside the risk-triage conditions |"),
+    ).toBe(true)
+  })
+
+  test("readme diagram carries the bypass branch", () => {
+    const lines = read("README.md").split("\n")
+
+    // Bypass branch, byte-derived with its diagram indentation.
+    expect(lines).toContain(
+      "    ├─── spec-complete ──► skip 0a/0b ──► Plan Input",
+    )
+
+    // Annotated 4b line: full-line byte pin; its triage suffix matches the
+    // orchestrators' diagram annotation (owner of those copies: "rule name
+    // and 4b diagram line consistent across surfaces" above).
+    const fourBIndex = lines.indexOf(
+      "    │   4b: @code-quality (entire phase, phase-targeted tests, with failure attribution; risk-triaged when acceptance-only)",
+    )
+    expect(fourBIndex).toBeGreaterThan(-1)
+
+    // Survival: the pinned 4a diagram line (owner: "state machine speaks
+    // workstreams") still directly precedes 4b — prefix fragment only, never
+    // a duplicate of the owner's full-line pin.
+    expect(lines[fourBIndex - 1]).toContain(
+      "4a: @code-implementer (workstreams",
+    )
+
+    // Key-features bullet, byte-derived (Task 09's third README surface).
+    expect(lines).toContain(
+      "- **Conditional requirements analysis + risk-triaged gates**: spec-complete requests skip Phase 0a; acceptance-only 4b gates may be triage-skipped with lightweight verification (non-deferred gates always run)",
+    )
+  })
+
+  test("security-audit phrasing never returns repo-wide (per-file)", () => {
+    // Task 10's zero-hit ledger promoted to per-file absence pins over every
+    // prompt file plus the four standalone docs. code-quality.md is skipped —
+    // its /security audit/i absence is owned by "security checklist never
+    // returns" above. The length guard keeps the sweep non-vacuous
+    // (37 prompt files + 4 docs, phrased as at-least).
+    const sweptFiles = [
+      ...listPromptFiles().filter((file) => file !== CODE_QUALITY),
+      ...HARDENING_DOCS,
+    ]
+    expect(sweptFiles.length).toBeGreaterThanOrEqual(41)
+    for (const file of sweptFiles) {
+      expectAbsent(file, [/security audit/i])
+    }
+  })
+
+  test("no unconditional 4b-skip ban resurfaces in corvus-auto", () => {
+    // Byte-derived from the Phase 3 delta: corvus-auto's pre-edit Gate-1
+    // Not-allowed column read "…; skipping 4b; skipping to 4c" — Task 07
+    // qualified the ban and Task 10's sweep verified the old unqualified
+    // bytes gone. The replacement is fragment-pinned (the full Gate-1 row is
+    // owned per-file by "gate-1 rows carry the triage per-file" above).
+    expectAbsent(CORVUS_AUTO, ["skipping 4b;"])
+    expectContains(CORVUS_AUTO, [
+      "skipping 4b outside the risk-triage conditions (corvus-phase-4 skill)",
+    ])
+  })
+
+  test("deferred-conditional trap stays clean in docs", () => {
+    // The P14 byte trap, per-doc. Cross-references: the orchestrator copies
+    // are owned by the cadence block's "5a full run is unconditional for
+    // enabled modes in both orchestrators" and defensively by
+    // "deferred-conditional absence pin holds" above; the state-machine's
+    // LONGER superseded row ("Only when `tests_enabled: true` AND
+    // `tests_deferred: true`") is owned by "state machine reflects targeted
+    // 4b and the single 5a full run" (P29). This shorter needle extends that
+    // guard across the three docs without re-pinning the orchestrators.
+    for (const file of [STATE_MACHINE_DOC, "README.md", "AGENTS.md"]) {
+      expectAbsent(file, ["AND `tests_deferred: true`"])
+    }
+  })
+
+  test("sweep fixes: stale unconditional phrasing replaced", () => {
+    // phase-0 skill plan-selection lede is bypass-aware; the pre-sweep
+    // "only after" qualifier (which contradicted the Pre-0a bypass route)
+    // never returns.
+    expectContains(PHASE_0, [
+      "This step runs after `REQUIREMENTS_CLEAR` from Phase 0a or Phase 0b, or directly via the Spec-Completeness Bypass (Pre-0a). The orchestrator owns interactive, autonomous, and preselected input handling.",
+    ])
+    expectAbsent(PHASE_0, ["This step runs only after"])
+
+    // code-quality CORE RESPONSIBILITIES #5 sheds "security" from its review
+    // dimensions (Phase 2 delta sweep candidate, resolved by Task 10) —
+    // aligned with the compact MODE 2 checklist owned by "mode 2 is the
+    // compact trusted-code checklist" above.
+    expectContains(CODE_QUALITY, [
+      "5. **Code Review**: Analyze code for correctness, maintainability, and conventions (when asked)",
+    ])
+  })
+
+  test("sweep fixes: phase-4 diagram and self-check are triage-aware", () => {
+    // Extends the orchestrator-scoped diagram pin ("rule name and 4b diagram
+    // line consistent across surfaces" above) to the phase-4 skill's own
+    // diagram, aligned by Task 10.
+    const lines = read(PHASE_4).split("\n")
+    expect(lines).toContain(
+      "4b: code-quality (mandatory; risk-triaged when acceptance-only)",
+    )
+    expect(lines).not.toContain("4b: code-quality (mandatory)")
+
+    // Self-Check accepts the lightweight PASS record on a triage skip, one
+    // byte-derived line. The record-string count owner ("lightweight
+    // verification record format pinned", ≥2) stays valid as this third
+    // unwrapped copy landed — deliberately NOT re-pinned as an exact count
+    // (stale-count-comment rule).
+    expectContains(PHASE_4, [
+      "- [ ] code-quality reported QUALITY GATE STATUS: PASS for the entire phase, or a triage skip recorded `4b: PASS (lightweight — skip conditions met: [list])` after lightweight verification",
+    ])
+  })
+
+  test("plan-input timing names the bypass in both orchestrators", () => {
+    // Task 10's shared "**When**" lede, per-file: byte-identical up through
+    // the bypass clause while the full lines diverge (corvus.md appends its
+    // load-order sentence) — fragment pins per file, no full-line parity.
+    for (const file of [CORVUS, CORVUS_AUTO]) {
+      expectContains(file, [
+        "**When**: After requirements-analyst returns REQUIREMENTS_CLEAR (from Phase 0a or 0b), or directly after a spec-completeness bypass.",
+      ])
+    }
+  })
+})

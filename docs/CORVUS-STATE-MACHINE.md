@@ -23,6 +23,7 @@ stateDiagram-v2
     [*] --> ResumeDetection: User Request
 
     ResumeDetection --> Phase0a: New work (no in-progress plan resumed)
+    ResumeDetection --> PlanInput: Spec-complete request (bypass 0a/0b)
     ResumeDetection --> Phase4: Resume at first incomplete step (re-run last gate unless recorded PASS)
 
     Phase0a --> PlanInput: REQUIREMENTS_CLEAR
@@ -105,6 +106,8 @@ stateDiagram-v2
 ## Phase Transition Conditions
 
 ### Phase 0a Transitions
+
+The Phase 0a dispatch itself is conditional: a spec-complete request bypasses the requirements-analyst dispatch entirely and proceeds directly to Plan Input (orchestrator rule `spec_completeness_bypass` — it owns the criteria; any doubt means dispatching Phase 0a normally). The skip is recorded as `requirements-analyst: skipped (spec-complete)` in the Phase-2 task-planner dispatch so plan-reviewer sees it. The transitions below govern a dispatched Phase 0a.
 
 | From | To | Condition |
 |------|-----|-----------|
@@ -310,6 +313,8 @@ A phase with no test task runs acceptance checks only (`test_scope: none`).
 3. Do NOT run tests or report missing tests (`test_scope: none`)
 
 The task file's validation section is an allowlist. Code Implementer reports the checks it was authorized to run and any policy-based omissions; 4b must not assume generic lint, typecheck, build, or tests ran, and must not substitute commands that the task or workflow deferred or prohibited.
+
+Acceptance-only 4b gates are risk-triaged (canonical rule: corvus-phase-4 skill, Operating Rules — Risk-triaged 4b). The dispatch may be skipped only when ALL skip conditions hold: acceptance-only gate mode (tests deferred or disabled), a single-workstream phase, every per-task report PASS with zero deviations, and no task touched `prompt-contracts.test.ts` or a mirrored-pair file. When skipped, the orchestrator performs lightweight verification from the per-task reports it already holds, and the 4c PROGRESS_UPDATE records `4b: PASS (lightweight — skip conditions met: [list])`. Fix-loop re-entries are exempt (F3 always returns to a real 4b dispatch), and enabled non-deferred phases always run the real gate.
 
 ### 4b to 4c Transition (PASS)
 
@@ -526,7 +531,7 @@ The gate table below consolidates the canonical phase-skill contracts. Steps wit
 |------|-------|-------------|-------------|
 | 0 | Phase 3 approval | Present choice via question(): "Start Implementation" or "High Accuracy Review" | Skipping the choice; auto-running Phase 3.5 |
 | 0.5 | Phase 3.5 returns | OKAY → present results, user confirms via question(). REJECT → task-planner fixes plan, then user chooses via question() | Proceeding to Phase 4 without the user's confirmation |
-| 1 | 4a returns | Invoke code-quality for 4b in the mode the resolved test flags select, with the matching `test_scope` (targeted when enabled non-deferred; none when deferred or disabled) | Fixing (no failure yet), updating the plan, or skipping to 4c |
+| 1 | 4a returns | Invoke code-quality for 4b in the mode the resolved test flags select, with the matching `test_scope` (targeted when enabled non-deferred; none when deferred or disabled); acceptance-only gates may be triage-skipped per the corvus-phase-4 skill's Risk-triaged 4b rule (lightweight verification from per-task reports) | Fixing (no failure yet), updating the plan, or skipping to 4c; skipping 4b outside the risk-triage conditions |
 | 2 | 4b PASS | Invoke task-planner `PROGRESS_UPDATE`, verify the planning-file-only diff, then advance | Corvus editing the plan directly; advancing on a rejected/invalid update; `SUCCESS_EXTRACTION` before Phase 6 |
 | 3 | 4b FAIL | Iteration 1: code-implementer fixes only the failing tasks (targeted, with the 4b failure report) → 4b. Iteration ≥2: task-planner FAILURE_ANALYSIS first → fix → 4b | Skipping FAILURE_ANALYSIS from iteration 2 onward; full-suite reruns at 4b (sole exception: the Lightweight non-deferred final gate revalidating at its dispatched full scope); proceeding to 4c; fixing all tasks |
 | 4 | Final required gate accepted | Phase 6 and its one `SUCCESS_EXTRACTION` | Extracting success in Phase 4/5 or skipping Phase 6 |

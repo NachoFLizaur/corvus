@@ -216,6 +216,7 @@ Under the hood, Corvus follows a structured multi-phase workflow:
 ```
 User Request
     │
+    ├─── spec-complete ──► skip 0a/0b ──► Plan Input
     ▼
 Phase 0a: Requirements Clarification (@requirements-analyst)
     │
@@ -250,7 +251,7 @@ Phase 3.5: Plan Review (@plan-reviewer) [optional]
     ▼
 Phase 4: Implementation Loop (per-PHASE, not per-task)
     │   4a: @code-implementer (workstreams of phase tasks, parallel when file sets are disjoint)
-    │   4b: @code-quality (entire phase, phase-targeted tests, with failure attribution)
+    │   4b: @code-quality (entire phase, phase-targeted tests, with failure attribution; risk-triaged when acceptance-only)
     │       FAIL → fix (iteration 1: direct; iteration ≥2: FAILURE_ANALYSIS first) → revalidate
     │   4c: @task-planner PROGRESS_UPDATE → verify plan-only diff → next phase
     │
@@ -272,6 +273,7 @@ Key features:
 - **Workstream dispatch**: One code-implementer per workstream (1-5 dependency-ordered tasks); workstreams with disjoint file sets run in parallel
 - **Cross-session resume**: An in-progress MASTER_PLAN is detected at intake and resumed at the first incomplete step (`@corvus` asks first; `@corvus-auto` decides deterministically)
 - **Conditional clarification**: Phase 0b skipped when requirements are already clear
+- **Conditional requirements analysis + risk-triaged gates**: spec-complete requests skip Phase 0a; acceptance-only 4b gates may be triage-skipped with lightweight verification (non-deferred gates always run)
 - **Two-tier quality gates**: Objective (@code-quality) at phase boundaries + Subjective (@ux-dx-quality) at feature completion
 - **Failure attribution**: Quality gate identifies exactly which task(s) failed
 - **Learning loops**: Repeated gate failures (iteration ≥2) get FAILURE_ANALYSIS before the next fix; Phase 6 alone extracts feature-wide success learnings, distilled to the local-only `.corvus/tasks/learnings.md`

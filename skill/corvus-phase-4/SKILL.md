@@ -17,7 +17,7 @@ Phase 4 operates at the **phase level**, not per-task: tasks within a phase are 
 4a: code-implementer (ALL tasks in phase, parallel where possible)
          │
          ▼
-4b: code-quality (mandatory)
+4b: code-quality (mandatory; risk-triaged when acceptance-only)
     ├── tests_enabled: true, tests_deferred: false  → tests + acceptance criteria
     ├── tests_enabled: true, tests_deferred: true   → acceptance criteria only (tests deferred to Phase 5)
     └── tests_enabled: false                        → acceptance criteria only (no tests)
@@ -65,6 +65,17 @@ Phase 4 operates at the **phase level**, not per-task: tasks within a phase are 
   - **Fix-attempt accounting**: code-implementer's in-task 2-attempt fix rule
     (Delegated Mode) does not consume the 4b 3-iteration cap — the cap counts only
     4b FAIL → fix → 4b loops. Only a failure at the gate that carries final validation (Phase 5a — or a Lightweight non-deferred plan's final 4b gate) justifies a full-suite re-run.
+  - **Risk-triaged 4b** (canonical statement — orchestrators point here): the 4b
+    dispatch may be skipped ONLY when ALL hold: the gate mode is acceptance-only
+    (tests deferred or disabled), the phase executed as a single workstream, every
+    per-task report section is PASS with zero deviations, and no task touched
+    `prompt-contracts.test.ts` or a mirrored-pair file (parity and pin surfaces
+    always get independent verification). When skipped, the orchestrator performs
+    LIGHTWEIGHT VERIFICATION from the per-task reports it already holds, and the
+    4c PROGRESS_UPDATE records `4b: PASS (lightweight — skip conditions met: [list])`.
+    NEVER skip: multi-workstream phases, any deviation or BLOCKED task, fix-loop
+    re-entries (F3 always returns to a real 4b dispatch), or enabled non-deferred
+    mode — there 4b runs its dispatched test scope unconditionally.
 </operating_rules>
 
 ---
@@ -271,6 +282,21 @@ typecheck, build, or test commands ran when an approved task narrowed them.
 | `tests_enabled: false` | Every task's acceptance criteria PASS (same evidence types); tests not run and not required | Acceptance-Only |
 
 **DELEGATE TO**: @code-quality
+
+#### Pre-Dispatch Triage (Risk-Triaged 4b)
+
+Before selecting a template, evaluate the Risk-triaged 4b rule (Operating Rules).
+When ALL skip conditions hold, do not dispatch code-quality; perform LIGHTWEIGHT
+VERIFICATION instead:
+
+- [ ] Every task's authorized validation commands appear in its report with passing output
+- [ ] Every acceptance criterion is addressed in its task's report
+- [ ] Every file manifest stayed within the task's approved scope
+
+All boxes checked → treat 4b as PASS and record `4b: PASS (lightweight — skip
+conditions met: [list])` in the 4c PROGRESS_UPDATE's QUALITY GATE field. Any box
+unchecked → dispatch the real 4b (acceptance-only template). When any skip
+condition fails, dispatch the template the resolved flags select, as always.
 
 #### 4b Delegation: Standard Mode (`tests_enabled: true`, `tests_deferred: false`)
 
@@ -523,7 +549,7 @@ Then dispatch the fix to @code-implementer:
 - Ready for re-validation
 ```
 
-**Step F3: Loop to 4b** — code-quality re-runs the same scope as the original 4b dispatch (per Operating Rules): phase-targeted in the general case, never widening to the full suite; the Lightweight non-deferred final gate revalidates at its dispatched full scope (its sanctioned re-run). Track iterations; the 3-iteration cap with user escalation applies.
+**Step F3: Loop to 4b** — code-quality re-runs the same scope as the original 4b dispatch (per Operating Rules): phase-targeted in the general case, never widening to the full suite; the Lightweight non-deferred final gate revalidates at its dispatched full scope (its sanctioned re-run). Track iterations; the 3-iteration cap with user escalation applies. Fix-loop re-entries are exempt from the Risk-triaged 4b skip: F3 always returns to a real 4b dispatch, never to lightweight verification.
 
 ---
 
@@ -549,6 +575,7 @@ Corvus is the caller and verifier, never the plan writer.
 - Mode: STANDARD | ACCEPTANCE-ONLY
 - Test flags: `tests_enabled: [true|false], tests_deferred: [true|false]`
 - Evidence: [complete 4b report, including criterion evidence]
+- On a triage skip: Status: PASS, Mode: ACCEPTANCE-ONLY, Evidence: the lightweight-verification checklist with the met skip conditions listed (`4b: PASS (lightweight — skip conditions met: [list])`).
 
 **EXECUTION RECORD**:
 - Files changed: [exact task-owned paths from verified 4a reports]
@@ -586,7 +613,7 @@ MASTER_PLAN.md directly, repair the result silently, or advance to another phase
 ### Self-Check Before Leaving a Phase
 
 - [ ] Every task ran through exactly one workstream dispatch (one workstream = one code-implementer; per-task report sections present for every member task)
-- [ ] code-quality reported QUALITY GATE STATUS: PASS for the entire phase
+- [ ] code-quality reported QUALITY GATE STATUS: PASS for the entire phase, or a triage skip recorded `4b: PASS (lightweight — skip conditions met: [list])` after lightweight verification
 - [ ] Every fix iteration followed the iteration rule (iteration 1: direct fix from the 4b report; iteration ≥2: FAILURE_ANALYSIS first) and re-ran the original 4b dispatch scope
 - [ ] task-planner accepted `PROGRESS_UPDATE`
 - [ ] Returned diff is confined to authorized planning files and preserves task meaning
