@@ -2011,9 +2011,11 @@ describe("review-pipeline-redesign: phase 3 contracts", () => {
     })
 
     test("pre-POST drift guard compares SHA equality and aborts local-only", () => {
-      // Requirement 5: byte-derived guard sentence plus the exact abort reason.
+      // Requirement 5: the allowlisted metadata read, byte-derived guard
+      // sentence, and exact abort reason.
       expectContains(COMMENT_WRITER, [
-        "**SHA-equality drift guard (pre-POST)**: compare `POST_REQUEST.commit_id` against the current head SHA already available from this diff GET response",
+        "gh api --method GET repos/<owner>/<name>/pulls/<pr_number> -H Accept:application/vnd.github+json",
+        "**SHA-equality drift guard (pre-POST)**: compare `POST_REQUEST.commit_id` byte-for-byte against the lowercase-normalized `head.sha` observed via the immediately preceding allowlisted JSON metadata GET.",
         '"PR head moved after review synthesis (commit_id mismatch)"',
       ])
     })
@@ -2030,20 +2032,18 @@ describe("review-pipeline-redesign: phase 3 contracts", () => {
     })
 
     test("writer bash allowlist stays two frozen command shapes", () => {
-      // Requirement 6: the Phase G toEqual pin owns the exact command bytes
-      // (now the file-input shapes from permissions-alignment Task 01). This
-      // structural re-assertion guards the same closed two-command shape
-      // without duplicating bytes.
+      // Requirement 6: pin the exact unchanged permission surface locally as
+      // well as in the Phase G mechanical-lockdown test.
       const bashPolicy = nestedFrontmatterBlock(COMMENT_WRITER, "bash")
       const allowedCommands = [
         ...bashPolicy.matchAll(/^    (.+): "allow"$/gm),
       ].map(([, command]) => command ?? "")
 
       expect(bashPolicy).toContain('    "*": "deny"')
-      expect(allowedCommands).toHaveLength(2)
-      expect(allowedCommands[0]).toContain("--method GET")
-      expect(allowedCommands[1]).toContain("--method POST")
-      expect(allowedCommands[1]).toContain("/reviews")
+      expect(allowedCommands).toEqual([
+        `'gh api --method GET repos/*/pulls/* -H Accept:*'`,
+        `'gh api --method POST repos/*/pulls/*/reviews --input .corvus/review-payload.json'`,
+      ])
     })
   })
 

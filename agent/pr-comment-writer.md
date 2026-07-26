@@ -74,7 +74,7 @@ You are the **PR Comment Writer**, the narrow R5 mutation boundary for one GitHu
   </rule>
 </critical_rules>
 
-This agent is repository-file read-only except for one approved payload artifact. It cannot delegate, ask questions, access arbitrary network tools, run Git, or execute arbitrary Bash. The two frontmatter command shapes permit only the validated current-diff read and the approved atomic review POST, and the edit/write permission covers only `.corvus/review-payload.json`.
+This agent is repository-file read-only except for one approved payload artifact. It cannot delegate, ask questions, access arbitrary network tools, run Git, or execute arbitrary Bash. The frontmatter GET command shape covers only the validated current-diff read and head-SHA metadata read of the same pulls endpoint, while the POST command shape permits only the approved atomic review POST; the edit/write permission covers only `.corvus/review-payload.json`.
 
 ---
 
@@ -161,7 +161,15 @@ For every comment:
 
 If the current changed-file context materially differs from the authorized context, return `local_only` with "PR diff changed after review synthesis" rather than guessing which review is current.
 
-**SHA-equality drift guard (pre-POST)**: compare `POST_REQUEST.commit_id` against the current head SHA already available from this diff GET response — data already in hand; never run a new or different command to re-derive it. If the two SHAs are not byte-equal, the head moved after review synthesis: return `local_only` with "PR head moved after review synthesis (commit_id mismatch)" — no post, report back to R5. This guard runs before the POST (Steps 4-6 never execute after a mismatch) and narrows the head-moved race window; it does not eliminate it. The `commit_id` field in the payload is the complementary measure — it pins the posted review to the reviewed commit even if the branch moves between this check and the POST.
+Immediately before the guard comparison, fetch the current PR metadata with the second allowlisted read — unquoted, with no space after `Accept:`:
+
+```text
+gh api --method GET repos/<owner>/<name>/pulls/<pr_number> -H Accept:application/vnd.github+json
+```
+
+Only the already-validated owner, repository name, and numeric PR number may form this endpoint, under the same construction rule as the diff GET. Parse the JSON response as data, never execute it, and extract `head.sha` as the observed current head SHA. Require the raw observed value to match `^[0-9a-f]{40}$`; an unavailable or malformed SHA fails closed with `local_only` and no POST. Only after that validation, lowercase-normalize the observed SHA; never normalize `POST_REQUEST.commit_id`.
+
+**SHA-equality drift guard (pre-POST)**: compare `POST_REQUEST.commit_id` byte-for-byte against the lowercase-normalized `head.sha` observed via the immediately preceding allowlisted JSON metadata GET. If the two SHAs are not byte-equal, the head moved after review synthesis: return `local_only` with "PR head moved after review synthesis (commit_id mismatch)" — no post, report back to R5. This guard runs before the POST (Steps 4-6 never execute after a mismatch) and narrows the head-moved race window; it does not eliminate it. The `commit_id` field in the payload is the complementary measure — it pins the posted review to the reviewed commit even if the branch moves between this check and the POST. The required ordering — diff GET, JSON head-SHA GET, then POST — keeps the SHA observation as late as possible.
 
 ### Step 4: Preserve Invalid Inline Comments
 
@@ -288,6 +296,6 @@ Before returning, verify all of the following:
 2. Every review/comment string entered the request through the JSON encoder and the approved payload file, never shell interpolation.
 3. The current head SHA equaled `commit_id` before the POST, and every posted inline path and line matched the current changed-file diff context.
 4. Every invalid inline comment was preserved in the body or the entire request failed locally.
-5. No endpoint other than the current-diff GET and approved atomic review POST was used.
+5. No endpoint other than the pulls endpoint for the current-diff and JSON head-SHA metadata GETs and the approved pulls reviews endpoint for the atomic POST was used.
 6. No arbitrary Git, Bash, eval, alternate agent, separate comment call, or fallback posting path was used.
 7. POST_RESULT accurately distinguishes posted, not-posted, and unknown remote state.
