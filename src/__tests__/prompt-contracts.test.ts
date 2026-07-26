@@ -872,13 +872,19 @@ describe("prompt contracts: review trust + deterministic state", () => {
     expect(allowedCommands).toEqual([
       `'gh api --method GET repos/*/pulls/* -H Accept:*'`,
       `'gh api --method POST repos/*/pulls/*/reviews --input .corvus/review-payload.json'`,
+      `'jq . .corvus/review-payload.json'`,
+      `'python3 -m json.tool .corvus/review-payload.json'`,
     ])
     expectContains(COMMENT_WRITER, [
       "Accept only one structured POST_REQUEST delegated by R5",
-      "Use a real JSON encoder (`JSON.stringify` or an equivalent typed encoder)",
-      "Write the encoded bytes to the approved payload file with the session's approved file-write tool (`write`, or `apply_patch` on models where opencode substitutes patch-based editing), overwriting it wholesale — never append, and never use a different path.",
+      "Author the JSON payload bytes directly from the in-memory values. Apply strict JSON string-escaping rules to every untrusted string",
+      "Write the authored JSON bytes to the approved payload file with the session's approved file-write tool (`write`, or `apply_patch` on models where opencode substitutes patch-based editing), overwriting it wholesale — never append, and never use a different path.",
+      "`jq . .corvus/review-payload.json`",
+      "`python3 -m json.tool .corvus/review-payload.json`",
+      "rewrite the entire payload file once, then re-run the same available validator. If that second validation also reports a parse error, fail closed with `local_only` and do not POST.",
+      "read `.corvus/review-payload.json` back with the read tool and semantically verify it field-by-field against the in-memory intent",
       "--input .corvus/review-payload.json",
-      "bytes = jsonEncode(api_payload)",
+      "bytes = strict model-authored JSON encoding of api_payload",
       "Never use `eval`, `sh -c`, `bash -c`, command substitution",
     ])
     expectContains(REVIEW_R5, [
@@ -2002,7 +2008,7 @@ describe("review-pipeline-redesign: phase 3 contracts", () => {
       expectContains(COMMENT_WRITER, [
         'commit_id: "<40 lowercase hex head SHA>"',
         '"commit_id": "<validated 40-hex head SHA>",',
-        "payload_file = .corvus/review-payload.json   (written with the session's approved file-write tool (`write`, or `apply_patch` on models where opencode substitutes patch-based editing); bytes = jsonEncode(api_payload))",
+        "payload_file = .corvus/review-payload.json   (written with the session's approved file-write tool (`write`, or `apply_patch` on models where opencode substitutes patch-based editing); bytes = strict model-authored JSON encoding of api_payload)",
       ])
     })
 
@@ -2033,9 +2039,9 @@ describe("review-pipeline-redesign: phase 3 contracts", () => {
       }
     })
 
-    test("writer bash allowlist stays two frozen command shapes", () => {
-      // Requirement 6: pin the exact unchanged permission surface locally as
-      // well as in the Phase G mechanical-lockdown test.
+    test("writer bash allowlist stays four frozen command shapes", () => {
+      // Pin the consciously extended permission surface locally as well as in
+      // the Phase G mechanical-lockdown test.
       const bashPolicy = nestedFrontmatterBlock(COMMENT_WRITER, "bash")
       const allowedCommands = [
         ...bashPolicy.matchAll(/^    (.+): "allow"$/gm),
@@ -2045,6 +2051,8 @@ describe("review-pipeline-redesign: phase 3 contracts", () => {
       expect(allowedCommands).toEqual([
         `'gh api --method GET repos/*/pulls/* -H Accept:*'`,
         `'gh api --method POST repos/*/pulls/*/reviews --input .corvus/review-payload.json'`,
+        `'jq . .corvus/review-payload.json'`,
+        `'python3 -m json.tool .corvus/review-payload.json'`,
       ])
     })
   })
@@ -3058,7 +3066,7 @@ describe("permissions-alignment: writer payload contract", () => {
     expect(countOccurrences(COMMENT_WRITER, PAYLOAD_PATH)).toBeGreaterThanOrEqual(4)
     expect(countOccurrences(REVIEW_R5, PAYLOAD_PATH)).toBeGreaterThanOrEqual(1)
     expectContains(COMMENT_WRITER, [
-      "Write the encoded bytes to the approved payload file with the session's approved file-write tool (`write`, or `apply_patch` on models where opencode substitutes patch-based editing), overwriting it wholesale — never append, and never use a different path.",
+      "Write the authored JSON bytes to the approved payload file with the session's approved file-write tool (`write`, or `apply_patch` on models where opencode substitutes patch-based editing), overwriting it wholesale — never append, and never use a different path.",
       "If neither `write` nor `apply_patch` is available, or if the approved payload path cannot be targeted with the available approved file-write tool, stop and return `local_only`.",
     ])
     expectContains(REVIEW_R5, [
