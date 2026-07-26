@@ -876,6 +876,7 @@ describe("prompt contracts: review trust + deterministic state", () => {
     expectContains(COMMENT_WRITER, [
       "Accept only one structured POST_REQUEST delegated by R5",
       "Use a real JSON encoder (`JSON.stringify` or an equivalent typed encoder)",
+      "Write the encoded bytes to the approved payload file with the session's approved file-write tool (`write`, or `apply_patch` on models where opencode substitutes patch-based editing), overwriting it wholesale — never append, and never use a different path.",
       "--input .corvus/review-payload.json",
       "bytes = jsonEncode(api_payload)",
       "Never use `eval`, `sh -c`, `bash -c`, command substitution",
@@ -2001,6 +2002,7 @@ describe("review-pipeline-redesign: phase 3 contracts", () => {
       expectContains(COMMENT_WRITER, [
         'commit_id: "<40 lowercase hex head SHA>"',
         '"commit_id": "<validated 40-hex head SHA>",',
+        "payload_file = .corvus/review-payload.json   (written with the session's approved file-write tool (`write`, or `apply_patch` on models where opencode substitutes patch-based editing); bytes = jsonEncode(api_payload))",
       ])
     })
 
@@ -3055,6 +3057,13 @@ describe("permissions-alignment: writer payload contract", () => {
     // the r5 DISPATCH Step 4 bullet names the same fixed --input path.
     expect(countOccurrences(COMMENT_WRITER, PAYLOAD_PATH)).toBeGreaterThanOrEqual(4)
     expect(countOccurrences(REVIEW_R5, PAYLOAD_PATH)).toBeGreaterThanOrEqual(1)
+    expectContains(COMMENT_WRITER, [
+      "Write the encoded bytes to the approved payload file with the session's approved file-write tool (`write`, or `apply_patch` on models where opencode substitutes patch-based editing), overwriting it wholesale — never append, and never use a different path.",
+      "If neither `write` nor `apply_patch` is available, or if the approved payload path cannot be targeted with the available approved file-write tool, stop and return `local_only`.",
+    ])
+    expectContains(REVIEW_R5, [
+      "Serialize the encoded payload to the approved payload file with the session's approved file-write tool (`write`, or `apply_patch` on models where opencode substitutes patch-based editing)",
+    ])
   })
 
   test("no stdin channel returns to the writer", () => {
