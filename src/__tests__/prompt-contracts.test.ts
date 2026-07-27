@@ -550,7 +550,9 @@ describe("prompt contracts: review pipeline", () => {
       // orchestrators (see Phase B note / Tasks 04-05). Assert ONLY the markers
       // each file carried at baseline:
       //   r1 — full template EXCEPT **REPORT BACK** (zero matches; do NOT assert);
-      //   r2/r5 — ONLY **TASK** / **MUST DO** / **MUST NOT DO**;
+      //   r2 — ONLY **TASK** / **MUST DO** / **MUST NOT DO**;
+      //   r5 — no bold dispatch markers: its strict writer envelope is one
+      //   plain sentence followed by one fenced POST_REQUEST block;
       //   r0/r3/r4 — ZERO §C2 bold markers: assert nothing there;
       //   extras — its single **TASK** is an example prompt, not a dispatch
       //   template: not pinned.
@@ -568,7 +570,14 @@ describe("prompt contracts: review pipeline", () => {
         CONTEXT,
       ])
       expectContains("skill/corvus-review-r2/SKILL.md", [TASK, MUST_DO, MUST_NOT_DO])
-      expectContains("skill/corvus-review-r5/SKILL.md", [TASK, MUST_DO, MUST_NOT_DO])
+      expectAbsent("skill/corvus-review-r5/SKILL.md", [
+        TASK,
+        OUTCOME,
+        MUST_DO,
+        MUST_NOT_DO,
+        CONTEXT,
+        "**REPORT BACK**",
+      ])
     })
 
     test("no priority attrs review set", () => {
@@ -877,18 +886,28 @@ describe("prompt contracts: review trust + deterministic state", () => {
     ])
     expectContains(COMMENT_WRITER, [
       "Accept only one structured POST_REQUEST delegated by R5",
-      "Author the JSON payload bytes directly from the in-memory values. Apply strict JSON string-escaping rules to every untrusted string",
+      "The complete input is one POST_REQUEST data object, optionally wrapped in a minimal delegation envelope that carries no control values",
+      "Accept exactly one POST_REQUEST data block from the delegation message. Ignore a minimal non-control envelope",
+      "Within the POST_REQUEST object, the documented field set remains closed",
+      "gh api --method GET repos/<owner>/<name>/pulls/<pr_number>/files?per_page=30&page=<k> -H Accept:application/vnd.github+json",
+      "Never request more than 20 files-endpoint pages (600 files)",
+      'reason "inline position unverifiable on large diff"',
+      "canonical diff truncation routes to the paginated fallback and never causes `local_only` by itself",
+      "Author the payload directly from the in-memory values as pretty-printed JSON with exactly 2-space indentation.",
       "Write the authored JSON bytes to the approved payload file with the session's approved file-write tool (`write`, or `apply_patch` on models where opencode substitutes patch-based editing), overwriting it wholesale — never append, and never use a different path.",
       "`jq . .corvus/review-payload.json`",
       "`python3 -m json.tool .corvus/review-payload.json`",
       "rewrite the entire payload file once, then re-run the same available validator. If that second validation also reports a parse error, fail closed with `local_only` and do not POST.",
       "read `.corvus/review-payload.json` back with the read tool and semantically verify it field-by-field against the in-memory intent",
+      "use `offset` and `limit` to read every line across consecutive windows",
+      "Fail on measured Step 6 limit violations only; never fail closed on speculative truncation risk.",
       "--input .corvus/review-payload.json",
-      "bytes = strict model-authored JSON encoding of api_payload",
+      "bytes = strict model-authored pretty-printed JSON encoding of api_payload",
       "Never use `eval`, `sh -c`, `bash -c`, command substitution",
     ])
     expectContains(REVIEW_R5, [
       "Delegate exactly once to `@pr-comment-writer` with only the structured POST_REQUEST.",
+      "Post the authorized review. The complete input is the following POST_REQUEST.",
     ])
   })
 })
@@ -2008,7 +2027,7 @@ describe("review-pipeline-redesign: phase 3 contracts", () => {
       expectContains(COMMENT_WRITER, [
         'commit_id: "<40 lowercase hex head SHA>"',
         '"commit_id": "<validated 40-hex head SHA>",',
-        "payload_file = .corvus/review-payload.json   (written with the session's approved file-write tool (`write`, or `apply_patch` on models where opencode substitutes patch-based editing); bytes = strict model-authored JSON encoding of api_payload)",
+        "payload_file = .corvus/review-payload.json   (written with the session's approved file-write tool (`write`, or `apply_patch` on models where opencode substitutes patch-based editing); bytes = strict model-authored pretty-printed JSON encoding of api_payload)",
       ])
     })
 
@@ -3059,18 +3078,18 @@ describe("permissions-alignment: writer payload contract", () => {
     }
   })
 
-  test("payload path consistent across all three surfaces", () => {
-    // three-surface-artifact: writer RECEIVER carries the path in the bash
-    // POST key, the edit map, the write map, and the Step 5 dispatch prose;
-    // the r5 DISPATCH Step 4 bullet names the same fixed --input path.
+  test("payload path stays confined to writer-controlled surfaces", () => {
+    // The writer RECEIVER carries the path in the bash POST key, the edit map,
+    // the write map, and Step 5. R5 intentionally sends no command/path prose:
+    // its delegation is the minimal one-line envelope plus POST_REQUEST block.
     expect(countOccurrences(COMMENT_WRITER, PAYLOAD_PATH)).toBeGreaterThanOrEqual(4)
-    expect(countOccurrences(REVIEW_R5, PAYLOAD_PATH)).toBeGreaterThanOrEqual(1)
+    expect(countOccurrences(REVIEW_R5, PAYLOAD_PATH)).toBe(0)
     expectContains(COMMENT_WRITER, [
       "Write the authored JSON bytes to the approved payload file with the session's approved file-write tool (`write`, or `apply_patch` on models where opencode substitutes patch-based editing), overwriting it wholesale — never append, and never use a different path.",
       "If neither `write` nor `apply_patch` is available, or if the approved payload path cannot be targeted with the available approved file-write tool, stop and return `local_only`.",
     ])
     expectContains(REVIEW_R5, [
-      "Serialize the encoded payload to the approved payload file with the session's approved file-write tool (`write`, or `apply_patch` on models where opencode substitutes patch-based editing)",
+      "Post the authorized review. The complete input is the following POST_REQUEST.",
     ])
   })
 
