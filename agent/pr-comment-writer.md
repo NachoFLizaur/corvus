@@ -183,10 +183,10 @@ If resolved current changed-file context materially differs from the authorized 
 When the canonical diff was truncated, partial, or failed, resolve only the unique normalized paths that carry inline comments. Iterate page `k` from 1 through `min(ceil(changed_files / 30), 20)` with `per_page` fixed at 30:
 
 ```text
-gh api --method GET repos/<owner>/<name>/pulls/<pr_number>/files?per_page=30\&page=<k> -H Accept:application/vnd.github+json --jq '.[] | {f: .filename, h: (.patch // "" | split("\n") | map(select(startswith("@@"))))}'
+gh api --method GET repos/<owner>/<name>/pulls/<pr_number>/files\?per_page=30\&page=<k> -H Accept:application/vnd.github+json --jq '.[] | {f: .filename, h: (.patch // "" | split("\n") | map(select(startswith("@@"))))}'
 ```
 
-The byte rules are mandatory: the endpoint is never quoted; `&` is escaped as `\&`; and the `-H Accept:` header is mandatory because the allowlist pattern requires it. The single-quoted jq program is fixed trusted syntax and must be used verbatim — never interpolate any PR-derived value into it.
+The byte rules are mandatory: the endpoint is never quoted; zsh glob characters in it are backslash-escaped — `?` as `\?` and `&` as `\&`; the `-H Accept:` header is mandatory because the allowlist pattern requires it; and the jq program stays verbatim single-quoted. The single-quoted jq program is fixed trusted syntax and must be used verbatim — never interpolate any PR-derived value into it.
 
 Never request more than 20 files-endpoint pages (600 files), even when `ceil(changed_files / 30)` is larger. Parse each complete size-bounded output as data. Use each `f` value only for exact normalized changed-file membership. Use each `h` array only for RIGHT-side location validation. In a header `@@ -a,b +c,d @@`, right-side lines `c` through `c+d-1` are valid comment anchors within that hunk; `d` defaults to `1` when omitted. A multi-line comment requires `start_line` and `line` to fall inside the same header range. These hunk-header ranges are sufficient for the API's own inline-position rule, so never request or parse full patch text. Stop paginating as soon as every commented file is resolved.
 
