@@ -896,6 +896,9 @@ describe("prompt contracts: review trust + deterministic state", () => {
       "The byte rules are mandatory: the endpoint is never quoted; zsh glob characters in it are backslash-escaped — `?` as `\\?` and `&` as `\\&`; the `-H Accept:` header is mandatory because the allowlist pattern requires it; and the jq program stays verbatim single-quoted.",
       "The single-quoted jq program is fixed trusted syntax and must be used verbatim — never interpolate any PR-derived value into it.",
       "Once control-field validation and the head-SHA guard have passed, Step 3 ALWAYS exits forward into Steps 4-7: an unresolved or unverifiable inline position is NEVER grounds for `local_only`; relocate it to the body with the documented reason, and if every comment relocates, proceed with an empty `comments` array.",
+      "**The SHA-equality guard is the complete and sole drift authority**: a commit SHA deterministically fixes the diff, so when the observed `head.sha` byte-equals `POST_REQUEST.commit_id`, the PR diff cannot differ from what was synthesized against.",
+      "**Body-only fast path**: immediately after the head-SHA guard passes, if the `comments` array is empty, skip all diff retrieval and validation — no canonical diff GET, no `changed_files` read, and no pagination — and proceed directly to Steps 4-7; a body-only review references no diff position, so no diff context is required.",
+      "If the paginated files channel is entirely unavailable because dispatch is denied or it continues failing after its allowed attempts, relocate all inline comments to the body through Step 4 with that documented reason and proceed.",
       "Author the payload directly from the in-memory values as pretty-printed JSON with exactly 2-space indentation.",
       "Write the authored JSON bytes to the approved payload file with the session's approved file-write tool (`write`, or `apply_patch` on models where opencode substitutes patch-based editing), overwriting it wholesale — never append, and never use a different path.",
       "`jq . .corvus/review-payload.json`",
@@ -907,6 +910,10 @@ describe("prompt contracts: review trust + deterministic state", () => {
       "--input .corvus/review-payload.json",
       "bytes = strict model-authored pretty-printed JSON encoding of api_payload",
       "Never use `eval`, `sh -c`, `bash -c`, command substitution",
+    ])
+    expectAbsent(COMMENT_WRITER, [
+      "materially differs",
+      "PR diff changed after review synthesis",
     ])
     expectContains(REVIEW_R5, [
       "Delegate exactly once to `@pr-comment-writer` with only the structured POST_REQUEST.",
@@ -2064,7 +2071,7 @@ describe("review-pipeline-redesign: phase 3 contracts", () => {
         "gh api --method GET repos/<owner>/<name>/pulls/<pr_number> -H Accept:application/vnd.github+json --jq .head.sha",
         "gh api --method GET repos/<owner>/<name>/pulls/<pr_number> -H Accept:application/vnd.github+json --jq .changed_files",
         "**SHA-equality drift guard (pre-POST)**: only after both `POST_REQUEST.commit_id` and the observed `--jq .head.sha` output have independently passed `^[0-9a-f]{40}$`, compare those two strings byte-for-byte.",
-        "**Never infer drift from a truncated, partial, or failed diff or metadata read** — truncation is a routing signal to use the fallback, never a drift signal.",
+        "**The SHA-equality guard is the complete and sole drift authority**: a commit SHA deterministically fixes the diff, so when the observed `head.sha` byte-equals `POST_REQUEST.commit_id`, the PR diff cannot differ from what was synthesized against.",
         'reason "could not verify current head SHA"',
         '"PR head moved after review synthesis (commit_id mismatch)"',
       ])

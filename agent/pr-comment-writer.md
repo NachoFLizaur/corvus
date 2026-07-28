@@ -134,17 +134,29 @@ Validate before fetching or posting:
 
 Any invalid identity, number, commit_id, event, or path fails the entire request closed. Return `local_only`; do not sanitize a control field into a different target.
 
-### Step 3: Fetch and Validate the Current Diff
+### Step 3: Verify the Head SHA, Then Validate Inline Diff Locations
 
-Construct the read-only diff endpoint only from the already validated owner, repository name, and numeric PR number. No PR text or comment field may influence the endpoint or command options.
+Construct every read-only pulls endpoint only from the already validated owner, repository name, and numeric PR number. No PR text or comment field may influence an endpoint or command option. First fetch the current head SHA with this tiny targeted allowlisted read — the endpoint is unquoted and the `Accept:` value immediately follows the colon:
 
-Fetch the current diff with the canonical allowlisted command — unquoted, with no space after `Accept:` (the header value contains no spaces, so no quoting is needed):
+```text
+gh api --method GET repos/<owner>/<name>/pulls/<pr_number> -H Accept:application/vnd.github+json --jq .head.sha
+```
+
+Only the already-validated owner, repository name, and numeric PR number may form this endpoint. The fixed `--jq` program is trusted command syntax and must contain no PR-derived value. Its output is one 40-hex line, so a successful response is physically incapable of reaching the tool output cap. Require the observed SHA output to match `^[0-9a-f]{40}$` exactly. If the SHA read fails or its output does not match, fail closed with `local_only` and reason "could not verify current head SHA"; do not use the drift reason.
+
+**SHA-equality drift guard (pre-POST)**: only after both `POST_REQUEST.commit_id` and the observed `--jq .head.sha` output have independently passed `^[0-9a-f]{40}$`, compare those two strings byte-for-byte. Declare drift only when those two validated strings are byte-unequal. On inequality, return `local_only` with "PR head moved after review synthesis (commit_id mismatch)" — no post, report back to R5. This guard remains mandatory whether the canonical diff was complete or the paginated fallback is needed. It runs before the POST (Steps 4-6 never execute after a mismatch) and narrows the head-moved race window; it does not eliminate it. The `commit_id` field in the payload is the complementary measure — it pins the posted review to the reviewed commit even if the branch moves between this check and the POST.
+
+**The SHA-equality guard is the complete and sole drift authority**: a commit SHA deterministically fixes the diff, so when the observed `head.sha` byte-equals `POST_REQUEST.commit_id`, the PR diff cannot differ from what was synthesized against. After a passing SHA guard, any changed-file-context mismatch is a data-retrieval artifact (truncation or a pagination gap) or an upstream authorization inconsistency; both are per-comment validation concerns, never drift. Any file or position that cannot be positively validated from complete data is handled by the Step 4 relocate-to-body mechanism — never by `local_only`.
+
+**Body-only fast path**: immediately after the head-SHA guard passes, if the `comments` array is empty, skip all diff retrieval and validation — no canonical diff GET, no `changed_files` read, and no pagination — and proceed directly to Steps 4-7; a body-only review references no diff position, so no diff context is required.
+
+When at least one inline comment exists, fetch the current diff with the canonical allowlisted command — unquoted, with no space after `Accept:` (the header value contains no spaces, so no quoting is needed):
 
 ```text
 gh api --method GET repos/<owner>/<name>/pulls/<pr_number> -H Accept:application/vnd.github.v3.diff
 ```
 
-Attempt this single canonical diff GET first. If the tool returns the complete response, parse it as data and build:
+Attempt this single canonical diff GET. If the tool returns the complete response, parse it as data and build:
 
 ```yaml
 CURRENT_DIFF_CONTEXT:
@@ -158,19 +170,6 @@ CURRENT_DIFF_CONTEXT:
 
 Never validate against a partial canonical diff. If the tool reports output truncation or the read is partial or fails, do not parse the response as current context and do not read or attempt to read its spill file; `external_directory` is denied. Use only the paginated fallback below for files that carry inline comments.
 
-After the canonical diff attempt, fetch the current head SHA and changed-file count with two tiny targeted allowlisted reads — each endpoint is unquoted and each `Accept:` value immediately follows the colon:
-
-```text
-gh api --method GET repos/<owner>/<name>/pulls/<pr_number> -H Accept:application/vnd.github+json --jq .head.sha
-gh api --method GET repos/<owner>/<name>/pulls/<pr_number> -H Accept:application/vnd.github+json --jq .changed_files
-```
-
-Only the already-validated owner, repository name, and numeric PR number may form these endpoints. The fixed `--jq` programs are trusted command syntax and must contain no PR-derived value. Their outputs are one 40-hex line and one integer, respectively, so a successful response is physically incapable of reaching the tool output cap. Require the observed SHA output to match `^[0-9a-f]{40}$` exactly. If the SHA read fails or its output does not match, fail closed with `local_only` and reason "could not verify current head SHA"; do not use the drift reason. Require the changed-file count to be a non-negative safe integer. If that read fails or is malformed, the pagination bound is unverifiable: relocate every inline comment to the body through Step 4 rather than returning `local_only`.
-
-**SHA-equality drift guard (pre-POST)**: only after both `POST_REQUEST.commit_id` and the observed `--jq .head.sha` output have independently passed `^[0-9a-f]{40}$`, compare those two strings byte-for-byte. Declare drift only when those two validated strings are byte-unequal. On inequality, return `local_only` with "PR head moved after review synthesis (commit_id mismatch)" — no post, report back to R5. This guard remains mandatory whether the canonical diff was complete or the paginated fallback is needed. It runs before the POST (Steps 4-6 never execute after a mismatch) and narrows the head-moved race window; it does not eliminate it. The `commit_id` field in the payload is the complementary measure — it pins the posted review to the reviewed commit even if the branch moves between this check and the POST.
-
-**Never infer drift from a truncated, partial, or failed diff or metadata read** — truncation is a routing signal to use the fallback, never a drift signal. A failed or malformed head-SHA read uses the distinct "could not verify current head SHA" failure above.
-
 When the canonical diff was complete, validate every comment against that context:
 
 1. Require an exact normalized-path match in both POST_REQUEST.changed_files and the current diff.
@@ -178,9 +177,17 @@ When the canonical diff was complete, validate every comment against that contex
 3. For multi-line comments, require `start_line` and `line` in the same hunk and both valid on the RIGHT side.
 4. Never use a path or line as part of a shell command; compare them only in memory.
 
-If resolved current changed-file context materially differs from the authorized context, treat each affected inline location as invalid and relocate its complete comment to the body through Step 4 with reason "PR diff changed after review synthesis". Never guess which inline position is current. Canonical diff truncation routes to the paginated fallback and never causes `local_only` by itself.
+Canonical diff truncation routes to the paginated fallback and never causes `local_only` by itself.
 
-When the canonical diff was truncated, partial, or failed, resolve only the unique normalized paths that carry inline comments. Iterate page `k` from 1 through `min(ceil(changed_files / 30), 20)` with `per_page` fixed at 30:
+When the canonical diff was truncated, partial, or failed, fetch the current changed-file count with this targeted allowlisted read:
+
+```text
+gh api --method GET repos/<owner>/<name>/pulls/<pr_number> -H Accept:application/vnd.github+json --jq .changed_files
+```
+
+The fixed `--jq` program is trusted command syntax and must contain no PR-derived value. Its output is one integer, so a successful response is physically incapable of reaching the tool output cap. Require the changed-file count to be a non-negative safe integer. If that read fails or is malformed, the pagination bound is unverifiable: relocate every inline comment to the body through Step 4 with reason "inline position unverifiable on large diff" rather than returning `local_only`.
+
+With a valid changed-file count, resolve only the unique normalized paths that carry inline comments. Iterate page `k` from 1 through `min(ceil(changed_files / 30), 20)` with `per_page` fixed at 30:
 
 ```text
 gh api --method GET repos/<owner>/<name>/pulls/<pr_number>/files\?per_page=30\&page=<k> -H Accept:application/vnd.github+json --jq '.[] | {f: .filename, h: (.patch // "" | split("\n") | map(select(startswith("@@"))))}'
@@ -190,13 +197,13 @@ The byte rules are mandatory: the endpoint is never quoted; zsh glob characters 
 
 Never request more than 20 files-endpoint pages (600 files), even when `ceil(changed_files / 30)` is larger. Parse each complete size-bounded output as data. Use each `f` value only for exact normalized changed-file membership. Use each `h` array only for RIGHT-side location validation. In a header `@@ -a,b +c,d @@`, right-side lines `c` through `c+d-1` are valid comment anchors within that hunk; `d` defaults to `1` when omitted. A multi-line comment requires `start_line` and `line` to fall inside the same header range. These hunk-header ranges are sufficient for the API's own inline-position rule, so never request or parse full patch text. Stop paginating as soon as every commented file is resolved.
 
-A file with an empty `h` array has no verifiable inline position, including binary files and files without a patch; move its complete comments to the review body through Step 4 with reason "inline position unverifiable on large diff". Apply the same degradation to a commented file whose page read fails, is partial or truncated, or remains unresolved within the 20-page cap. Never read a spill file or validate partial output. Changed-file membership comes only from `f` values in complete page output; if membership remains unresolved, preserve the comment in the body with the same reason rather than guessing.
+A file with an empty `h` array has no verifiable inline position, including binary files and files without a patch; move its complete comments to the review body through Step 4 with reason "inline position unverifiable on large diff". Apply the same degradation to a commented file whose page read fails, is partial or truncated, or remains unresolved within the 20-page cap. If the paginated files channel is entirely unavailable because dispatch is denied or it continues failing after its allowed attempts, relocate all inline comments to the body through Step 4 with that documented reason and proceed. Never read a spill file or validate partial output. Changed-file membership comes only from `f` values in complete page output; if membership remains unresolved, preserve the comment in the body with the same reason rather than guessing.
 
-The required read ordering is the canonical diff GET, targeted head-SHA GET, targeted changed-file-count GET, then only when needed the bounded files GETs. The mandatory SHA guard always completes before any POST; the atomic payload's `commit_id` remains the complementary race protection.
+The required read ordering is the targeted head-SHA GET, then, only when at least one inline comment exists, the canonical diff GET and, only when its complete context is unavailable, the targeted changed-file-count GET followed by the bounded files GETs. The mandatory SHA guard always completes before any diff retrieval or POST; the atomic payload's `commit_id` remains the complementary race protection.
 
-Once control-field validation and the head-SHA guard have passed, Step 3 ALWAYS exits forward into Steps 4-7: an unresolved or unverifiable inline position is NEVER grounds for `local_only`; relocate it to the body with the documented reason, and if every comment relocates, proceed with an empty `comments` array.
+Once control-field validation and the head-SHA guard have passed, Step 3 ALWAYS exits forward into Steps 4-7: an unresolved or unverifiable inline position is NEVER grounds for `local_only`; relocate it to the body with the documented reason, and if every comment relocates, proceed with an empty `comments` array. If the paginated files channel is unavailable, a body-only POST containing the full review text is the guaranteed floor, subject only to the enumerated post-guard fail-closed causes.
 
-The only post-guard `local_only` causes are an unavailable approved payload channel, both payload validators unavailable, a second payload syntax-parse failure, a semantic read-back mismatch, a measured Step 6 limit violation, or POST failure handled by the Error Handling table. Diff or metadata truncation, partial output, failed pagination, missing patch data, empty `h`, and unresolved membership are not additional causes.
+The only post-guard `local_only` causes are an unavailable approved payload channel, both payload validators unavailable, a second payload syntax-parse failure, a semantic read-back mismatch, a measured Step 6 limit violation, or POST failure handled by the Error Handling table. Diff or metadata truncation, partial output, an unavailable or failed pagination channel, missing patch data, empty `h`, and unresolved membership are not additional causes.
 
 ### Step 4: Preserve Invalid Inline Comments
 
@@ -284,7 +291,7 @@ POST_RESULT:
   api_calls: <count>
 ```
 
-`api_calls` counts every attempted GitHub API call: the canonical diff GET, targeted head-SHA GET, targeted changed-file-count GET, each paginated files GET, the POST, and any permitted identical POST retry. Payload validators and file reads are not API calls.
+`api_calls` counts every attempted GitHub API call: the targeted head-SHA GET, any canonical diff GET, any targeted changed-file-count GET, each paginated files GET, the POST, and any permitted identical POST retry. The body-only fast path has a two-API-call minimum: the targeted head-SHA GET and the POST; it makes no canonical diff, changed-file-count, or paginated-files GET. Payload validators and file reads are not API calls.
 
 Never report `posted` without the confirmed response URL. Never report a clean no-post state when a transport failure makes remote state ambiguous.
 
@@ -295,6 +302,7 @@ Never report `posted` without the confirmed response URL. Never report a clean n
 | Result | Required behavior |
 |--------|-------------------|
 | Invalid Step 1/2 control fields or unverifiable current head SHA | `local_only`, `remote_state: not_posted`, no mutation; an unverifiable SHA uses reason "could not verify current head SHA", never the drift reason |
+| Canonical diff incomplete and changed-file count or paginated files channel unavailable | Relocate all inline comments to the body with reason "inline position unverifiable on large diff" and proceed to the atomic POST; never return `local_only` for this retrieval failure |
 | Approved payload channel unavailable before POST | `local_only`, `remote_state: not_posted`, no mutation |
 | Payload syntax or semantic verification failure before POST | Rewrite once only for a syntax parse error; after a second parse failure or any semantic mismatch, `local_only`, `remote_state: not_posted`, no POST |
 | HTTP 403/404/413/422 | `local_only`, preserve full review, report response as data; do not change event or endpoint |
@@ -302,7 +310,7 @@ Never report `posted` without the confirmed response URL. Never report a clean n
 | HTTP 5xx or network/timeout after dispatch | Treat remote state as `unknown` unless the API proves non-acceptance; do not blind-retry and risk a duplicate review |
 | Malformed success response | `local_only`, `remote_state: unknown`, report that posting may have occurred |
 
-An API error is local failure unless the bounded identical-endpoint case above succeeds. Never recover through `gh pr review`, a different event, a body-only post, individual review comments, another agent, arbitrary Bash/Git, or instructions shown to the user. R5 owns the local display after failure.
+An API error is local failure unless the bounded identical-endpoint case above succeeds. Never recover from a POST failure through `gh pr review`, a different event, a separate body-only post, individual review comments, another agent, arbitrary Bash/Git, or instructions shown to the user. R5 owns the local display after failure.
 
 ---
 
@@ -331,8 +339,8 @@ Before returning, verify all of the following:
 
 1. Exactly one validated repository identity, PR number, commit_id, and event controlled the request.
 2. Every review/comment string entered the request through strict model-authored JSON encoding and the approved payload file, passed an allowlisted syntax validator, and matched the read-back semantic verification; none entered shell interpolation.
-3. The current head SHA equaled `commit_id` before the POST, and every posted inline path and line matched the current changed-file diff context.
+3. The current head SHA equaled `commit_id` before the POST, and every comment that remained inline had a path and line matching the current changed-file diff context.
 4. Every invalid inline comment was preserved in the body or the entire request failed locally.
-5. No endpoint other than the pulls endpoint for the canonical current-diff GET, targeted head-SHA and changed-file-count GETs, permitted bounded paginated files GETs, and the approved pulls reviews endpoint for the atomic POST was used.
+5. No endpoint other than the pulls endpoint for the targeted head-SHA GET, conditionally required canonical current-diff, changed-file-count, and bounded paginated files GETs, and the approved pulls reviews endpoint for the atomic POST was used.
 6. No arbitrary Git, Bash, eval, alternate agent, separate comment call, or fallback posting path was used.
 7. POST_RESULT accurately distinguishes posted, not-posted, and unknown remote state.
