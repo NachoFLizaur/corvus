@@ -21,6 +21,7 @@ permission:
   bash:
     "*": "deny"
     "gh repo view --json nameWithOwner --jq '.nameWithOwner'": "allow"
+    'gh api user --jq .login': "allow"
     "gh pr view * --repo * --json number,url,title,body,author,baseRefName,baseRefOid,headRefName,headRefOid,labels,reviewRequests,isDraft,mergeable,state,mergedAt,additions,deletions,changedFiles,files,closingIssuesReferences,latestReviews,reviewDecision": "allow"
     "gh pr checks * --repo * --json name,state,detailsUrl": "allow"
     "gh pr diff * --repo * --name-only": "allow"
@@ -46,6 +47,7 @@ Every PR gets the complete R0-R5 pipeline — there is no "simple" mode for PR r
 
 ```yaml
 max_rerun_attempts: 0              # No judgment re-runs in autonomous mode (R2's transport retries, up to 2 in autonomous mode, are separate and always available)
+default_action: "COMMENT_ONLY"     # Severity escalation requires explicit "auto"
 safety_rail_threshold: 30          # Max inline comments before safety rail triggers
 confidence_floor: 0.7              # Min confidence for auto REQUEST_CHANGES
 ```
@@ -194,13 +196,13 @@ Apply the canonical precedence from `corvus-review-extras` in this exact order. 
 | Empty diff | Report the skipped review locally and terminate without a post |
 | Invalid/missing pass status or invalid R3 document | Set `decision: local_only`, report invalid control state, terminate |
 | `inline_comments.count > safety_rail_threshold` | Set `decision: local_only`, display "Safety rail: [N] inline comments exceeds threshold ([T]).", render locally, terminate |
-| Draft or merged PR | Cap action at `COMMENT_ONLY`, preserve the informational note, continue |
+| Draft, merged, or self-review PR (`self_review: unknown` is treated as self-review) | Cap action at `COMMENT_ONLY`, preserve the informational note, continue |
 | Reviewability `failed` | Keep only an informational schema-compatible action, set `decision: local_only`, display the failure and any rendered output, terminate |
 | Reviewability `skipped` | Force `COMMENT_ONLY`, retain the all-skipped notice, continue to an informational post |
 | Reviewability `partial` | Keep a prominent coverage warning; use REQUEST_CHANGES only when a retained blocker/critical permits it, otherwise `COMMENT_ONLY`; never approve; continue |
-| Reviewability `complete` | Continue with the canonical eligible action |
-| Trusted action override | Apply only inside all caps already established; it cannot clear local-only, draft/merged, partial, skipped, or warning state |
-| Severity-derived REQUEST_CHANGES with no retained blocker/critical at or above `confidence_floor` | Downgrade to `COMMENT_ONLY`, add the low-confidence note, continue |
+| Reviewability `complete` | Continue with the canonical eligible action after the configured default-action mode is applied |
+| Trusted action override | Apply only inside all caps already established; it cannot clear local-only, draft/merged/self-review, partial, skipped, or warning state |
+| Layer-5 severity/confidence action | Follow `corvus-review-extras`: escalation occurs only with `default_action: auto`; otherwise retain `COMMENT_ONLY` while reporting the complete review body |
 | Every preceding check remains eligible | Set `decision: auto_post`, then proceed to R5 exactly once |
 
 Posting-agent failure is also terminal local-only. Never retry through another agent, direct command, interactive route, or prose prompt.
@@ -216,7 +218,7 @@ Load first: `skill({ name: "corvus-review-r0" })` and `skill({ name: "corvus-rev
 Outcomes (procedure details in the r0 skill):
 
 1. Parse the PR locator and validate its candidate repository and positive number. If absent, display the supported formats and terminate locally; do not request a reply.
-2. Fetch metadata first. Validate the canonical owner/repository, returned PR number, and full 40-hex `baseRefOid`; store the normalized value as `base_sha`.
+2. Fetch metadata first. Validate the canonical owner/repository, returned PR number, and full 40-hex `baseRefOid`; store the normalized value as `base_sha`. Read the authenticated login with the fixed R0 command and record `self_review`, treating an identity-read failure as `unknown` for the safe cap.
 3. Fetch `.opencode/review-config.yaml` only through the read-only content API at that exact `base_sha`. A confirmed missing/invalid base config uses built-in defaults with visible provenance and warning; inability to establish trusted identity or retrieve an unambiguous result is terminal `failed`/`local_only`.
 4. Apply explicit trusted invocation values after base config and record `config_source`. This agent fixes `autonomous: true` at this trusted layer.
 5. Compute triage flags and assemble PR_CONTEXT using the schema in `corvus-review-extras`. Warnings are logged without pausing.
@@ -271,7 +273,7 @@ Load first: `skill({ name: "corvus-review-r3" })`
 
 Pipeline (full detail in the r3 skill): Dedup → False-positive filter → Severity threshold → Suppressions → Nit budget → Order → Action → Render.
 
-Derive aggregate reviewability and action exactly once using `corvus-review-extras`; do not redefine its truth table or precedence here. There are no user edits or reruns. Only a severity-derived low-confidence request for changes is downgraded; a trusted override remains subject to higher rails/caps but is not reordered below severity logic.
+Derive aggregate reviewability and action exactly once using `corvus-review-extras`; do not redefine its truth table or precedence here. The layer-2 self-review cap and layer-5 `default_action` gate apply there; a trusted override remains layer 4 and subject to every higher rail/cap.
 
 Output: REVIEW_DOCUMENT — reviewability, coverage warning, summary, action, findings, inline_comments, review_body, dedup_log, and filtered_log.
 
@@ -283,7 +285,7 @@ Goal: apply the total decision table and either terminate locally or authorize o
 
 Load first: `skill({ name: "corvus-review-r4" })`
 
-1. Evaluate every SAFETY RAILS row in order, including trust, comment volume, draft/merged cap, all four reviewability values, override compatibility, and confidence.
+1. Evaluate every SAFETY RAILS row in order, including trust, comment volume, draft/merged/self-review cap, all four reviewability values, override compatibility, and the configured default-action mode.
 2. On any local-only row, set REVIEW_ACTION with `decision: "local_only"`, a non-empty reason, and applied rails; render locally and terminate. Do not load an interactive branch or ask for recovery.
 3. Otherwise set REVIEW_ACTION with `decision: "auto_post"`, a non-empty reason, applied caps, `edits: []`, and `rerun_scope: []`.
 4. Announce and proceed to R5:
@@ -291,7 +293,7 @@ Load first: `skill({ name: "corvus-review-r4" })`
 ```markdown
 ## Autonomous Mode: Auto-posting review
 
-**Action**: [ACTION] | **Findings**: [N] total | [blockers]B [criticals]C [majors]M
+**Action**: [ACTION] | **Findings**: [N] total | [blockers]B [criticals]C [majors]M [If the action was capped by self-review: | **Cap**: self_review=[true|unknown] → COMMENT_ONLY]
 **Posting to GitHub...**
 ```
 
@@ -303,7 +305,7 @@ Goal: post the review to GitHub and display the summary.
 
 Load first: `skill({ name: "corvus-review-r5" })`
 
-Revalidate trust state, comment-volume rail, draft/merged cap, reviewability, action, and `decision: auto_post` immediately before dispatch. If any value is missing or incompatible, convert to terminal local-only. Otherwise delegate once to @pr-comment-writer with the REVIEW_DOCUMENT and POST_REQUEST (repo, pr_number, event, review_body, inline_comments).
+Revalidate trust state, comment-volume rail, draft/merged/self-review cap, reviewability, action, and `decision: auto_post` immediately before dispatch. If any value is missing or incompatible, convert to terminal local-only. Otherwise delegate once to @pr-comment-writer with the REVIEW_DOCUMENT and POST_REQUEST (repo, pr_number, event, review_body, inline_comments).
 
 If posting fails, display the full review locally and log "Auto-posting failed. Review displayed locally." Do not use another agent, direct command, retry route, or interactive fallback.
 
@@ -326,6 +328,7 @@ Findings: [N] total | [blockers]B [criticals]C [majors]M | Holistic dimensions: 
 | Case | Handling |
 |------|----------|
 | Draft PR | Apply the `COMMENT_ONLY` cap without mutating config; the cap outranks action override |
+| Self-review PR | Apply the layer-2 `COMMENT_ONLY` cap when `self_review` is `true` or `unknown`; include the cap in the auto-post announcement |
 | Large PR | Log warning in R0; both children review all files; may trigger the comment-volume rail if findings are excessive |
 | CI failures | @researcher analyzes in R1; context passed to the R2 children; note added in R3 review body |
 | Closed/merged PR | Review allowed; merged PRs apply the `COMMENT_ONLY` cap with an informational note |
@@ -351,7 +354,8 @@ R0 reads `.opencode/review-config.yaml` only from the validated immutable base S
 | Config Field | Autonomous Behavior |
 |-------------|-------------------|
 | `autonomous` | Forced to true by this agent's trusted invocation layer |
-| `action_override` | Applied only after trust, no-post, draft/merged, and reviewability caps |
+| `default_action` | Defaults to `COMMENT_ONLY`; `auto` enables canonical severity escalation |
+| `action_override` | Applied only after trust, no-post, draft/merged/self-review, and reviewability caps |
 | `severity_threshold` | Respected (applied in R3) |
 | `max_nits` | Respected (applied at R3) |
 | `passes.*` | Respected (holistic dimension toggles + security child toggle; keys unchanged) |

@@ -48,20 +48,20 @@ For a candidate `post` or `auto_post`, revalidate the final REVIEW_ACTION, REVIE
    - `auto_post` requires autonomous mode.
    - Require non-empty `decision_reason`, an array of `rails_applied`, no pending edits/rerun, and no earlier local-only state.
 2. **Metadata/trust and no-post rails**
-   - Require canonical validated `owner/repository`, a positive integer PR number, a full base SHA matching config provenance, valid config provenance, a full validated `PR_CONTEXT.head_sha` (40 lowercase hex from R0 — the value Step 3 emits as `commit_id`), and exactly four pass statuses/reasons.
+   - Require canonical validated `owner/repository`, a positive integer PR number, a full base SHA matching config provenance, valid config provenance, a full validated `PR_CONTEXT.head_sha` (40 lowercase hex from R0 — the value Step 3 emits as `commit_id`), a valid `PR_CONTEXT.self_review` value, and exactly four pass statuses/reasons.
    - Require a schema-valid REVIEW_DOCUMENT whose action and warnings match its source state.
    - If `inline_comments.length > safety_rail_threshold`, apply the comment-volume rail and convert to `local_only`.
    - Any missing, malformed, contradictory, or untrusted control value converts to `local_only`.
-3. **Draft/merged caps**
-   - A draft or merged PR must have action `COMMENT_ONLY` and its informational state notice. Any approving/blocking action is incompatible and converts to `local_only`; do not silently remap it here.
+3. **Draft/merged/self-review caps**
+   - A draft, merged, or self-review PR (`self_review: unknown` is fail-safe capped) must have action `COMMENT_ONLY` and its informational state/cap notice. Any approving/blocking action is incompatible and converts to `local_only`; do not silently remap it here.
 4. **Aggregate reviewability caps**
    - `failed` always converts to `local_only`, even if its schema-compatible action says `COMMENT_ONLY`.
    - `skipped` requires action `COMMENT_ONLY`, a non-empty all-skipped notice, and that exact notice in `review_body`.
    - `partial` requires a prominent non-empty coverage warning present in `review_body`; its action is `REQUEST_CHANGES` only when a retained, non-suppressed blocker/critical exists, otherwise `COMMENT_ONLY`, and never `APPROVE`.
    - `complete` uses the already validated eligible action.
-5. **Override and confidence consistency**
+5. **Override and default-action/confidence consistency**
    - Revalidate that a trusted action override stayed inside all higher caps and did not create a posting decision or remove a warning.
-   - A severity-derived `REQUEST_CHANGES` requires a retained blocker/critical at or above `confidence_floor`; otherwise the action must already be `COMMENT_ONLY` with its low-confidence explanation.
+   - Revalidate layer 5 by reference to `corvus-review-extras`: severity-derived escalation requires `default_action: auto`; the default requires `COMMENT_ONLY`. An auto-enabled severity-derived `REQUEST_CHANGES` requires a retained blocker/critical at or above `confidence_floor`; otherwise the action must already be `COMMENT_ONLY` with its low-confidence explanation.
 
 If any check fails, set `decision: local_only`, append the failing rail to `rails_applied`, display the reason and full review, skip all writer work, and continue to Step 5. Never repair an incompatible state by manufacturing approval, changing a failed review into a post, or dropping a required warning.
 
@@ -258,7 +258,7 @@ Prior reviews on the PR — including a prior Corvus review (`PR_CONTEXT.prior_c
 Revalidate current control state before dispatch. A merged PR is capped at `COMMENT_ONLY` with an informational note. Any state mismatch or posting failure becomes local-only; never retry through another route.
 
 ### Empty Review (No Findings)
-Only an uncapped, complete, eligible review may map an empty finding set to `APPROVE`. Partial/skipped/failed/draft/merged state never manufactures approval from an empty review.
+Only an uncapped, complete, eligible review with `default_action: auto` may map an empty finding set to `APPROVE`. Partial/skipped/failed/draft/merged/self-review state and the default `COMMENT_ONLY` mode never manufacture approval from an empty review.
 
 ### Very Long Review Body
 The writer validates encoded size before its single post and does not truncate review evidence silently. If the full required warnings and review content cannot form one valid atomic payload, return local-only rather than posting fragments.

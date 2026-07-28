@@ -36,14 +36,14 @@ Choose the route before evaluating any route-specific instruction. An autonomous
 
 The selected route runs this preflight before it can produce `post` or `auto_post`. Action and posting decision are separate: `APPROVE`, `REQUEST_CHANGES`, or `COMMENT_ONLY` never authorizes a post by itself.
 
-Apply the fail-closed precedence from `corvus-review-extras` in this exact order:
+Apply the fail-closed precedence from `corvus-review-extras` in this exact order. That skill owns the action truth table; R4 validates and preserves its result rather than re-deriving it:
 
 1. **Metadata/trust failures and no-post rails**
-   - Require validated repository identity, positive PR number, full base SHA with matching config provenance, exactly four valid pass statuses/reasons, and a schema-valid REVIEW_DOCUMENT.
+   - Require validated repository identity, positive PR number, full base SHA with matching config provenance, `self_review` set to exactly `true`, `false`, or `unknown`, exactly four valid pass statuses/reasons, and a schema-valid REVIEW_DOCUMENT.
    - If control state is missing, malformed, contradictory, or already marked no-post, return `local_only`.
    - If `REVIEW_DOCUMENT.inline_comments.length > PR_CONTEXT.config.safety_rail_threshold`, apply the comment-volume rail and return `local_only`.
-2. **Draft/merged caps**
-   - If the PR is draft or merged, force `COMMENT_ONLY` and retain the informational state notice.
+2. **Draft/merged/self-review caps**
+   - Enforce the canonical layer-2 cap from `corvus-review-extras`, including `self_review: true` and fail-safe `self_review: unknown`; force `COMMENT_ONLY` and retain the applicable informational notice.
 3. **Aggregate reviewability caps**
    - `failed`: keep only an informational schema-compatible `COMMENT_ONLY`, then return `local_only`.
    - `skipped`: force `COMMENT_ONLY` and retain the all-skipped notice.
@@ -51,9 +51,10 @@ Apply the fail-closed precedence from `corvus-review-extras` in this exact order
    - `complete`: retain the eligible synthesized action.
 4. **Trusted action override**
    - Accept only a schema-valid override from verified base config or explicit trusted invocation and only inside every cap already applied.
-   - An override cannot clear `local_only`, remove or rewrite a coverage/state warning, approve a partial/skipped review, change a draft/merged review from `COMMENT_ONLY`, or create posting eligibility.
+   - An override cannot clear `local_only`, remove or rewrite a coverage/state warning, approve a partial/skipped review, change a draft/merged/self-review review from `COMMENT_ONLY`, or create posting eligibility.
 5. **Severity/confidence action**
-   - For a severity-derived `REQUEST_CHANGES`, require a retained blocker or critical at or above `confidence_floor`; otherwise downgrade to `COMMENT_ONLY` and retain the low-confidence explanation.
+   - Preserve the canonical R3 result: severity/confidence escalation is eligible only under `default_action: auto`; the built-in default keeps every severity-derived action at `COMMENT_ONLY` without removing review-body content.
+   - When `default_action: auto` derives `REQUEST_CHANGES`, require a retained blocker or critical at or above `confidence_floor`; otherwise downgrade to `COMMENT_ONLY` and retain the low-confidence explanation.
    - Do not apply this downgrade to a trusted override; higher rails and caps still constrain that override.
 
 The preflight returns either `{ eligibility: "local_only", reason, rails_applied }` or `{ eligibility: "eligible", constrained_action, rails_applied }`. Treat `coverage_warning` and state notices as immutable derived data throughout R4; finding edits and action changes cannot delete them.
@@ -74,7 +75,7 @@ Run this route only when the immediate dispatch selected autonomous mode.
      edits: []
      rerun_scope: []
    ```
-3. For `eligible`, preserve any partial/skipped/draft/merged/low-confidence notices and emit:
+3. For `eligible`, preserve any partial/skipped/draft/merged/self-review/default-action/low-confidence notices and emit:
    ```yaml
    REVIEW_ACTION:
      decision: "auto_post"
@@ -89,7 +90,7 @@ Run this route only when the immediate dispatch selected autonomous mode.
 
    **Reviewability**: [complete | partial | skipped]
    **Action**: [ACTION] | **Findings**: [N] total
-   [Render coverage_warning and state notices when present.]
+   [Render coverage_warning and state/cap notices when present.]
    **Posting to GitHub...**
    ```
 
@@ -122,7 +123,7 @@ Only an eligible review receives this preview:
 **Reviewability**: [complete | partial | skipped]
 **Action**: [ACTION_EMOJI] [action]
 **Reason**: [action_reasoning]
-[Render coverage_warning and draft/merged/low-confidence notices verbatim when present.]
+[Render coverage_warning and draft/merged/self-review/default-action/low-confidence notices verbatim when present.]
 
 ---
 
@@ -268,7 +269,7 @@ R4 produces a valid REVIEW_ACTION before proceeding:
 5. `post` is valid only in interactive mode after an eligible preview and explicit user authorization.
 6. `auto_post` is valid only in autonomous mode after every rail passed.
 7. `local_only` proceeds to R5's no-post completion path. Failed reviewability, invalid state, and hard rails can produce no other decision.
-8. Partial/skipped coverage notices and draft/merged state notices remain present after every edit, override, and decision.
+8. Partial/skipped coverage notices and draft/merged/self-review state notices remain present after every edit, override, and decision.
 
 ---
 

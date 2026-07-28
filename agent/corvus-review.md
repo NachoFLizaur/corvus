@@ -21,6 +21,7 @@ permission:
   bash:
     "*": "deny"
     "gh repo view --json nameWithOwner --jq '.nameWithOwner'": "allow"
+    'gh api user --jq .login': "allow"
     "gh pr view * --repo * --json number,url,title,body,author,baseRefName,baseRefOid,headRefName,headRefOid,labels,reviewRequests,isDraft,mergeable,state,mergedAt,additions,deletions,changedFiles,files,closingIssuesReferences,latestReviews,reviewDecision": "allow"
     "gh pr checks * --repo * --json name,state,detailsUrl": "allow"
     "gh pr diff * --repo * --name-only": "allow"
@@ -178,7 +179,7 @@ Load first: `skill({ name: "corvus-review-r0" })` and `skill({ name: "corvus-rev
 Outcomes (procedure details in the r0 skill):
 
 1. Parse the PR locator and validate its candidate repository and positive number. If no reference was provided, display the supported formats and terminate without calling `question()`.
-2. Fetch metadata first. Validate the canonical owner/repository, returned PR number, and full 40-hex `baseRefOid`; store the normalized value as `base_sha`.
+2. Fetch metadata first. Validate the canonical owner/repository, returned PR number, and full 40-hex `baseRefOid`; store the normalized value as `base_sha`. Read the authenticated login with the fixed R0 command and record the exact-match `self_review` state.
 3. Fetch `.opencode/review-config.yaml` only through the read-only content API at that exact `base_sha`. A confirmed missing/invalid base config uses built-in defaults with visible provenance and warning; inability to establish trusted identity or retrieve an unambiguous result is `failed`/`local_only`.
 4. Apply explicit trusted invocation values after base config and record `config_source`. This interactive agent fixes `autonomous: false` at this trusted layer.
 5. Compute triage flags and assemble PR_CONTEXT using the schema in `corvus-review-extras`.
@@ -258,7 +259,7 @@ Load first: `skill({ name: "corvus-review-r3" })`
 
 Pipeline (full detail in the r3 skill): Dedup → False-positive filter → Severity threshold → Suppressions → Nit budget → Order → Action → Render.
 
-Derive aggregate reviewability and action exactly once using `corvus-review-extras`; do not redefine its truth table or precedence here. `complete` follows the normal eligible action mapping (`APPROVE`, `REQUEST_CHANGES`, or `COMMENT_ONLY`); mixed skipped/error with zero completed passes is `failed`; `partial` uses `REQUEST_CHANGES` only when a retained blocker/critical permits it and never approves; `skipped` is informational `COMMENT_ONLY`; and `failed` is `local_only` even if REVIEW_DOCUMENT carries an informational action.
+Derive aggregate reviewability (`complete`, `partial`, `skipped`, or `failed`) and action exactly once using `corvus-review-extras`; do not redefine its truth table or precedence here. Its layer-2 draft/merged/self-review caps outrank overrides, and its layer-5 severity escalation to `APPROVE` or `REQUEST_CHANGES` is enabled only by `default_action: auto`; the built-in default is `COMMENT_ONLY`. Mixed skipped/error with zero completed passes is `failed`, and `failed` remains `local_only` even if REVIEW_DOCUMENT carries an informational action.
 
 Output: REVIEW_DOCUMENT — reviewability, coverage warning, summary, action, findings, inline_comments, review_body, dedup_log, and filtered_log.
 
@@ -270,7 +271,7 @@ Goal: present the review for the user's decision before posting. This gate is wh
 
 Load first: `skill({ name: "corvus-review-r4" })`
 
-1. Apply the canonical fail-closed precedence before presenting options. Trust/no-post rails and `failed` force `decision: "local_only"`; display the reason and terminate the gate without `question()`. Draft/merged and reviewability caps constrain action before any override.
+1. Apply the canonical fail-closed precedence before presenting options. Trust/no-post rails and `failed` force `decision: "local_only"`; display the reason and terminate the gate without `question()`. Draft/merged/self-review and reviewability caps constrain action before any override.
 2. For an eligible review, present the preview: reviewability, warnings, action, stats, and inline comment previews.
 3. Invoke `question()` (never plain-text options) with:
    - Post Review — post to GitHub as [ACTION] with [N] inline comments
@@ -286,7 +287,7 @@ Load first: `skill({ name: "corvus-review-r4" })`
 | Save Locally | Display full review → set `decision: "local_only"` → R5 (skip posting) |
 | Re-run Review | Ask which scope (full review, one holistic dimension, or the security child) → set `decision: "rerun"` → return to R2 with rerun_scope |
 
-After edits or re-runs, rederive reviewability/action and reapply every rail before showing options. Neither user edits nor action overrides can remove a warning, bypass the draft/merged/reviewability caps, or turn a local-only outcome into a post. Re-run cap: maximum 2 re-runs; after the second, remove that option.
+After edits or re-runs, rederive reviewability/action and reapply every rail before showing options. Neither user edits nor action overrides can remove a warning, bypass the draft/merged/self-review/reviewability caps, or turn a local-only outcome into a post. Re-run cap: maximum 2 re-runs; after the second, remove that option.
 
 ---
 
@@ -333,6 +334,7 @@ Mark all todos complete and display:
 | Case | Handling |
 |------|----------|
 | Draft PR | Apply the `COMMENT_ONLY` cap without mutating config; the cap outranks action override |
+| Self-review PR | Apply the layer-2 `COMMENT_ONLY` cap when `self_review` is `true` or `unknown`; the cap outranks action override |
 | Large PR (> threshold files) | Apply `large_pr_strategy` from config (warn / split-suggestion / proceed); both children still review all files |
 | CI failures | @researcher analyzes in R1; the R2 children receive the context; R3 notes CI status |
 | Closed/merged PR | Review allowed; merged PRs apply the `COMMENT_ONLY` cap with note "Review is informational" |
@@ -364,6 +366,7 @@ R0 reads `.opencode/review-config.yaml` only from the validated immutable base S
 | `custom_rules` | R2 (delivered to the holistic child's conventions checks) |
 | `suppressions` | R3 (finding suppression) |
 | `autonomous` | Forced to false by this agent's trusted invocation layer |
+| `default_action` | R3; defaults severity-derived outcomes to `COMMENT_ONLY`, while `auto` enables canonical escalation |
 | `action_override` | R3, subject to all higher rails and caps |
 | `large_pr_threshold` / `large_pr_strategy` | R0 (triage) |
 | `safety_rail_threshold` | R4 (comment-volume local-only rail) |

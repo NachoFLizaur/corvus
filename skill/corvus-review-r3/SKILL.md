@@ -293,29 +293,13 @@ Coverage text is derived control-plane evidence, not an editable finding. Preser
 
 Determine the review action: `APPROVE`, `REQUEST_CHANGES`, or `COMMENT_ONLY`.
 
-Action is an opinion; it never authorizes a GitHub post. R4 produces the separate posting decision. Evaluate the canonical precedence from `corvus-review-extras` in this exact order, and never let a lower layer clear a rail or cap imposed by a higher one:
+Action is an opinion; it never authorizes a GitHub post. R4 produces the separate posting decision. Apply the canonical Fail-Closed Precedence in `corvus-review-extras` by reference, without reproducing or reinterpreting its truth table. In particular, layer 2 caps draft, merged, and self-review PRs (`self_review: unknown` is fail-safe capped) at `COMMENT_ONLY`; layer 4 keeps a trusted `action_override` eligible to strengthen an action only inside all higher caps; and layer 5 permits severity/confidence escalation only when `default_action: auto`. The built-in `default_action: COMMENT_ONLY` renders every severity outcome as `COMMENT_ONLY` while preserving all findings, severities, and coverage warnings in `review_body`.
 
-1. **Metadata/trust failures and no-post rails**: preserve any existing `local_only` requirement. Use informational `COMMENT_ONLY` only when an action is needed for schema compatibility. The comment-volume rail is evaluated after inline comments exist in R4 and again in R5.
-2. **Draft/merged caps**: if `PR_CONTEXT.is_draft` or `PR_CONTEXT.is_merged`, force `COMMENT_ONLY` and preserve the informational state notice.
-3. **Aggregate reviewability caps**:
-   - `failed`: informational `COMMENT_ONLY`, with mandatory downstream `local_only`.
-   - `skipped`: `COMMENT_ONLY` only.
-   - `partial`: `REQUEST_CHANGES` is permitted only when a retained, non-suppressed blocker or critical exists; otherwise use `COMMENT_ONLY`. It never approves.
-   - `complete`: no aggregate action cap.
-4. **Trusted action override**: apply only a schema-valid `action_override` from verified base config or explicit trusted invocation, and only when it fits every cap above. It cannot create posting eligibility, clear `local_only`, remove a warning, approve `partial`/`skipped`, or make a draft/merged review blocking or approving.
-5. **Severity/confidence action**: when no trusted override supplies an action, derive it from retained, non-suppressed findings using the table below.
-
-| Condition | Action | Reasoning |
-|-----------|--------|-----------|
-| Any retained `blocker` findings | `REQUEST_CHANGES` | "Found [N] blocking issue(s) that must be fixed before merge" |
-| Any retained `critical` findings (no blockers) | `REQUEST_CHANGES` | "Found [N] critical issue(s) that should be addressed" |
-| Any retained `major` findings (no blockers/criticals) | `COMMENT_ONLY` | "Found [N] major suggestions but nothing blocking merge" |
-| Only minor/nitpick/praise/thought/note | `APPROVE` | "No blocking issues found. [Summary of non-blocking feedback]" |
-| No findings at all | `APPROVE` | "No issues found. Code looks good." |
+Set `action_reasoning` from the canonical layer that determined the action, including the name of any cap, override, default-action mode, or confidence downgrade that applied.
 
 ### Confidence-Weighted Action
 
-For a severity-derived `REQUEST_CHANGES`, require at least one retained blocker or critical with `confidence >= PR_CONTEXT.config.confidence_floor`. If none meets the floor, downgrade to `COMMENT_ONLY` and add: "Blocking findings are below the configured confidence floor; requesting discussion rather than changes."
+When `default_action: auto` produces a severity-derived `REQUEST_CHANGES`, require at least one retained blocker or critical with `confidence >= PR_CONTEXT.config.confidence_floor`. If none meets the floor, downgrade to `COMMENT_ONLY` and add: "Blocking findings are below the configured confidence floor; requesting discussion rather than changes."
 
 This confidence downgrade applies only to severity-derived actions. It does not reorder a trusted override, but every override remains constrained by all higher rails and caps.
 
@@ -327,7 +311,7 @@ Generate the GitHub-compatible review document.
 
 ### 9a. Review Summary Body
 
-`review_body` MUST begin with the Corvus review marker on its own line — an HTML comment, invisible in GitHub's rendered UI — so a future re-review can identify this run (R0 Step 1e parses it from fetched review bodies). This emission is the authoritative single source of the marker format; R0's parser matches it byte-for-byte. Substitute `<head_sha>` with `PR_CONTEXT.head_sha` (validated 40 lowercase hex in R0). The marker is control-plane output: preserve it through action overrides, interactive edits, and R5 posting.
+`review_body` MUST begin with the Corvus review marker on its own line — an HTML comment, invisible in GitHub's rendered UI — so a future re-review can identify this run (R0 Step 1f parses it from fetched review bodies). This emission is the authoritative single source of the marker format; R0's parser matches it byte-for-byte. Substitute `<head_sha>` with `PR_CONTEXT.head_sha` (validated 40 lowercase hex in R0). The marker is control-plane output: preserve it through action overrides, interactive edits, and R5 posting.
 
 ```markdown
 <!-- corvus-review v1 head:<head_sha> -->
@@ -439,7 +423,7 @@ REVIEW_DOCUMENT:
   1. reviewability is exactly one of: complete, partial, skipped, failed
   2. reviewability was derived from exactly four named pass statuses with reasons; malformed status evidence is failed
   3. partial, skipped, and failed each have the required non-empty coverage_warning, and the same notice is present in review_body
-  4. action is one of: APPROVE, REQUEST_CHANGES, COMMENT_ONLY and satisfies every reviewability/draft/merged cap
+  4. action is one of: APPROVE, REQUEST_CHANGES, COMMENT_ONLY and satisfies every reviewability/draft/merged/self-review cap plus the configured default-action mode
   5. failed records the mandatory downstream local_only/no-post requirement
   6. action_reasoning is non-empty
   7. review_body is non-empty markdown
@@ -474,12 +458,12 @@ Dedup: [N] merged | Filtered: [N] false-positive, [N] below-threshold, [N] nit-b
 
 ### All Findings Filtered
 If every finding is removed by the pipeline:
-- Reapply Step 8; only an uncapped `complete` review may derive `APPROVE` from the empty retained set.
+- Reapply Step 8; only an uncapped `complete` review with `default_action: auto` may derive `APPROVE` from the empty retained set.
 - Summary: "No issues remain after filtering. Review action still reflects coverage and safety caps."
-- A `partial`, `skipped`, `failed`, draft, or merged review does not manufacture approval from an empty finding set.
+- A `partial`, `skipped`, `failed`, draft, merged, self-review, or default-`COMMENT_ONLY` review does not manufacture approval from an empty finding set.
 
 ### Only Praise Findings Remain
-- Reapply Step 8; only an uncapped `complete` review may derive `APPROVE`.
+- Reapply Step 8; only an uncapped `complete` review with `default_action: auto` may derive `APPROVE`.
 - Summary: Highlight the praised patterns.
 - Praise bypasses the nit budget and remains visible.
 
