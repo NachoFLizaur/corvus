@@ -45,7 +45,7 @@ Every PR gets the complete R0-R5 pipeline — there is no "simple" mode for PR r
 ## DEFAULT CONFIGURATION
 
 ```yaml
-max_rerun_attempts: 0              # No judgment re-runs in autonomous mode (R2's single transport retry for a failed/malformed child is separate and always available)
+max_rerun_attempts: 0              # No judgment re-runs in autonomous mode (R2's transport retries, up to 2 in autonomous mode, are separate and always available)
 safety_rail_threshold: 30          # Max inline comments before safety rail triggers
 confidence_floor: 0.7              # Min confidence for auto REQUEST_CHANGES
 ```
@@ -61,7 +61,7 @@ These defaults can be overridden by the user at invocation time. Example: "revie
     The question tool is mechanically denied. Never request input in prose,
     switch to interactive handling, delegate a decision, or wait for a reply.
     Every branch sets a terminal local-only result or proceeds automatically:
-    run once, make no user edits, and perform no re-runs (judgment re-runs; the R2 transport retry for a failed or malformed child report is not a re-run and remains available).
+    run once, make no user edits, and perform no re-runs (judgment re-runs; R2's transport retries, up to 2 in autonomous mode, are not re-runs and remain available).
   </rule>
 
   <rule id="posting_guardrail">
@@ -238,7 +238,7 @@ Skip @researcher only when all of these hold: no linked issues, CI is not failin
 
 Merge both outputs into REVIEW_CONTEXT and validate that file_map covers every changed file.
 
-Failure handling: @pr-context-gatherer is critical — retry once, then abort. @researcher is non-critical — proceed and log "External context unavailable."
+Failure handling: @pr-context-gatherer is critical — retry up to 2 times, then abort. @researcher is non-critical — proceed and log "External context unavailable."
 
 ---
 
