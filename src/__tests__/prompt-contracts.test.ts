@@ -1916,6 +1916,18 @@ describe("review-pipeline-redesign: phase 2 contracts", () => {
       ])
     })
 
+    test("bounded transport retry contract", () => {
+      expectContains(REVIEW_R2, [
+        "When a child invocation fails, times out, or returns output that fails report/schema validation (including missing required sections or malformed findings), re-dispatch that child exactly once with byte-identical inputs: the same `REVIEW_INPUT`, the same trusted `dimensions` control, and the same evidence.",
+        "If the retried invocation fails, times out, or returns malformed output a second time, settle its slot or slots as `error` per the Slot Status Table and One-Child-Failure Mapping; never dispatch that child a third time and never loop.",
+        "The retry is a transport retry, not a review re-run: it is available in both interactive and autonomous modes, requires no user decision, and is not governed by `max_rerun_attempts` or R4 `rerun_scope`, which govern judgment re-runs only.",
+      ])
+      expectContains("agent/corvus-review-auto.md", [
+        "max_rerun_attempts: 0              # No judgment re-runs in autonomous mode (R2's single transport retry for a failed/malformed child is separate and always available)",
+        "run once, make no user edits, and perform no re-runs (judgment re-runs; the R2 transport retry for a failed or malformed child report is not a re-run and remains available).",
+      ])
+    })
+
     test("all-dimensions-false skips child", () => {
       // D6 toggle: the skip-holistic condition plus the dispatch-condition
       // line carrying exactly the enabled dimension subset.

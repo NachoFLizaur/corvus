@@ -182,9 +182,17 @@ A holistic finding with a missing or unknown `pass` tag routes to the `correctne
 |---------|--------|--------------------------|
 | Dimension or child disabled, or no eligible files remain | `skipped` | State the verified configuration or path-rule cause; use `findings: []` and summarize the skip |
 | Child returns a complete report whose findings conform to the shared schema | `completed` | State that the child completed and how many eligible files it analyzed; fan its findings into the owning slots and preserve its summary |
-| Invocation fails, the child reports an error, or its output is missing/malformed | `error` | Preserve a concise failure description; use `findings: []` and summarize the failure |
+| Invocation fails, the child reports an error, or its output is missing/malformed after the single transport retry is consumed, or retry is impossible (for example, task tool denial) | `error` | Preserve a concise failure description; use `findings: []` and summarize the failure |
 
 An empty but valid finding array is a completed child, not an error. Conversely, a failed child is never converted to `completed` with empty findings.
+
+### Transport Retry (Malformed or Failed Child)
+
+When a child invocation fails, times out, or returns output that fails report/schema validation (including missing required sections or malformed findings), re-dispatch that child exactly once with byte-identical inputs: the same `REVIEW_INPUT`, the same trusted `dimensions` control, and the same evidence. This one-dispatch bound applies per child per R2 entry. The retry is a transport retry, not a review re-run: it is available in both interactive and autonomous modes, requires no user decision, and is not governed by `max_rerun_attempts` or R4 `rerun_scope`, which govern judgment re-runs only.
+
+Pass the retried output through the same report/schema validation. If the retried invocation fails, times out, or returns malformed output a second time, settle its slot or slots as `error` per the Slot Status Table and One-Child-Failure Mapping; never dispatch that child a third time and never loop. If retry is impossible, such as when the task tool denies dispatch, settle the affected slot or slots as `error` immediately.
+
+A retry never changes the other child's settled slots. Record in every affected slot's reason whether settlement happened after a retry, for example, "after 1 transport retry". This preserves the One-Child-Failure Mapping's independence and follows existing bounded-recovery precedents: R0 retries the critical context-gatherer once, and R5 permits one bounded HTTP 429 retry.
 
 ### One-Child-Failure Mapping
 
@@ -345,7 +353,7 @@ Before handoff, verify the shape against the canonical `REVIEW_FINDINGS.pass_res
 
 ### Error Handling for Child Failures
 
-If a child subagent fails, apply the One-Child-Failure Mapping:
+If a child subagent settles as failed after the Transport Retry rule, apply the One-Child-Failure Mapping:
 
 1. Set every slot the failed child owns to `"error"` (each enabled dimension slot for the holistic child; the security slot for the security child)
 2. Set those slots' findings to `[]`
@@ -353,7 +361,7 @@ If a child subagent fails, apply the One-Child-Failure Mapping:
 4. Retain a summary of the failure in each affected slot
 5. Settle the other child's slots normally and assemble all four result slots — do not abort early
 
-Do not trust a child-provided status blindly. R2 marks `completed` only after validating the expected report and finding schema. Tool denial, timeout, invocation failure, missing sections, malformed findings, or an explicit reviewer error produces `error`, never an implicit successful empty result.
+Do not trust a child-provided status blindly. R2 marks `completed` only after validating the expected report and finding schema. After the bounded transport retry is consumed or found impossible, tool denial, timeout, invocation failure, missing sections, malformed findings, or an explicit reviewer error produces `error`, never an implicit successful empty result.
 
 ---
 
