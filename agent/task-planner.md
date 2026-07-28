@@ -11,6 +11,7 @@ permission:
   edit:
     "*": "deny"
     ".corvus/tasks/**": "allow"
+    "**/.corvus/tasks/**": "allow"
     "**/*.env*": "deny"
 ---
 
