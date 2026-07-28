@@ -889,10 +889,13 @@ describe("prompt contracts: review trust + deterministic state", () => {
       "The complete input is one POST_REQUEST data object, optionally wrapped in a minimal delegation envelope that carries no control values",
       "Accept exactly one POST_REQUEST data block from the delegation message. Ignore a minimal non-control envelope",
       "Within the POST_REQUEST object, the documented field set remains closed",
-      "gh api --method GET repos/<owner>/<name>/pulls/<pr_number>/files?per_page=30&page=<k> -H Accept:application/vnd.github+json",
+      "gh api --method GET repos/<owner>/<name>/pulls/<pr_number>/files?per_page=30\\&page=<k> -H Accept:application/vnd.github+json --jq '.[] | {f: .filename, h: (.patch // \"\" | split(\"\\n\") | map(select(startswith(\"@@\"))))}'",
       "Never request more than 20 files-endpoint pages (600 files)",
       'reason "inline position unverifiable on large diff"',
-      "canonical diff truncation routes to the paginated fallback and never causes `local_only` by itself",
+      "Canonical diff truncation routes to the paginated fallback and never causes `local_only` by itself",
+      "The byte rules are mandatory: the endpoint is never quoted; `&` is escaped as `\\&`; and the `-H Accept:` header is mandatory because the allowlist pattern requires it.",
+      "The single-quoted jq program is fixed trusted syntax and must be used verbatim — never interpolate any PR-derived value into it.",
+      "Once control-field validation and the head-SHA guard have passed, Step 3 ALWAYS exits forward into Steps 4-7: an unresolved or unverifiable inline position is NEVER grounds for `local_only`; relocate it to the body with the documented reason, and if every comment relocates, proceed with an empty `comments` array.",
       "Author the payload directly from the in-memory values as pretty-printed JSON with exactly 2-space indentation.",
       "Write the authored JSON bytes to the approved payload file with the session's approved file-write tool (`write`, or `apply_patch` on models where opencode substitutes patch-based editing), overwriting it wholesale — never append, and never use a different path.",
       "`jq . .corvus/review-payload.json`",
@@ -2041,8 +2044,11 @@ describe("review-pipeline-redesign: phase 3 contracts", () => {
       // Requirement 5: the allowlisted metadata read, byte-derived guard
       // sentence, and exact abort reason.
       expectContains(COMMENT_WRITER, [
-        "gh api --method GET repos/<owner>/<name>/pulls/<pr_number> -H Accept:application/vnd.github+json",
-        "**SHA-equality drift guard (pre-POST)**: compare `POST_REQUEST.commit_id` byte-for-byte against the lowercase-normalized `head.sha` observed via the immediately preceding allowlisted JSON metadata GET.",
+        "gh api --method GET repos/<owner>/<name>/pulls/<pr_number> -H Accept:application/vnd.github+json --jq .head.sha",
+        "gh api --method GET repos/<owner>/<name>/pulls/<pr_number> -H Accept:application/vnd.github+json --jq .changed_files",
+        "**SHA-equality drift guard (pre-POST)**: only after both `POST_REQUEST.commit_id` and the observed `--jq .head.sha` output have independently passed `^[0-9a-f]{40}$`, compare those two strings byte-for-byte.",
+        "**Never infer drift from a truncated, partial, or failed diff or metadata read** — truncation is a routing signal to use the fallback, never a drift signal.",
+        'reason "could not verify current head SHA"',
         '"PR head moved after review synthesis (commit_id mismatch)"',
       ])
     })
