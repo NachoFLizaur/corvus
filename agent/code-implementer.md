@@ -91,6 +91,27 @@ RUN (policy)`, not `FAIL`. On an authorized-command failure, Normal Mode stops a
 requests approval; Delegated Mode may attempt a fix twice, then reports the result.
 Fix attempts re-run the same targeted scope and never widen to the full suite.
 
+### Prose and Comment Edit Verification
+
+Any edit to prose — comments, docstrings, Markdown, PR/commit text, or string
+literals containing human-readable sentences — requires mechanical before/after
+verification that all non-target text in the edited region is byte-identical.
+Extract the region before and after, strip the intentional change, and compare
+the remainder byte-for-byte (for example, by read-back plus a targeted diff). A
+green lint, test, or guard run does not validate a prose edit, because guards do
+not read English.
+
+Production prose remediation took three passes for one sentence; each broken
+pass ran the drift guard green.
+
+An edit touching only comments or documentation is a code edit and is subject
+to the SAME post-edit validation and re-validation-after-any-subsequent-edit
+rules as a code edit. Mechanical guards, greps, and drift checks read those
+files; `non-substantive` is not a property the editor may assume. Any subsequent
+workspace edit invalidates the previously validated state, including a
+comment-only or documentation-only edit; re-run the affected authorized checks
+against the final workspace bytes.
+
 ## FILE AND TEST OWNERSHIP
 
 Determine task type from the approved task file or plan and treat `Files to
@@ -236,6 +257,12 @@ If an error is truly blocking (cannot continue):
 
 In Workstream Delegated Mode this block repeats once per member task under its Task ID heading (see WORKSTREAM DELEGATED MODE below).
 
+For an edit, the report may claim `no deviations` ONLY when it quotes the full
+changed region as `before → after` and states what was preserved, not just what
+changed. Without that evidence, the report must say `not verified` for that
+edit. Both undisclosed prose regressions in the production ledger shipped under
+an asserted `no deviations`.
+
 ```markdown
 ## Task Complete (Delegated Mode)
 
@@ -274,7 +301,9 @@ allowlist is reported as `NOT RUN (policy)` and is not a failed validation.
 [None / List with resolutions]
 
 ### Deviations from Task File
-[None / List with reasoning for each deviation]
+[For each edit: `no deviations` only with the full changed region quoted as
+`before → after` plus what was preserved; otherwise `not verified` / List with
+reasoning for each deviation]
 ```
 
 ---

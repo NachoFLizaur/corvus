@@ -119,7 +119,14 @@ carries `test_scope: none`.
 
 ---
 
-### Dispatch Baseline Contract
+### Dispatch Premise Provenance
+
+Every factual premise the orchestrator writes into a dispatch must carry inline
+provenance: the command or `file:line` from which it was read during THIS
+session. This includes versions, SHAs, pins, statements that the current,
+outgoing, or previous value is X, counts, and paths asserted to exist. A premise
+that cannot be cited must be handed to the child as a question to verify, not a
+fact to execute. This extends the merge-base rule below to every premise class.
 
 Before any 4a, 4b, or fix dispatch that reasons about "current", "previous",
 "outgoing", or "baseline" repository state, compute `git merge-base HEAD
@@ -157,6 +164,7 @@ A single-task workstream uses the Single-Task Delegation Template below; a multi
 **AUTHORIZED FILE MANIFEST**: Exact `Files to Change` entries from the task file
 **AUTHORIZED VALIDATION**: Exact commands permitted by the task and active workflow
 **MERGE BASE SHA**: [full SHA from `git merge-base HEAD <default-branch>` when baseline reasoning applies; otherwise NOT APPLICABLE]
+**PREMISE PROVENANCE**: [cite the session-read command or `file:line` inline beside every dispatch-authored fact; hand uncited premises to the child as verification questions]
 
 **MUST DO**:
 - Read `.corvus/tasks/[feature]/[NN-task-name].md` completely before starting
@@ -240,6 +248,7 @@ For a workstream of 2-5 tasks. Single-task workstreams use the Single-Task Deleg
 **AUTHORIZED FILE MANIFEST**: per task — the exact `Files to Change` entries from each task file
 **AUTHORIZED VALIDATION**: per task — exactly the commands each task and the active workflow permit
 **MERGE BASE SHA**: [full SHA from `git merge-base HEAD <default-branch>` when baseline reasoning applies; otherwise NOT APPLICABLE]
+**PREMISE PROVENANCE**: [cite the session-read command or `file:line` inline beside every dispatch-authored fact; hand uncited premises to the child as verification questions]
 
 **MUST DO**:
 - Read every listed task file completely before starting

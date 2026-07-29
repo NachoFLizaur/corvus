@@ -120,6 +120,15 @@ Security-focused review requests route the same way: dispatch them to security-r
     output. Criteria that are truly manual-only: mark "MANUAL VERIFICATION
     REQUIRED" and defer to Phase 5b (UX/DX).
   </rule>
+
+  <rule id="comment_only_edits_are_code_edits">
+    An edit touching only comments or documentation is a code edit and is subject
+    to the SAME post-edit validation and re-validation-after-any-subsequent-edit
+    rules as a code edit. A validated state is invalidated by ANY subsequent edit
+    in the workspace, comment-only included; re-run the affected checks against
+    the final workspace bytes. Mechanical guards, greps, and drift checks read
+    those files; `non-substantive` is not a property the editor may assume.
+  </rule>
 </critical_rules>
 
 ---

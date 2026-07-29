@@ -4488,6 +4488,44 @@ describe("production-retrospective BUILD pipeline contracts", () => {
     ])
   })
 
+  test("implementer mechanically verifies prose while guards do not read English", () => {
+    expectContains(CODE_IMPLEMENTER, [
+      "Any edit to prose — comments, docstrings, Markdown, PR/commit text, or string",
+      "verification that all non-target text in the edited region is byte-identical.",
+      "strip the intentional change, and compare\nthe remainder byte-for-byte",
+      "A\ngreen lint, test, or guard run does not validate a prose edit, because guards do\nnot read English.",
+    ])
+  })
+
+  test("implementer earns no-deviations claims with full-region evidence", () => {
+    expectContains(CODE_IMPLEMENTER, [
+      "the report may claim `no deviations` ONLY when it quotes the full\nchanged region as `before → after` and states what was preserved, not just what\nchanged.",
+      "Without that evidence, the report must say `not verified` for that\nedit.",
+    ])
+  })
+
+  test("comment-only edits are code edits for both implementation and quality", () => {
+    const shared = [
+      "An edit touching only comments or documentation is a code edit and is subject",
+      "to the SAME post-edit validation and re-validation-after-any-subsequent-edit",
+      "rules as a code edit.",
+    ]
+    for (const file of [CODE_IMPLEMENTER, CODE_QUALITY]) {
+      expectContains(file, shared)
+    }
+    expectContains(CODE_QUALITY, [
+      "A validated state is invalidated by ANY subsequent edit\n    in the workspace, comment-only included; re-run the affected checks",
+    ])
+  })
+
+  test("phase 4 requires session provenance for every dispatch premise", () => {
+    expectContains(PHASE_4, [
+      "Every factual premise the orchestrator writes into a dispatch must carry inline\nprovenance: the command or `file:line` from which it was read during THIS\nsession.",
+      "A premise\nthat cannot be cited must be handed to the child as a question to verify, not a\nfact to execute.",
+      "**PREMISE PROVENANCE**: [cite the session-read command or `file:line` inline beside every dispatch-authored fact; hand uncited premises to the child as verification questions]",
+    ])
+  })
+
   test("researcher reports verification scope without safety overclaiming", () => {
     expectContains(RESEARCHER, [
       "When a verification establishes that X is unchanged or compatible, the report\n    MUST state the scope actually tested, enumerate what was NOT tested, and must not\n    present contract-level equivalence as a behavioral safety claim.",
