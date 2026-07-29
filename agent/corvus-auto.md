@@ -311,6 +311,8 @@ Launch researcher + code-explorer in parallel for the unresolved scope. Pass `EX
 
 **When**: After requirements-analyst returns REQUIREMENTS_CLEAR (from Phase 0a or 0b), or directly after a spec-completeness bypass.
 
+Small/mechanical work is a HARD apparatus budget, not a plan-type hint: when the projected functional diff is ≲50 lines or the user describes the change as mechanical/trivial, use a Lightweight plan, cap planning artifacts at `MASTER_PLAN.md` plus minimal task files, default planning docs to NOT being committed or delivered with the change, and keep test additions proportional to the diff under task-planner's `~N` ceiling rule.
+
 > **Mirror divergence**: corvus presents this choice to the user via question().
 
 A valid preselected `PLAN_TYPE` takes precedence and is consumed as supplied. If it is absent, use the heuristic below. Never ask for confirmation or an override.
@@ -474,6 +476,13 @@ stdin = exact_generated_message
 Do not amend, bypass hooks, or create intermediate commits. After success, verify there is exactly one new commit, its parent is the recorded default-branch object, and its changed-path set equals the confirmed manifest. Stop on any mismatch and preserve the repository for diagnosis.
 
 ### 6e: Idempotent Push and PR
+
+Whenever the diff changes after the PR body was written (new commit, deletion, or retarget), re-derive every factual PR-body claim — file counts, test counts, and scope statements — from the current diff before push or PR update; never hand-patch the body incrementally.
+
+Delivery checklist:
+- [ ] Revalidate the current head, base, and complete diff immediately before delivery.
+- [ ] Derive the complete PR body from that diff, after the final commit is verified.
+- [ ] If any diff identity or content changed, discard the stale body and regenerate it wholesale before push or PR update.
 
 Immediately before push, query the trusted remote for the exact feature ref. If absent, push the current feature commit with upstream tracking and no force option. If the remote ref already equals the local commit, treat the push as already complete and do not repeat it. If it points elsewhere or multiple identities match, stop rather than overwrite.
 

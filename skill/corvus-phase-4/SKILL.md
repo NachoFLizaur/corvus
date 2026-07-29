@@ -61,6 +61,16 @@ Phase 4 operates at the **phase level**, not per-task: tasks within a phase are 
     event. After a phase-wide 4b PASS, batch every accumulated status and the
     gate evidence line into one task-planner `PROGRESS_UPDATE`. Corvus never
     edits the plan directly.
+  - **Track finding origin**: for every gate or review finding, record whether it
+    originates in the requested functional change, pre-existing code, or apparatus
+    added by a prior remediation iteration (including guards, tripwires, decoys,
+    and test scaffolding). Carry this lineage through every failure report.
+  - **Remediation stop rule**: When two consecutive fix iterations produce findings
+    in code or apparatus added by prior remediation, the default action flips from
+    fixing the finding to evaluating whether to revert or simplify that apparatus;
+    the orchestrator states this evaluation explicitly before dispatching another
+    fix. Remediation loops otherwise become self-sustaining: in production, rounds
+    2-5 findings were almost entirely in guard apparatus added by rounds 1-4.
   - **Max 3 fix iterations per phase**: at the cap, stop and escalate to the user with
     what passed, what still fails, and open questions — even if the phase is incomplete.
   - **Fix-attempt accounting**: code-implementer's in-task 2-attempt fix rule
@@ -109,6 +119,15 @@ carries `test_scope: none`.
 
 ---
 
+### Dispatch Baseline Contract
+
+Before any 4a, 4b, or fix dispatch that reasons about "current", "previous",
+"outgoing", or "baseline" repository state, compute `git merge-base HEAD
+<default-branch>` and include the resulting full SHA in the dispatch. State
+explicitly that branch HEAD is NOT the baseline. Every comparison must use the
+provided merge-base SHA; comparison against the wrong ref is a known failure
+class.
+
 ### 4a. Implementation — One Workstream Per Code-Implementer
 
 One workstream (1-5 related tasks from the master plan's `### Workstreams` section) = one code-implementer invocation. The Task tool runs multiple `task()` calls from a single message concurrently ("use a single message with multiple tool uses" to parallelize), so:
@@ -137,6 +156,7 @@ A single-task workstream uses the Single-Task Delegation Template below; a multi
 **TEST SCOPE**: `test_scope: [targeted|none]` — targeted = only tests scoped to this task (its own new/modified test files); none when `tests_deferred: true` or `tests_enabled: false`. Full semantics: corvus-phase-2 skill, Test Scope section.
 **AUTHORIZED FILE MANIFEST**: Exact `Files to Change` entries from the task file
 **AUTHORIZED VALIDATION**: Exact commands permitted by the task and active workflow
+**MERGE BASE SHA**: [full SHA from `git merge-base HEAD <default-branch>` when baseline reasoning applies; otherwise NOT APPLICABLE]
 
 **MUST DO**:
 - Read `.corvus/tasks/[feature]/[NN-task-name].md` completely before starting
@@ -219,6 +239,7 @@ For a workstream of 2-5 tasks. Single-task workstreams use the Single-Task Deleg
 **TEST SCOPE**: `test_scope: [targeted|none]` — applies per member task: targeted = only tests scoped to that task (its own new/modified test files); none when `tests_deferred: true` or `tests_enabled: false`. Full semantics: corvus-phase-2 skill, Test Scope section.
 **AUTHORIZED FILE MANIFEST**: per task — the exact `Files to Change` entries from each task file
 **AUTHORIZED VALIDATION**: per task — exactly the commands each task and the active workflow permit
+**MERGE BASE SHA**: [full SHA from `git merge-base HEAD <default-branch>` when baseline reasoning applies; otherwise NOT APPLICABLE]
 
 **MUST DO**:
 - Read every listed task file completely before starting
@@ -312,6 +333,8 @@ condition fails, dispatch the template the resolved flags select, as always.
 
 **SCOPE**: All files created/modified in 4a for this phase
 
+**MERGE BASE SHA**: [full SHA from `git merge-base HEAD <default-branch>` when baseline reasoning applies; branch HEAD is NOT the baseline]
+
 **TEST SCOPE**: `test_scope: [targeted|none]` — targeted = union of test files created/modified by this phase's tasks (from their Tests sections); none when the phase has no test tasks (deferred and disabled dispatches use the acceptance-only template below). Exception: a Lightweight non-deferred plan's final 4b gate doubles as final validation and carries the plan's single full-suite run (semantics: corvus-phase-2 skill, Test Scope section).
 
 **PRIMARY JOB**: RUN TESTS
@@ -379,6 +402,8 @@ Only tasks [NN] require fixes. Tasks [NN] should NOT be modified.
 
 **SCOPE**: All files created/modified in 4a for this phase
 
+**MERGE BASE SHA**: [full SHA from `git merge-base HEAD <default-branch>` when baseline reasoning applies; branch HEAD is NOT the baseline]
+
 **MODE**: ACCEPTANCE-ONLY (`tests_enabled: false` OR `tests_deferred: true`)
 
 **TEST SCOPE**: `test_scope: none` — acceptance-only; no test execution.
@@ -434,7 +459,7 @@ Only tasks [NN] require fixes. Tasks [NN] should NOT be modified.
 
 ### On FAIL: Iteration-Aware Fix Cycle
 
-The canonical rule from Operating Rules applies: iteration 1 dispatches a direct fix from the gate's failure report (F1); iteration ≥2 runs FAILURE_ANALYSIS first, then the fix (F2); every iteration ends with revalidation at the original 4b dispatch scope (F3). A fix dispatch may target a subset of a workstream's tasks: scope it to the failing tasks — including tasks the gate reports as BLOCKED or unimplemented — as a single-task dispatch or a subset workstream carrying only those task files.
+The canonical rule from Operating Rules applies: iteration 1 dispatches a direct fix from the gate's failure report (F1); iteration ≥2 runs FAILURE_ANALYSIS first, then the fix (F2); every iteration ends with revalidation at the original 4b dispatch scope (F3). A fix dispatch may target a subset of a workstream's tasks: scope it to the failing tasks — including tasks the gate reports as BLOCKED or unimplemented — as a single-task dispatch or a subset workstream carrying only those task files. Before every fix, classify each finding's origin; when the Remediation stop rule triggers, state the revert/simplify evaluation before choosing whether another fix dispatch is justified.
 
 **Step F1 (Iteration 1): Direct Fix — DELEGATE TO @code-implementer (failing tasks only)**
 
@@ -452,6 +477,10 @@ No task-planner round-trip: the 4b report already attributes failures to tasks.
 
 **FAILURE REPORT**:
 [4b gate output with task attribution — failing criteria, exact errors, files involved per task]
+
+**FINDING ORIGINS**: [functional change | pre-existing code | prior-remediation apparatus, with iteration lineage]
+
+**MERGE BASE SHA**: [carry the original full SHA when baseline reasoning applies; branch HEAD is NOT the baseline]
 
 **TEST SCOPE**: `test_scope: targeted`
 
@@ -492,6 +521,8 @@ No task-planner round-trip: the 4b report already attributes failures to tasks.
 - Error messages: [exact errors]
 - Files involved: [list per task]
 - Previous fix attempts: [what each prior iteration changed]
+- Finding origins: [classify each finding and identify prior-remediation apparatus]
+- Apparatus evaluation: [keep | revert | simplify, with rationale; mandatory when the Remediation stop rule triggers]
 
 **QUESTIONS TO ANSWER**:
 1. What is the root cause of each failure?
@@ -527,6 +558,11 @@ Then dispatch the fix to @code-implementer:
 
 **FAILURE ANALYSIS**:
 [Root cause and recommended fix approach from the analysis]
+
+**FINDING ORIGINS AND APPARATUS EVALUATION**:
+[Origin lineage and the explicit keep/revert/simplify decision]
+
+**MERGE BASE SHA**: [carry the original full SHA when baseline reasoning applies; branch HEAD is NOT the baseline]
 
 **SPECIFIC FIXES REQUIRED**:
 [Exact changes needed per failing task based on the analysis]

@@ -29,7 +29,8 @@ permission:
     "gh repo view --json nameWithOwner --jq '.nameWithOwner'": "allow"
     'gh api user --jq .login': "allow"
     "gh pr view * --repo * --json number,url,title,body,author,baseRefName,baseRefOid,headRefName,headRefOid,labels,reviewRequests,isDraft,mergeable,state,mergedAt,additions,deletions,changedFiles,files,closingIssuesReferences,latestReviews,reviewDecision": "allow"
-    "gh pr checks * --repo * --json name,state,detailsUrl": "allow"
+    "gh pr checks * --repo * --json name,state,link": "allow"
+    'gh api repos/*/pulls/*/reviews --jq *': "allow"
     "gh pr diff * --repo * --name-only": "allow"
     'gh api --method GET "repos/*/contents/.opencode/review-config.yaml?ref=*" -H "Accept: application/vnd.github.raw+json"': "allow"
 ---
@@ -213,7 +214,7 @@ Present the triage summary, then proceed directly to R1:
 
 ### Config
 - Source: [config_source] | Base status: [base_config_status]
-- Severity threshold: [threshold] | Max nits: [max_nits] | Passes enabled: [list]
+- Severity threshold: [threshold] | Max minors: [max_minors] | Max nits: [max_nits] | Passes enabled: [list]
 [Display fallback_warning prominently when present]
 
 **Proceeding to context gathering (R1)...**
@@ -267,7 +268,7 @@ Goal: transform raw findings into a polished, deduplicated, actionable review do
 
 Load first: `skill({ name: "corvus-review-r3" })`
 
-Pipeline (full detail in the r3 skill): Dedup → False-positive filter → Severity threshold → Suppressions → Nit budget → Order → Action → Render.
+Pipeline (full detail in the r3 skill): Dedup → False-positive filter → Severity threshold → Suppressions → Minor and nit budgets → Order → Action → Render.
 
 Derive aggregate reviewability (`complete`, `partial`, `skipped`, or `failed`) and action exactly once using `corvus-review-extras`; do not redefine its truth table or precedence here. Its layer-2 draft/merged/self-review caps outrank overrides, and its layer-5 severity escalation to `APPROVE` or `REQUEST_CHANGES` is enabled only by `default_action: auto`; the built-in default is `COMMENT_ONLY`. Mixed skipped/error with zero completed passes is `failed`, and `failed` remains `local_only` even if REVIEW_DOCUMENT carries an informational action.
 
@@ -310,6 +311,8 @@ Load first: `skill({ name: "corvus-review-r5" })`
 - `decision: "post"` → delegate to @pr-comment-writer with the REVIEW_DOCUMENT and POST_REQUEST; it handles line validation, API construction, and error recovery. If posting fails, it falls back to local display.
 - `decision: "local_only"` → display the full review and rail reason, skip the writer and every GitHub mutation, then terminate locally.
 - After the writer returns, the orchestrator applies the r5 checkpoint update and releases its same-PR lock; the writer never edits review checkpoint metadata.
+
+The posting rails forbid downgrading an event to sneak a post through; they do not require repeating an action when direct evidence from this same review series shows that action deterministically fails (for example, an HTTP 422 identity rejection). When that evidence exists and no relevant precondition has changed, skip the doomed attempt, surface the constraint and remedy, terminate `local_only`, and state the precondition change that would make posting viable.
 
 Mark all todos complete and display:
 
@@ -371,6 +374,7 @@ R0 reads `.opencode/review-config.yaml` only from the validated immutable base S
 | Config Field | Where Used |
 |-------------|------------|
 | `severity_threshold` | R3 (severity filtering) |
+| `max_minors` | R3 (minor budget enforcement) |
 | `max_nits` | R3 (nit budget enforcement) |
 | `passes.*` | R2 (holistic dimension toggles + security child toggle; keys unchanged) |
 | `path_rules` | R2 (per-dimension exclusions via `skip_passes`, severity elevation), R3 (suppression) |

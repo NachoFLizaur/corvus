@@ -13,7 +13,7 @@ description: PR Review Phase R3 - Comment synthesis, deduplication, filtering, a
 
 **Output**: `REVIEW_DOCUMENT` object (see `corvus-review-extras` for schema).
 
-**Single filter point**: R3 is the only place in the review pipeline where findings are dropped or suppressed. R2 detection children report everything with severity and confidence attached; every config-driven filter — `severity_threshold`, `max_nits`, `suppressions`, path-rule `suppress_below` — is applied here. Filtering at detection time suppresses recall; filtering here keeps the full finding set available for transparent, config-driven decisions.
+**Single filter point**: R3 is the only place in the review pipeline where findings are dropped or suppressed by configuration. Subject to R2's delta-round discipline for previously reviewed evidence, detection children report findings with severity and confidence attached; every config-driven filter — `severity_threshold`, `max_minors`, `max_nits`, `suppressions`, path-rule `suppress_below` — is applied here. Centralized config filtering keeps decisions transparent and auditable.
 
 ---
 
@@ -47,7 +47,7 @@ REVIEW_FINDINGS
            │
       ▼
   ┌──────────────────┐
-  │ 5. Nit Budget     │  Enforce max_nits limit
+  │ 5. Finding Budgets│  Enforce max_minors and max_nits limits
   │    Enforcement    │
   └────────┬─────────┘
            │
@@ -82,7 +82,7 @@ Every finding dropped or suppressed by Steps 1-5 gets a `filtered_log` entry, so
 
 ```yaml
 - finding_id: "logic-005"
-  reason: "<false_positive | below_threshold | suppressed | nit_budget | previously_reported>"
+  reason: "<false_positive | below_threshold | suppressed | minor_budget | nit_budget | previously_reported>"
   details: "<one-line explanation, e.g., 'Confidence 0.35 below threshold for severity minor'>"
 ```
 
@@ -220,19 +220,24 @@ Log each suppression in `filtered_log` with reason `suppressed`.
 
 ---
 
-## STEP 5: NIT BUDGET ENFORCEMENT
+## STEP 5: FINDING BUDGET ENFORCEMENT
 
-Enforce the maximum number of nitpick comments only after deduplication, false-positive filtering, severity filtering, path suppression, and configured suppression have completed. This is the only nit budget enforcement in the pipeline — the holistic child reports all conventions findings without pre-trimming.
+Enforce the maximum numbers of minor and nitpick comments only after deduplication, false-positive filtering, severity filtering, path suppression, and configured suppression have completed. These are the only config-driven finding budgets in the pipeline.
 
 ```
 max_nits = PR_CONTEXT.config.max_nits  # default: 3
+max_minors = PR_CONTEXT.config.max_minors  # default: 10
 ```
 
-### Budget Scope
+### Minor Budget
+
+Build `eligible_minors` from retained, non-suppressed findings after Steps 1-4 whose label is exactly `minor`. Sort them by confidence descending, then apply the same normalized file path, `line_start`, and finding-ID tie-break used for nitpicks. Retain the first `max_minors`; mark the lowest-confidence overflow suppressed for presentation and action determination while preserving it in the findings list for auditability. Add one `filtered_log` entry per overflow finding with `reason: "minor_budget"` and details identifying the configured limit and confidence order. The minor budget never consumes or changes the nitpick budget.
+
+### Nitpick Budget Scope
 
 Build `eligible_nitpicks` from the findings that remain retained and non-suppressed after Steps 1-4 and whose label is exactly `nitpick`. Do not infer eligibility from numeric severity or pass name.
 
-Every other label bypasses this budget. Never count, drop, or mark `minor`, `major`, `critical`, `blocker`, `praise`, `thought`, or `note` as suppressed because of `max_nits`. Findings already suppressed by Step 4 are not eligible.
+Every other label bypasses this budget. Never count, drop, or mark `minor`, `major`, `critical`, `blocker`, `praise`, `thought`, or `note` as suppressed because of `max_nits`. Findings already suppressed by Step 4 or the minor budget are not eligible.
 
 ### Deterministic Strongest-First Selection
 
@@ -491,7 +496,7 @@ After R3 completes, output:
 
 ```
 [R3 COMPLETE] Reviewability: [complete/partial/skipped/failed] | Action: [ACTION] | Findings: [N] total ([M] inline)
-Dedup: [N] merged | Filtered: [N] false-positive, [N] below-threshold, [N] nit-budget, [N] suppressed, [N] previously-reported
+Dedup: [N] merged | Filtered: [N] false-positive, [N] below-threshold, [N] minor-budget, [N] nit-budget, [N] suppressed, [N] previously-reported
 [If failed: → R4 must emit local_only without a posting prompt]
 [Otherwise: → Proceeding to R4 (Decision Gate)]
 ```

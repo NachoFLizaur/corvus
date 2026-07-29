@@ -105,3 +105,11 @@ When `tests_enabled: false`:
 1. Mark MASTER_PLAN.md status as `[x] Complete`
 2. Mark all todos as complete
 3. Provide summary to user
+
+### Git Delivery Checklist (when delivery is selected)
+
+Whenever the diff changes after the PR body was written (new commit, deletion, or retarget), re-derive every factual PR-body claim — file counts, test counts, and scope statements — from the current diff before push or PR update; never hand-patch the body incrementally.
+
+- [ ] Revalidate the current base, head, and complete diff immediately before delivery.
+- [ ] Generate the PR body from that current diff and its final validation evidence.
+- [ ] If the diff changed after body generation, discard the stale body and regenerate it wholesale before push or PR update.

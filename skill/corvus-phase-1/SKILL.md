@@ -27,6 +27,22 @@ Valid routes are fixed:
 
 Treat `EXISTING_FINDINGS` as already completed work. Scope researcher and code-explorer only to unanswered items; do not repeat research or code exploration already supplied to Phase 0b or the direct caller.
 
+### Mandatory Concurrent-Work Check
+
+When the project is a Git repository with a GitHub remote, the code-explorer brief
+must list open pull requests with:
+
+```bash
+gh pr list --state open --json number,title,headRefName,files --limit 20
+```
+
+Intersect each pull request's changed files with the discovery file set. Report any
+overlap in discovery findings as **competing in-flight work**, including the PR
+number, title, head branch, and overlapping paths. Competing in-flight work must
+flow into Phase 0b and every later plan input; interactive Corvus must surface it
+to the user before planning. An open PR touching the same files invalidates
+planning assumptions and is a coordination fact the user is owed.
+
 Launch these subagents in parallel using the Task tool:
 
 ### 1a. External Research (researcher)
@@ -85,6 +101,7 @@ Always required to understand the target codebase.
 - Rate pattern quality where relevant
 - Identify potential risks or blockers
 - Detect project environment (venv, package manager, scripts)
+- When the project is a Git repository with a GitHub remote, run `gh pr list --state open --json number,title,headRefName,files --limit 20` and intersect each PR's files with the discovery file set
 - Investigate only DISCOVERY_SCOPE gaps not answered by EXISTING_FINDINGS
 - Optionally flag entries in `.corvus/tasks/learnings.md` relevant to the explored area (when the file exists)
 
@@ -104,6 +121,7 @@ Always required to understand the target codebase.
 - Patterns to follow (with examples)
 - Dependencies to be aware of
 - Potential risks or blockers
+- Competing in-flight work (overlapping open PRs, or "none")
 - Project environment (venv path, package manager, available scripts)
 ```
 
@@ -116,6 +134,7 @@ Return one payload to `RETURN_TARGET`:
 **RETURN_TARGET**: [unchanged from dispatch]
 **NEW_FINDINGS**: [research/codebase findings produced by this invocation]
 **ACCUMULATED_FINDINGS**: [EXISTING_FINDINGS merged with NEW_FINDINGS, without duplicates]
+**COMPETING IN-FLIGHT WORK**: [overlapping open PRs with paths, or "none/not applicable"]
 **UNRESOLVED_SCOPE**: [remaining questions, or "none"]
 ```
 

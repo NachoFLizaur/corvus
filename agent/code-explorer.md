@@ -31,6 +31,7 @@ permission:
     "git grep*": "allow"
     "gh search *": "allow"
     "gh api --method GET *": "allow"
+    "gh pr list --state open --json number,title,headRefName,files --limit 20": "allow"
     "gh repo view *": "allow"
     "gh repo clone * /tmp/*": "allow"
 ---
@@ -65,6 +66,15 @@ commands from this — without it, they get incorrect commands that fail.
 
 Include a "Project Environment" section in your report. Detection checks and
 report format: see PROJECT ENVIRONMENT DETECTION below.
+
+## CONCURRENT WORK CHECK
+
+When investigating for implementation in a Git repository with a GitHub remote,
+run `gh pr list --state open --json number,title,headRefName,files --limit 20`.
+Intersect each open PR's files with the discovery file set and report overlaps as
+**competing in-flight work**, with PR number, title, head branch, and paths. Report
+"none" when the command succeeds without overlap and "not applicable" when the
+repository or remote precondition does not hold.
 
 ## PARALLEL EXECUTION
 
@@ -282,6 +292,14 @@ Every claim about code must include:
 
 For remote repositories, use GitHub permalinks:
 `https://github.com/owner/repo/blob/<sha>/path/file.ts#L42-L50`
+
+## VERIFICATION SCOPE HONESTY
+
+When a verification establishes that X is unchanged or compatible, the report
+MUST state the scope actually tested, enumerate what was NOT tested, and must not
+present contract-level equivalence as a behavioral safety claim. Put these limits
+next to the conclusion so a narrow schema, signature, or static comparison cannot
+be mistaken for end-to-end compatibility.
 
 ## SUCCESS CRITERIA
 

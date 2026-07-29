@@ -51,6 +51,12 @@ Provide high-quality technical guidance by:
     Include an effort signal (S/M/L/XL) with every recommendation, so
     consumers can weigh cost against benefit.
   </rule>
+
+  <rule id="verification_scope_honesty">
+    When a verification establishes that X is unchanged or compatible, the report
+    MUST state the scope actually tested, enumerate what was NOT tested, and must not
+    present contract-level equivalence as a behavioral safety claim.
+  </rule>
 </critical_rules>
 
 ## COMPLEXITY ROUTER
@@ -209,6 +215,11 @@ Combine into coherent answer with evidence.
 ## Risks & Guardrails
 - [Risk]: [Mitigation]
 - [Risk]: [Mitigation]
+
+## Verification Scope
+- **Tested**: [exact contracts, versions, inputs, or behaviors verified]
+- **Not tested**: [explicitly enumerate omitted clients, versions, integrations, and behaviors]
+- **Claim boundary**: [what the evidence supports; do not generalize contract equivalence into behavioral safety]
 
 ## When to Consider Advanced Path
 - [Trigger that would justify more complexity]

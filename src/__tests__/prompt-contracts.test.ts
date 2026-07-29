@@ -1690,7 +1690,7 @@ describe("review pipeline redesign — phase 1 pins", () => {
 
     test("extras PR_CONTEXT carries prior_corvus_review", () => {
       expectContains(REVIEW_EXTRAS, [
-        'prior_corvus_review: {review_id: <number>, reviewed_head_sha: "<40 lowercase hex characters>", url: "<url>"} | null',
+        'prior_corvus_review: {review_id: <number|null>, reviewed_head_sha: "<40 lowercase hex characters>", url: "<url|null>", review_series_round: <positive integer>} | null',
       ])
     })
   })
@@ -1712,6 +1712,35 @@ describe("review pipeline redesign — phase 1 pins", () => {
       expect(fields).toContain("latestReviews")
       expect(fields).toContain("reviewDecision")
       expect(fields.slice(-2)).toEqual(["latestReviews", "reviewDecision"])
+    })
+
+    test("falls back to the bounded full reviews listing", () => {
+      expectContains(REVIEW_R0, [
+        "When the `latestReviews` scan finds no valid marker",
+        "gh api repos/<owner>/<repo>/pulls/<pr_number>/reviews --jq '[.[] | {body: .body[0:200], submitted_at, commit_id}]'",
+        "Scan every returned truncated body for the marker.",
+      ])
+
+      for (const file of REVIEW_ORCHESTRATORS) {
+        expect(nestedFrontmatterBlock(file, "bash")).toContain(
+          `    'gh api repos/*/pulls/*/reviews --jq *': "allow"`,
+        )
+      }
+    })
+
+    test("uses the current gh checks link field", () => {
+      expectContains(REVIEW_R0, [
+        "gh pr checks <number> --repo <owner/repo> --json name,state,link",
+        "{ name, status: state_to_status(state), url: link }",
+      ])
+      for (const file of REVIEW_ORCHESTRATORS) {
+        expect(nestedFrontmatterBlock(file, "bash")).toContain(
+          '    "gh pr checks * --repo * --json name,state,link": "allow"',
+        )
+      }
+      for (const file of listPromptFiles()) {
+        expectAbsent(file, [/detailsU[r]l/])
+      }
     })
 
     test("marker parse stays behind the untrusted boundary", () => {
@@ -2030,6 +2059,28 @@ describe("review-pipeline-redesign: phase 2 contracts", () => {
       ])
     })
 
+    test("delta rounds apply four anti-accretion briefing rules", () => {
+      expectContains(REVIEW_R2, [
+        "Brief both children on changed-since-last-review files and lines plus prior-finding dispositions, not the full-PR default",
+        "From the third review round onward, brief both children at major-and-above for prior-reviewed unchanged code; new code and changed-since-last-review lines keep full sensitivity.",
+        "A finding whose subject exists because of a suggestion made by an earlier round of this review series is weighted DOWN, and the preferred recommendation is removal or simplification of that apparatus, not further hardening.",
+        "A finding the PR author has explicitly acknowledged in a PR comment or reply with a chosen remedy is reported once more as a note at most, never re-escalated with fresh evidence in later rounds.",
+      ])
+    })
+
+    test("orchestrators skip deterministically doomed posting actions", () => {
+      const shared =
+        "The posting rails forbid downgrading an event to sneak a post through; they do not require repeating an action when direct evidence from this same review series shows that action deterministically fails (for example, an HTTP 422 identity rejection)."
+      expectContains("agent/corvus-review.md", [
+        shared,
+        "When that evidence exists and no relevant precondition has changed, skip the doomed attempt, surface the constraint and remedy, terminate `local_only`, and state the precondition change that would make posting viable.",
+      ])
+      expectContains("agent/corvus-review-auto.md", [
+        shared,
+        "When that evidence exists and no relevant precondition has changed, skip the doomed attempt, terminate `local_only`, and state the precondition change that would make posting viable.",
+      ])
+    })
+
     test("config keys unchanged", () => {
       // Requirement 9: all six back-compat key names stay byte-unchanged
       // inside the review-config schema block (extracted, never vacuous).
@@ -2122,7 +2173,19 @@ describe("review-pipeline-redesign: phase 3 contracts", () => {
       // Task 09: the Filter Logging reason enum includes the Step 1
       // previously-reported drop reason.
       expectContains(REVIEW_R3, [
-        'reason: "<false_positive | below_threshold | suppressed | nit_budget | previously_reported>"',
+        'reason: "<false_positive | below_threshold | suppressed | minor_budget | nit_budget | previously_reported>"',
+      ])
+    })
+
+    test("max_minors is schema-validated and enforced at synthesis", () => {
+      expectContains(REVIEW_EXTRAS, [
+        "max_minors: 10   # Budget for minor findings per review; overflow degrades to the filtered log",
+        "`max_minors` must be a positive integer; invalid values use the built-in default of `10`",
+      ])
+      expectContains(REVIEW_R3, [
+        "max_minors = PR_CONTEXT.config.max_minors  # default: 10",
+        "Retain the first `max_minors`; mark the lowest-confidence overflow suppressed for presentation and action determination while preserving it in the findings list for auditability.",
+        'reason: "minor_budget"',
       ])
     })
   })
@@ -3232,6 +3295,7 @@ describe("permissions-alignment: read-only postures", () => {
       '"cat *"',
       '"find *"',
       '"gh api --method GET *"',
+      '"gh pr list --state open --json number,title,headRefName,files --limit 20"',
       '"gh repo clone * /tmp/*"',
       '"gh repo view *"',
       '"gh search *"',
@@ -4372,6 +4436,61 @@ describe("planner authoring and simplified test-policy contracts", () => {
       "Do not add per-function tests for trivial code, duplicate coverage across levels,\nor tests of framework/library behavior.",
       "Prefer updating or removing obsolete\ntests listed by the task over creating parallel new coverage",
       "the approximate\ncount is a ceiling signal, never a quota to fill.",
+    ])
+  })
+})
+
+// ============================================================================
+// Production-retrospective BUILD pipeline fixes
+// ============================================================================
+
+describe("production-retrospective BUILD pipeline contracts", () => {
+  const PHASE_1 = "skill/corvus-phase-1/SKILL.md"
+  const PHASE_6 = "skill/corvus-phase-6/SKILL.md"
+  const EXPLORER = "agent/code-explorer.md"
+  const RESEARCHER = "agent/researcher.md"
+
+  test("phase 1 checks overlapping open pull requests", () => {
+    const command =
+      "gh pr list --state open --json number,title,headRefName,files --limit 20"
+    expectContains(PHASE_1, [
+      command,
+      "Report any\noverlap in discovery findings as **competing in-flight work**, including the PR\nnumber, title, head branch, and overlapping paths.",
+    ])
+    expect(nestedFrontmatterBlock(EXPLORER, "bash")).toContain(
+      `    "${command}": "allow"`,
+    )
+  })
+
+  test("both BUILD orchestrators enforce the hard apparatus budget", () => {
+    const rule =
+      "Small/mechanical work is a HARD apparatus budget, not a plan-type hint: when the projected functional diff is ≲50 lines or the user describes the change as mechanical/trivial, use a Lightweight plan, cap planning artifacts at `MASTER_PLAN.md` plus minimal task files, default planning docs to NOT being committed or delivered with the change, and keep test additions proportional to the diff under task-planner's `~N` ceiling rule."
+    for (const file of [CORVUS, CORVUS_AUTO]) {
+      expectContains(file, [rule])
+    }
+  })
+
+  test("phase 4 flips repeated remediation-apparatus findings to simplification", () => {
+    expectContains(PHASE_4, [
+      "When two consecutive fix iterations produce findings\n    in code or apparatus added by prior remediation, the default action flips from\n    fixing the finding to evaluating whether to revert or simplify that apparatus;\n    the orchestrator states this evaluation explicitly before dispatching another\n    fix.",
+    ])
+  })
+
+  test("phase 6 re-derives stale PR-body claims from the current diff", () => {
+    expectContains(PHASE_6, [
+      "Whenever the diff changes after the PR body was written (new commit, deletion, or retarget), re-derive every factual PR-body claim — file counts, test counts, and scope statements — from the current diff before push or PR update; never hand-patch the body incrementally.",
+    ])
+  })
+
+  test("task planner requires the explicit merge base", () => {
+    expectContains(TASK_PLANNER, [
+      "Any task or verification that reasons about \"current\",\n   \"previous\", \"outgoing\", or \"baseline\" repository state must be handed the\n   explicit merge-base SHA from `git merge-base HEAD <default-branch>` and must\n   state that branch HEAD is NOT the baseline; comparisons against the wrong ref\n   are a known failure class.",
+    ])
+  })
+
+  test("researcher reports verification scope without safety overclaiming", () => {
+    expectContains(RESEARCHER, [
+      "When a verification establishes that X is unchanged or compatible, the report\n    MUST state the scope actually tested, enumerate what was NOT tested, and must not\n    present contract-level equivalence as a behavioral safety claim.",
     ])
   })
 })

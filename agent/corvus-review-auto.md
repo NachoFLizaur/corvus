@@ -29,7 +29,8 @@ permission:
     "gh repo view --json nameWithOwner --jq '.nameWithOwner'": "allow"
     'gh api user --jq .login': "allow"
     "gh pr view * --repo * --json number,url,title,body,author,baseRefName,baseRefOid,headRefName,headRefOid,labels,reviewRequests,isDraft,mergeable,state,mergedAt,additions,deletions,changedFiles,files,closingIssuesReferences,latestReviews,reviewDecision": "allow"
-    "gh pr checks * --repo * --json name,state,detailsUrl": "allow"
+    "gh pr checks * --repo * --json name,state,link": "allow"
+    'gh api repos/*/pulls/*/reviews --jq *': "allow"
     "gh pr diff * --repo * --name-only": "allow"
     'gh api --method GET "repos/*/contents/.opencode/review-config.yaml?ref=*" -H "Accept: application/vnd.github.raw+json"': "allow"
 ---
@@ -215,6 +216,8 @@ Apply the canonical precedence from `corvus-review-extras` in this exact order. 
 
 Posting-agent failure is also terminal local-only. Never retry through another agent, direct command, interactive route, or prose prompt.
 
+The posting rails forbid downgrading an event to sneak a post through; they do not require repeating an action when direct evidence from this same review series shows that action deterministically fails (for example, an HTTP 422 identity rejection). When that evidence exists and no relevant precondition has changed, skip the doomed attempt, terminate `local_only`, and state the precondition change that would make posting viable.
+
 ---
 
 ## PHASE R0: INTAKE & TRIAGE
@@ -280,7 +283,7 @@ Goal: transform raw findings into a polished, deduplicated review document. Synt
 
 Load first: `skill({ name: "corvus-review-r3" })`
 
-Pipeline (full detail in the r3 skill): Dedup → False-positive filter → Severity threshold → Suppressions → Nit budget → Order → Action → Render.
+Pipeline (full detail in the r3 skill): Dedup → False-positive filter → Severity threshold → Suppressions → Minor and nit budgets → Order → Action → Render.
 
 Derive aggregate reviewability and action exactly once using `corvus-review-extras`; do not redefine its truth table or precedence here. The layer-2 self-review cap and layer-5 `default_action` gate apply there; a trusted override remains layer 4 and subject to every higher rail/cap.
 
@@ -369,6 +372,7 @@ R0 reads `.opencode/review-config.yaml` only from the validated immutable base S
 | `default_action` | Defaults to `COMMENT_ONLY`; `auto` enables canonical severity escalation |
 | `action_override` | Applied only after trust, no-post, draft/merged/self-review, and reviewability caps |
 | `severity_threshold` | Respected (applied in R3) |
+| `max_minors` | Respected (applied at R3) |
 | `max_nits` | Respected (applied at R3) |
 | `passes.*` | Respected (holistic dimension toggles + security child toggle; keys unchanged) |
 | `path_rules` | Respected (suppression, elevation, per-dimension exclusions via `skip_passes`) |

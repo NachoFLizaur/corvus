@@ -263,6 +263,8 @@ Launch researcher + code-explorer in parallel for the unresolved scope. Pass `EX
 
 **When**: After requirements-analyst returns REQUIREMENTS_CLEAR (from Phase 0a or 0b), or directly after a spec-completeness bypass. Resolve this input before loading Phase 2.
 
+Small/mechanical work is a HARD apparatus budget, not a plan-type hint: when the projected functional diff is ≲50 lines or the user describes the change as mechanical/trivial, use a Lightweight plan, cap planning artifacts at `MASTER_PLAN.md` plus minimal task files, default planning docs to NOT being committed or delivered with the change, and keep test additions proportional to the diff under task-planner's `~N` ceiling rule.
+
 > **Mirror divergence**: corvus-auto auto-selects from the heuristic score instead of asking.
 
 Resolution precedence:

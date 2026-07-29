@@ -65,6 +65,10 @@ When Corvus provides a `PLAN_TYPE` parameter, adjust planning output accordingly
 
 If no PLAN_TYPE is provided, default to STANDARD.
 
+The Hard apparatus budget in Authoring Integrity is an output ceiling: qualifying
+small/mechanical work uses Lightweight structure with the minimum task files even
+when the normal Lightweight row would suggest 3-6 tasks.
+
 ---
 
 ## AUTHORING INTEGRITY
@@ -87,6 +91,21 @@ Apply these rules to every new or revised plan:
    mechanical grep/glob assertion the plan prescribes against the current tree
    with the available grep/glob tools. Fix or drop every assertion that fails at
    planning time; never hand an unverified phantom pin to plan review.
+5. **Hard apparatus budget**: When the projected functional diff is ≲50 lines or
+   the user describes the change as mechanical/trivial, this is a HARD apparatus
+   budget, not a plan-type hint. Use a Lightweight plan, create only
+   `MASTER_PLAN.md` plus the fewest atomic task files, omit CONTEXT/spec artifacts,
+   default planning docs to NOT being committed or delivered with the change, and
+   keep test additions proportional to the diff under the existing `~N` ceiling
+   rule. This budget overrides normal Lightweight task-count targets. Production
+   rationale: 2,871 planning lines were generated for a 13-line functional diff
+   and later deleted.
+6. **Explicit merge base**: Any task or verification that reasons about "current",
+   "previous", "outgoing", or "baseline" repository state must be handed the
+   explicit merge-base SHA from `git merge-base HEAD <default-branch>` and must
+   state that branch HEAD is NOT the baseline; comparisons against the wrong ref
+   are a known failure class. Record the full SHA in the task context and use it
+   for every baseline comparison.
 
 ---
 
@@ -110,14 +129,14 @@ Create the task directory:
 
 ```
 .corvus/tasks/{feature}/
-├── CONTEXT.md            # Discovery context artifact (schema below)
+├── CONTEXT.md            # Discovery context artifact (omit under Hard apparatus budget)
 ├── MASTER_PLAN.md        # Execution tracking document
 ├── 01-{task-name}.md     # First task
 ├── 02-{task-name}.md     # Second task
 └── ...
 ```
 
-Create CONTEXT.md from the dispatch's DISCOVERY DIGEST before or alongside MASTER_PLAN.md (schema: the discovery context artifact section below).
+Except under the Hard apparatus budget, create CONTEXT.md from the dispatch's DISCOVERY DIGEST before or alongside MASTER_PLAN.md (schema: the discovery context artifact section below). Budgeted plans retain only MASTER_PLAN.md and minimal task files.
 
 **Output budget**: all tool calls in one response share a single output-token budget (~32K). When a plan has more than 5 files, write in chunks of 3-5 files per response — MASTER_PLAN.md first, then task files grouped by phase — and continue until every file is written. If a write is truncated, retry that file alone and use smaller chunks.
 
@@ -1027,7 +1046,7 @@ When invoked by Corvus, you will receive:
 
 ```markdown
 **CONTEXT FILE**: `.corvus/tasks/[feature]/CONTEXT.md`
-(Create it in Stage 4 from the digest below; downstream dispatches reference it by path.)
+(Create it in Stage 4 from the digest below unless the Hard apparatus budget applies; downstream dispatches reference it by path when present.)
 
 **DISCOVERY DIGEST**:
 - Research: [summary or "N/A"]
@@ -1037,13 +1056,13 @@ When invoked by Corvus, you will receive:
 - Project environment: [venv, package manager, etc.]
 ```
 
-Use the digest (and the CONTEXT.md you create from it) to reference specific files in deliverables, fold the reported patterns into implementation steps, add research links to task notes, flag risks surfaced by discovery, and build validation commands from the reported project environment (see Task Quality Standards — Validation Commands).
+Use the digest (and CONTEXT.md when the Hard apparatus budget does not omit it) to reference specific files in deliverables, fold the reported patterns into implementation steps, add research links to task notes, flag risks surfaced by discovery, and build validation commands from the reported project environment (see Task Quality Standards — Validation Commands).
 
 ---
 
 ## CONTEXT.MD (DISCOVERY CONTEXT ARTIFACT)
 
-`.corvus/tasks/{feature}/CONTEXT.md` persists Phase 1 discovery once so downstream dispatches reference it by PATH instead of re-pasting findings. Create it in Stage 4 from the dispatch's DISCOVERY DIGEST. This schema lives here only — every other agent and skill references CONTEXT.md by path and never restates the schema. Because `.corvus/` is gitignored, CONTEXT.md is a per-machine workflow artifact, not a committed deliverable.
+Outside the Hard apparatus budget, `.corvus/tasks/{feature}/CONTEXT.md` persists Phase 1 discovery once so downstream dispatches reference it by PATH instead of re-pasting findings. Create it in Stage 4 from the dispatch's DISCOVERY DIGEST. This schema lives here only — every other agent and skill references CONTEXT.md by path and never restates the schema. Because `.corvus/` is gitignored, CONTEXT.md is a per-machine workflow artifact, not a committed deliverable.
 
 ### Schema
 
