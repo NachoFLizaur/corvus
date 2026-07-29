@@ -28,6 +28,7 @@ if decision == "local_only":
     display the full review and decision_reason locally
     never invoke @pr-comment-writer
     never run a GitHub mutation
+    leave the persisted checkpoint posted: false
     continue to Step 5
 
 if decision not in ["post", "auto_post"]:
@@ -143,11 +144,31 @@ POST_RESULT:
   api_calls: <count>
 ```
 
-On `posted`, use the returned URL in the completion summary. On any writer error, malformed result, or `local_only`, display the full review locally and report the reason. Do not invoke another writer, execute a direct command, change the event, retry through a different endpoint, or use any fallback posting path. The writer owns its bounded same-endpoint recovery; R5 never starts a second posting route.
+On `posted`, use the returned URL in the completion summary. Then the ORCHESTRATOR — never `@pr-comment-writer` — updates the matching persisted checkpoint at `.corvus/reviews/<owner>__<repo>__pr<num>/<head_sha>/meta.yaml`, where `<num>` is the validated positive-integer PR number. Revalidate that every path component comes from R0's validated control values and that the existing metadata identity and head match this run, then overwrite `meta.yaml` wholesale while preserving its synthesis fields and changing only the posting state:
+
+```yaml
+posted: true
+review_url: "<POST_RESULT.review_url>"
+posted_at: "<current ISO-8601 UTC timestamp>"
+```
+
+Perform this update only when `POST_RESULT.status` is exactly `posted` and `review_url` is non-empty. On `local_only`, writer failure, malformed result, or unknown remote state, leave `posted: false` so the synthesized review remains resumable. A metadata-update failure after a confirmed post cannot undo the remote review: report it prominently with the review URL, do not post again, and continue to lock cleanup.
+
+On any writer error, malformed result, or `local_only`, display the full review locally and report the reason. Do not invoke another writer, execute a direct command, change the event, retry through a different endpoint, or use any fallback posting path. The writer owns its bounded same-endpoint recovery; R5 never starts a second posting route.
 
 ---
 
 ## Step 5: Completion Summary
+
+Before displaying the terminal summary, release the same-PR lock only if `.corvus/reviews/<owner>__<repo>__pr<num>/.lock` still contains this run's `run_id`, where `<num>` is the validated positive-integer PR number. Remove that lock when supported. If deletion is unavailable, overwrite it wholesale with this inactive terminal record, which R0 never treats as a fresh lock:
+
+```yaml
+status: completed
+run_id: "<this run identifier>"
+completed_at: "<current ISO-8601 UTC timestamp>"
+```
+
+Do this for posted, pre-existing local-only, writer-failure, and malformed-result completions. Never remove or overwrite a lock owned by a different run. Terminal branches before R5 follow the same R0 lock-release contract. A crashed run leaves its active lock behind; R0 treats it as stale after 2 hours.
 
 Display the final summary to the user:
 
@@ -243,7 +264,9 @@ R5 is the terminal phase. Before finishing:
 1. Either one structured writer result confirms the review posted, or the full review is displayed locally.
 2. No path that entered R5 as `local_only` or with failed reviewability invoked the writer or another GitHub mutation.
 3. Every eligible partial/skipped post retained its coverage warning.
-4. Display a completion summary and mark all todos as completed.
+4. A confirmed posted result updated checkpoint metadata; every other result left `posted: false`.
+5. This run released only its own same-PR lock.
+6. Display a completion summary and mark all todos as completed.
 
 After R5, the Corvus-Review workflow is complete. Any follow-up request starts a NEW workflow from R0.
 

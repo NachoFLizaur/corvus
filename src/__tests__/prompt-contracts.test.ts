@@ -115,6 +115,7 @@ describe("prompt contracts: orchestrators", () => {
         "DISCOVERY_NEEDED",
         "PLAN REVIEW GATE STATUS",
         "OKAY",
+        "OKAY_WITH_AMENDMENTS",
         "REJECT",
         "PLAN_TYPE: LIGHTWEIGHT",
         "PLAN_TYPE: STANDARD",
@@ -157,6 +158,7 @@ describe("prompt contracts: orchestrators", () => {
         "QUESTIONS_NEEDED",
         "DISCOVERY_NEEDED",
         "OKAY",
+        "OKAY_WITH_AMENDMENTS",
         "REJECT",
         "PLAN_TYPE: LIGHTWEIGHT",
         "PLAN_TYPE: STANDARD",
@@ -317,7 +319,12 @@ describe("prompt contracts: workflow agents + phase skills", () => {
       // §C1 - `PLAN REVIEW GATE STATUS` is a valid substring of the bold
       // `**PLAN REVIEW GATE STATUS**` (markers wrap the whole phrase)
       for (const file of ["skill/corvus-phase-2/SKILL.md", "agent/plan-reviewer.md"]) {
-        expectContains(file, ["OKAY", "REJECT", "PLAN REVIEW GATE STATUS"])
+        expectContains(file, [
+          "OKAY",
+          "OKAY_WITH_AMENDMENTS",
+          "REJECT",
+          "PLAN REVIEW GATE STATUS",
+        ])
       }
     })
 
@@ -1099,11 +1106,12 @@ describe("prompt contracts: Phase H workflow + safety", () => {
       )
       expectContains(TASK_PLANNER, [
         "### `PROGRESS_UPDATE` Mode",
-        "`PROGRESS_UPDATE` is the only Task Planner mode authorized to record execution",
-        "**MASTER PLAN**: `.corvus/tasks/<feature>/MASTER_PLAN.md`",
-        "The write allowlist contains exactly:",
-        "Reject absolute paths, path traversal, a plan not named `MASTER_PLAN.md`",
-        "Any `[x]` would change to another status. Completed work never regresses.",
+        "`PROGRESS_UPDATE` is the only Task Planner mode authorized to record routine",
+        "**FEATURE DIRECTORY**: `.corvus/tasks/<feature>/`",
+        "Skip the standard batch-read entirely; read only the feature's",
+        "Edit ONLY status markers, Progress counts, and the gate-outcome",
+        "Make no task-file or CONTEXT.md edits, perform no re-planning,",
+        "one line only: `Progress updated: <feature> <gate> <status> (<complete>/<total>).`",
       ])
     })
 
@@ -1111,7 +1119,8 @@ describe("prompt contracts: Phase H workflow + safety", () => {
       expectContains(PHASE_4, [
         "After a phase-wide 4b `PASS`, delegate the state transition to @task-planner.",
         "**MODE**: PROGRESS_UPDATE",
-        "Verify the returned diff is confined to the supplied MASTER_PLAN.md",
+        "Verify the returned diff is confined to the feature's MASTER_PLAN.md",
+        "one batched dispatch per phase boundary",
         "block the transition and report the failure.",
       ])
     })
@@ -1513,7 +1522,7 @@ describe("test cadence redesign — phase 2 pins", () => {
       const interactiveSection = divisionSection(CORVUS)
       expect(interactiveSection).not.toBe("")
       expect(interactiveSection).toContain(
-        "| Test execution (targeted) | End of each phase (4b) | code-quality | `tests_enabled: true` AND `tests_deferred: false`; scope = union of the phase's task test files (`test_scope: targeted`), once. |",
+        "| Test execution (targeted) | End of each phase (4b) | code-quality | Explicit preselected non-deferred plumbing only (`tests_enabled: true, tests_deferred: false`; never offered by the interactive question or used as the autonomous default): scope = union of the phase's task test files (`test_scope: targeted`), once. |",
       )
       expect(interactiveSection).toContain(
         "| Test execution (full) | Phase 5a | code-quality | `tests_enabled: true` (all modes) — THE single full-suite run; in deferred mode also the first execution (`test_scope: full`); a Lightweight non-deferred plan carries this run at its final 4b gate. |",
@@ -1805,6 +1814,38 @@ const REVIEWER_PERMISSION_BASELINE = [
   '  bash: "deny"',
   '  edit: "deny"',
   '  write: "deny"',
+  '  task: "deny"',
+  '  question: "deny"',
+  '  external_directory: "deny"',
+  '  todowrite: "deny"',
+  '  todoread: "deny"',
+  '  webfetch: "deny"',
+  '  websearch: "deny"',
+  '  codesearch: "deny"',
+  '  lsp: "deny"',
+  '  doom_loop: "deny"',
+  '  skill: "deny"',
+].join("\n")
+
+/** Protected writer permission bytes before cross-session resume was added. */
+const COMMENT_WRITER_PERMISSION_BASELINE = [
+  '  "*": "deny"',
+  '  read: "allow"',
+  '  glob: "allow"',
+  '  grep: "allow"',
+  '  list: "deny"',
+  "  bash:",
+  '    "*": "deny"',
+  "    'gh api --method GET repos/*/pulls/* -H Accept:*': \"allow\"",
+  "    'gh api --method POST repos/*/pulls/*/reviews --input .corvus/review-payload.json': \"allow\"",
+  "    'jq . .corvus/review-payload.json': \"allow\"",
+  "    'python3 -m json.tool .corvus/review-payload.json': \"allow\"",
+  "  edit:",
+  '    "*": "deny"',
+  '    ".corvus/review-payload.json": "allow"',
+  "  write:",
+  '    "*": "deny"',
+  '    ".corvus/review-payload.json": "allow"',
   '  task: "deny"',
   '  question: "deny"',
   '  external_directory: "deny"',
@@ -2549,6 +2590,33 @@ describe("architectural-wave — phase 1 pins", () => {
   })
 
   describe("plan-reviewer checks (Task 05)", () => {
+    test("uses severity-tiered verdicts and exhaustive round-1 amendments", () => {
+      expectContains(PLAN_REVIEWER, [
+        "Return `REJECT` only when at least one category-A finding exists; return `OKAY_WITH_AMENDMENTS` when only category-B findings exist; return `OKAY` when only category-C findings or no findings exist.",
+        "Category-B and category-C findings do not share this cap and are reported exhaustively in round 1; withhold none for a later round.",
+        "A match is category A only when it leaves an implementation decision genuinely undefined in an implementation step",
+      ])
+    })
+
+    test("narrows re-review scope without relitigating unchanged text", () => {
+      expectContains(PLAN_REVIEWER, [
+        "On re-review after a PLAN_FIX, scope review to the fix's changed-lines manifest plus regression spot-checks of directly referenced context.",
+        "Previously-passed checks carry forward without re-execution.",
+        "Raise no new category-B or category-C findings on unchanged text.",
+        "return OKAY_WITH_AMENDMENTS rather than REJECT",
+      ])
+    })
+
+    test("phase-3.5 owns PLAN_FIX routing and the two-reject budget", () => {
+      expectContains(PHASE_2, [
+        "**MODE**: PLAN_FIX",
+        "After the second REJECT, stop the loop: interactive `corvus` escalates to the user with the residual blocking list; `corvus-auto` records the unresolved review, halts the feature, and reports the residual blocking list clearly.",
+      ])
+      expectContains(CORVUS, [
+        "High Accuracy Review loops automatically—review → PLAN_FIX → re-review—until `OKAY` or `OKAY_WITH_AMENDMENTS`, or until the second `REJECT` escalates the residual blocking list to the user.",
+      ])
+    })
+
     test("reviewer verifies workstream disjointness", () => {
       // Requirement 4: the h2 verification section (newline-delimited so the
       // two h3 verdict-template rows cannot satisfy it), the pairwise and
@@ -2577,15 +2645,14 @@ describe("architectural-wave — phase 2 pins", () => {
       // D5 single-owner pattern: the CONTEXT.md schema lives in task-planner
       // ONLY — consumers reference it by path and never restate it, so no
       // schema string is pinned against any other file (unowned-region
-      // discipline). Section heading, schema H1, and Phase Deltas heading
-      // appear exactly once each.
+      // discipline). PROGRESS_UPDATE no longer mutates this artifact.
       expect(
         countOccurrences(TASK_PLANNER, "## CONTEXT.MD (DISCOVERY CONTEXT ARTIFACT)"),
       ).toBe(1)
       expect(
         countOccurrences(TASK_PLANNER, "# {feature} — Discovery Context (CONTEXT.md)"),
       ).toBe(1)
-      expect(countOccurrences(TASK_PLANNER, "## Phase Deltas")).toBe(1)
+      expect(countOccurrences(TASK_PLANNER, "## Guardrails")).toBeGreaterThanOrEqual(1)
 
       // Receiver rewrite (CORVUS INTEGRATION): one pointer field + one digest
       // field replace the old paste blocks.
@@ -2595,18 +2662,7 @@ describe("architectural-wave — phase 2 pins", () => {
         "**CONTEXT FILE**: `.corvus/tasks/[feature]/CONTEXT.md`",
       ])
 
-      // The delta field recurs across PROGRESS_UPDATE prose (payload, defaults,
-      // allowlist, rejection, drift note, schema) — presence only, not an
-      // exact count, so added prose never breaks this pin.
-      expect(
-        countOccurrences(TASK_PLANNER, "**CONTEXT DELTA**"),
-      ).toBeGreaterThanOrEqual(1)
-
-      // Two variants, picked deliberately: bracketed `[N]` in the operative
-      // PROGRESS_UPDATE rules (allowlist item 3 + drift note); unbracketed `N`
-      // once inside the schema's Phase Deltas placeholder.
-      expect(countOccurrences(TASK_PLANNER, "## Phase [N] Delta")).toBe(2)
-      expect(countOccurrences(TASK_PLANNER, "## Phase N Delta")).toBe(1)
+      expectAbsent(TASK_PLANNER, ["**CONTEXT DELTA**", "## Phase Deltas"])
     })
 
     test("planner sheds paste-block receiver", () => {
@@ -2618,17 +2674,13 @@ describe("architectural-wave — phase 2 pins", () => {
       ])
     })
 
-    test("progress-update allowlist pins survive", () => {
-      // Regression companion to "confines PROGRESS_UPDATE to authorized
-      // planning state" (Phase H block): the frontmatter glob and the
-      // existing PROGRESS_UPDATE sentences stay pinned THERE — only the NEW
-      // delta-append strings are asserted here (no duplicate pins). All three
-      // pins carry the on-disk line wraps byte-for-byte.
+    test("progress-update is master-plan-only bookkeeping", () => {
       expectContains(TASK_PLANNER, [
-        "Every field is required except `EVIDENCE TASK FILE` and `**CONTEXT DELTA**`,\nwhich default to `NONE`.",
-        "3. When the caller supplies a `**CONTEXT DELTA**`, the same feature directory's\n   `CONTEXT.md`, only to append one `## Phase [N] Delta` section.",
-        "Reject a `**CONTEXT DELTA**` when the feature directory has no\nCONTEXT.md — this mode appends delta sections, it never creates or restructures\nthe artifact.",
+        "read only the feature's\n`MASTER_PLAN.md`",
+        "Edit ONLY status markers, Progress counts, and the gate-outcome\nlog in that file.",
+        "batch of status\nupdates (`phase/task → new status`)",
       ])
+      expectAbsent(TASK_PLANNER, ["EVIDENCE TASK FILE", "**CONTEXT DELTA**"])
     })
   })
 
@@ -2658,7 +2710,7 @@ describe("architectural-wave — phase 2 pins", () => {
     })
   })
 
-  describe("pointer lockstep + 4c delta (Tasks 09-10)", () => {
+  describe("pointer lockstep + 4c bookkeeping (Tasks 09-10)", () => {
     // Anchored-region integrity (phase-4 template spans re-extract non-empty
     // and stay free of test_scope: full) remains owned by "test_scope full
     // stays exclusive to Phase 5a contexts" — not duplicated here.
@@ -2666,9 +2718,8 @@ describe("architectural-wave — phase 2 pins", () => {
     test("context pointer line in lockstep everywhere", () => {
       // Extract-and-compare (never hardcoded twice): the canonical pointer
       // line is extracted ONCE from the phase-2 3.5 sender and counted
-      // byte-equal in every copy. Counts: plan-reviewer receiver = 1,
-      // corvus.md orchestrator = 1, phase-4 = 6 (single-task + workstream +
-      // 2×4b + F-step retry templates + 4c dispatch surface), phase-5 = 2
+      // byte-equal in every copy. PROGRESS_UPDATE deliberately carries no
+      // context pointer because it reads only MASTER_PLAN.md.
       // (5a + 5b). corvus-auto carries NO pointer copy at all.
       const canonical =
         read(PHASE_2).match(/^\*\*CONTEXT FILE\*\*: .*legacy plans\)$/m)?.[0] ??
@@ -2688,36 +2739,21 @@ describe("architectural-wave — phase 2 pins", () => {
       ])
     })
 
-    test("4c carries the delta field", () => {
-      // Producer/receiver pairing: the phase-4 PROGRESS_UPDATE dispatch emits
-      // the field (:559) and the return verification names it (:573) —
-      // exactly two occurrences, so the field cannot silently spread. The
-      // task-planner receiver field line is byte-distinct ("new-surface
-      // notes" vs "new surfaces for CONTEXT.md").
-      expect(countOccurrences(PHASE_4, "**CONTEXT DELTA**")).toBe(2)
+    test("4c batches status-only bookkeeping", () => {
       expectContains(PHASE_4, [
-        "**CONTEXT DELTA**: [anchor drift / new surfaces for CONTEXT.md `## Phase [N] Delta` | NONE]",
-        "When a context delta is supplied (not NONE), task-planner appends it to the same feature directory's CONTEXT.md as a `## Phase [N] Delta` section (receiver contract: task-planner PROGRESS_UPDATE mode); when the field is omitted or NONE, no CONTEXT.md write occurs.",
+        "**FEATURE DIRECTORY**: `.corvus/tasks/[feature]/`",
+        "**STATUS UPDATES**:",
+        "**GATE OUTCOME**: `4b: PASS — [one concrete evidence line]`",
+        "Send one batched dispatch per phase boundary with every accumulated task/phase",
       ])
-      expectContains(TASK_PLANNER, [
-        "**CONTEXT DELTA**: [anchor drift / new-surface notes | NONE]",
-      ])
+      expectAbsent(PHASE_4, ["**CONTEXT DELTA**", "EVIDENCE TASK FILE"])
     })
 
-    test("verifier authorizes the delta write", () => {
-      // The EXTENDED return-verification step 2: the CONTEXT.md allowance is
-      // appended after "the one evidence task file" on the 3-space-indented
-      // continuation line, so the verifier authorizes the 4c delta append
-      // (no verifier deadlock). The step-2 prefix "Verify the returned diff
-      // is confined to the supplied MASTER_PLAN.md" is owned by "delegates
-      // Phase 4c progress only after a passing gate" and stays satisfied by
-      // prefix preservation — not re-pinned here.
+    test("verifier confines the status-only write", () => {
       expectContains(PHASE_4, [
-        "   when named, the one evidence task file and, when a `**CONTEXT DELTA**` was supplied, the same feature directory's CONTEXT.md (append-only `## Phase [N] Delta`).",
+        "only\n   status markers, Progress counts, and the gate-outcome log changed.",
+        "Verify no task file, CONTEXT.md, objective, scope, file manifest, dependency,",
       ])
-      expect(
-        countOccurrences(PHASE_4, "(append-only `## Phase [N] Delta`)"),
-      ).toBe(1)
     })
   })
 })
@@ -3005,7 +3041,6 @@ describe("architectural-wave — phase 4 pins", () => {
       expectContains(STATE_MACHINE_DOC, [
         "| Workstreams sharing any file | Conflict risk — serialize or merge into one stream |",
         "| 2 | Planning | Create master plan, CONTEXT.md (discovery context artifact), and task files | @task-planner |",
-        "when the dispatch supplies a `**CONTEXT DELTA**` — the feature's CONTEXT.md, appending a `## Phase [N] Delta` section (omitted or NONE means no CONTEXT.md write)",
         "learnings are extracted after success and distilled to the local-only `.corvus/tasks/learnings.md`",
       ])
       // Task 17 completed the D3 sweep: these negatives are safe here now
@@ -4169,5 +4204,174 @@ describe("flow-streamline: docs + sweep pins", () => {
         "**When**: After requirements-analyst returns REQUIREMENTS_CLEAR (from Phase 0a or 0b), or directly after a spec-completeness bypass.",
       ])
     }
+  })
+})
+
+// ============================================================================
+// Cross-session review resume + same-PR concurrency guard
+// ============================================================================
+
+describe("review resume and same-PR concurrency contracts", () => {
+  test("persists the synthesized document at the head-scoped path", () => {
+    expectContains(REVIEW_R3, [
+      ".corvus/reviews/<owner>__<repo>__pr<num>/<head_sha>/REVIEW_DOCUMENT.md",
+      "Overwrite the file wholesale when re-synthesizing the same head; never append or merge with an older document.",
+      "posted: false",
+    ])
+
+    for (const file of REVIEW_ORCHESTRATORS) {
+      for (const capability of ["edit", "write"] as const) {
+        const policy = nestedFrontmatterBlock(file, capability)
+        expect(policy).toContain('    "*": "deny"')
+        expect(policy).toContain('    ".corvus/reviews/**": "allow"')
+      }
+    }
+  })
+
+  test("resumes a matching unposted current-head document at R4", () => {
+    expectContains(REVIEW_R0, [
+      "If `meta.yaml` is valid, `posted: false`, its identity fields match the validated owner, repo, PR number, and CURRENT `head_sha`, and `REVIEW_DOCUMENT.md` is readable and schema-valid, load the persisted REVIEW_DOCUMENT, skip R1-R3 entirely, announce `Resuming synthesized review for head <sha8> — skipping R1-R3`, and proceed directly to R4.",
+    ])
+  })
+
+  test("stops when the exact head was already posted unless fresh is explicit", () => {
+    expectContains(REVIEW_R0, [
+      "If the matching valid checkpoint has `posted: true`, report `Review already posted for exact head <sha8>: <review_url>` and stop after releasing this run's lock, unless the trusted top-level invocation explicitly requests a fresh review.",
+    ])
+  })
+
+  test("malformed checkpoints fail open to a fresh review", () => {
+    expectContains(REVIEW_R0, [
+      "If `meta.yaml` is malformed, incomplete, unreadable, identity-mismatched, or inconsistent with the current head, or if `REVIEW_DOCUMENT.md` is unreadable or schema-invalid, log one line — `Persisted review checkpoint invalid; running a fresh review.` — ignore the checkpoint, and continue normally through R1-R3.",
+      "Do not scan or delete directories for other head SHAs; stale artifacts are retained permanently unless a separate explicit cleanup request owns them.",
+    ])
+  })
+
+  test("expires active same-PR locks after two hours", () => {
+    expectContains(REVIEW_R0, [
+      "A lock whose `status` is `active` and whose valid ISO `started_at` is less than 2 hours old is fresh: interactive mode asks whether to proceed anyway or abort, while autonomous mode terminates `local_only` with `Same-PR review already in progress`; a lock at least 2 hours old, malformed, inactive, or absent is stale/available and may be overwritten.",
+      "A crashed run intentionally leaves an active lock. It becomes stale after 2 hours and may then be overwritten; never delete review artifacts while recovering a stale lock.",
+    ])
+  })
+
+  test("autonomous mode aborts local-only on a fresh lock", () => {
+    expectContains(REVIEW_R0, [
+      "In autonomous mode, a fresh lock always aborts terminal local-only with a clear reason containing `Same-PR review already in progress`; never ask, wait, switch modes, or overwrite that lock.",
+    ])
+    expectContains(AUTONOMOUS_REVIEW, [
+      "A fresh lock aborts local-only; a matching unposted checkpoint skips R1-R3 and routes to deterministic R4.",
+    ])
+    expect(frontmatterBlock(AUTONOMOUS_REVIEW)).toContain('question: "deny"')
+  })
+
+  test("pr-comment-writer permission block remains byte-unchanged", () => {
+    expect(permissionFrontmatterBlock(COMMENT_WRITER)).toBe(
+      COMMENT_WRITER_PERMISSION_BASELINE,
+    )
+  })
+})
+
+// ============================================================================
+// Planner authoring, bookkeeping, and simplified test-policy contracts
+// ============================================================================
+
+describe("planner authoring and simplified test-policy contracts", () => {
+  test("labels master-plan mirrors as informative", () => {
+    const label = "Informative summary; task Meta is authoritative on any discrepancy"
+    expect(countOccurrences(TASK_PLANNER, label)).toBe(2)
+    expectContains(TASK_PLANNER, [
+      "MASTER_PLAN Dependencies diagram, Workstreams table, Critical Path, and Files",
+    ])
+  })
+
+  test("single-sources pinned contracts and uses approximate planning counts", () => {
+    expectContains(TASK_PLANNER, [
+      "**One owner per contract string**: Every grep-able pinned contract",
+      "Every other\n   file points to that owner and section",
+      "**Approximate planning counts**: Estimated test totals and similar planning",
+      "Never restate an exact tally across files; an approximate\n   count is a ceiling signal, not a target.",
+      "**Approximate Expected Test Count**: ~N (ceiling signal, not a target)",
+      "| `{path/to/test_file_1}` | Create/Modify/Remove | ~N tests | Task {NN} |",
+    ])
+    expectAbsent(TASK_PLANNER, ["{N} tests"])
+  })
+
+  test("planner probes every mechanical assertion before finalizing", () => {
+    expectContains(TASK_PLANNER, [
+      "**Probe your own assertions**: Before finalizing a plan, execute every",
+      "mechanical grep/glob assertion the plan prescribes against the current tree",
+      "Fix or drop every assertion that fails at\n   planning time",
+    ])
+  })
+
+  test("PLAN_FIX is minimal, closed, and returns changed line ranges", () => {
+    expectContains(TASK_PLANNER, [
+      "### `PLAN_FIX` Mode",
+      "Make the minimal diff; apply every listed category-A fix and\ncategory-B amendment.",
+      "NO new normative assertions, spec sections, or pinned\nliterals may be added.",
+      "Return a changed-lines manifest (`file → line ranges`)",
+    ])
+    expectContains(PHASE_2, [
+      "`agent/task-planner.md` is the authoritative owner of PLAN_FIX behavior",
+      "Follow `agent/task-planner.md` §`PLAN_FIX` Mode exactly",
+    ])
+  })
+
+  test("PROGRESS_UPDATE is one master-only batch per phase boundary", () => {
+    expectContains(TASK_PLANNER, [
+      "Skip the standard batch-read entirely; read only the feature's",
+      "Edit ONLY status markers, Progress counts, and the gate-outcome",
+      "Make no task-file or CONTEXT.md edits, perform no re-planning,",
+      "the orchestrator batches all accumulated task/phase updates into one\n`PROGRESS_UPDATE`, never one dispatch per event.",
+    ])
+    for (const file of [CORVUS, CORVUS_AUTO]) {
+      const gate2 = read(file).match(/^\| 2 \| 4b PASS \|.*$/m)?.[0] ?? ""
+      expect(gate2).not.toBe("")
+      expect(gate2).toContain("one batched task-planner `PROGRESS_UPDATE`")
+      expect(gate2).toContain("one bookkeeping dispatch per event")
+    }
+    expectContains(PHASE_4, [
+      "batch every accumulated status and the\n    gate evidence line into one task-planner `PROGRESS_UPDATE`",
+      "Send one batched dispatch per phase boundary",
+    ])
+  })
+
+  test("interactive test preference has exactly two choices", () => {
+    const section =
+      read(CORVUS).match(
+        /## Test Preference \(After Phase 0 \/ Phase 1\)\n([\s\S]*?)\n## Phase 2:/,
+      )?.[1] ?? ""
+    expect(section).not.toBe("")
+    expect(section).toContain('question: "Should I generate tests for this feature?"')
+    expect(section).toContain(
+      '1. "Yes — generate tests, run at end" → `tests_enabled: true, tests_deferred: true`',
+    )
+    expect(section).toContain(
+      '2. "No — skip tests" → `tests_enabled: false, tests_deferred: false`',
+    )
+    expect([...section.matchAll(/^\s+\d+\. "/gm)]).toHaveLength(2)
+    expect(section).not.toContain("Yes (recommended)")
+    expect(section).not.toContain("at every quality gate")
+    expect(section).not.toContain("three-choice")
+    expectContains(PHASE_2, [
+      "default to\n  `tests_deferred: true`; do not ask a timing question.",
+      "Explicit preselection only (not offered by any question)",
+    ])
+  })
+
+  test("test authoring is budgeted in planner and implementer", () => {
+    expectContains(TASK_PLANNER, [
+      "Cover each acceptance\ncriterion once, plus critical paths and meaningful boundary/error cases.",
+      "Do not\nwrite per-function unit tests for trivial code, duplicate coverage across test\nlevels, or tests of framework/library behavior.",
+      "Prefer updating obsolete tests\nover adding parallel new tests",
+      "approximate expected test count (`~N`) as a ceiling signal, not a target to hit.",
+    ])
+    expectContains(CODE_IMPLEMENTER, [
+      "### Test-Authoring Restraint",
+      "Cover each acceptance\ncriterion once, then add only critical-path and meaningful boundary/error cases.",
+      "Do not add per-function tests for trivial code, duplicate coverage across levels,\nor tests of framework/library behavior.",
+      "Prefer updating or removing obsolete\ntests listed by the task over creating parallel new coverage",
+      "the approximate\ncount is a ceiling signal, never a quota to fill.",
+    ])
   })
 })

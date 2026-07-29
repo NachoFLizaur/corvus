@@ -57,9 +57,10 @@ Phase 4 operates at the **phase level**, not per-task: tasks within a phase are 
   - **Parallelize disjoint workstreams**: workstreams whose file sets are pairwise
     disjoint (check the master plan's Workstreams section and `Depends On` metadata)
     run concurrently; a shared file forces sequential order.
-  - **Update MASTER_PLAN.md at phase boundaries** (4c), not after each task. After
-    a phase-wide 4b PASS, delegate the state transition to task-planner in
-    `PROGRESS_UPDATE` mode. Corvus never edits the plan directly.
+  - **Update MASTER_PLAN.md at phase boundaries** (4c), not after each task or
+    event. After a phase-wide 4b PASS, batch every accumulated status and the
+    gate evidence line into one task-planner `PROGRESS_UPDATE`. Corvus never
+    edits the plan directly.
   - **Max 3 fix iterations per phase**: at the cap, stop and escalate to the user with
     what passed, what still fails, and open questions — even if the phase is incomplete.
   - **Fix-attempt accounting**: code-implementer's in-task 2-attempt fix rule
@@ -89,7 +90,7 @@ manifest as a write allowlist.
 | Mode / task type | Writable files and test authoring | Test execution in Phase 4 |
 |------------------|-----------------------------------|---------------------------|
 | `tests_enabled: true`, implementation task | Product files explicitly listed. Do not author tests unless an obsolete test edit is explicitly in this task's approved manifest. | Only commands explicitly authorized by the active task/workflow. |
-| `tests_enabled: true`, phase test task, `tests_deferred: false` | Existing/new test files explicitly listed; author tests and make no production changes. | Runs only the test files this task authored/modified (test_scope: targeted); 4b owns the single phase-targeted gate run. |
+| Explicit preselected `tests_enabled: true`, phase test task, `tests_deferred: false` | Existing/new test files explicitly listed; author tests and make no production changes. | Runs only the test files this task authored/modified (test_scope: targeted); 4b owns the single phase-targeted gate run. This plumbing mode is not offered by the user-facing test question. |
 | `tests_enabled: true`, phase test task, `tests_deferred: true` | Existing/new test files explicitly listed; author tests and make no production changes. | Never execute tests in 4a or 4b. Phase 5 performs the first test run. |
 | `tests_enabled: false` | Product files only. No phase test task or test-file edit exists. | Never execute tests. |
 
@@ -298,7 +299,7 @@ conditions met: [list])` in the 4c PROGRESS_UPDATE's QUALITY GATE field. Any box
 unchecked → dispatch the real 4b (acceptance-only template). When any skip
 condition fails, dispatch the template the resolved flags select, as always.
 
-#### 4b Delegation: Standard Mode (`tests_enabled: true`, `tests_deferred: false`)
+#### 4b Delegation: Standard Mode (explicit preselected `tests_enabled: true`, `tests_deferred: false`)
 
 ```markdown
 **TASK**: Validate Phase [N] implementation
@@ -561,48 +562,27 @@ Corvus is the caller and verifier, never the plan writer.
 ```markdown
 **TASK**: Record the passed Phase [exact ID and name]
 **MODE**: PROGRESS_UPDATE
-**MASTER PLAN**: `.corvus/tasks/[feature]/MASTER_PLAN.md`
-**PHASE**: [exact phase ID and name]
-
-**TASK TRANSITIONS**:
-- `[exact-task-id]`: `[prior]` -> `[x]`
-
-**DEPENDENCY STATUS**:
-- `[exact-task-id]` depends on `[exact-dependency-id]`: `[x]`
-
-**QUALITY GATE**:
-- Status: PASS
-- Mode: STANDARD | ACCEPTANCE-ONLY
-- Test flags: `tests_enabled: [true|false], tests_deferred: [true|false]`
-- Evidence: [complete 4b report, including criterion evidence]
-- On a triage skip: Status: PASS, Mode: ACCEPTANCE-ONLY, Evidence: the lightweight-verification checklist with the met skip conditions listed (`4b: PASS (lightweight — skip conditions met: [list])`).
-
-**EXECUTION RECORD**:
-- Files changed: [exact task-owned paths from verified 4a reports]
-- Validation evidence: [commands/inspection performed, results, and policy-based omissions]
-
-**EVIDENCE TASK FILE**: `.corvus/tasks/[feature]/[NN-task].md` | NONE
-
-**CONTEXT DELTA**: [anchor drift / new surfaces for CONTEXT.md `## Phase [N] Delta` | NONE]
+**FEATURE DIRECTORY**: `.corvus/tasks/[feature]/`
+**STATUS UPDATES**:
+- `Phase [N]`: `[x]`
+- `[exact-task-id]`: `[x]`
+**GATE OUTCOME**: `4b: PASS — [one concrete evidence line]`
 ```
 
-When a context delta is supplied (not NONE), task-planner appends it to the same feature directory's CONTEXT.md as a `## Phase [N] Delta` section (receiver contract: task-planner PROGRESS_UPDATE mode); when the field is omitted or NONE, no CONTEXT.md write occurs.
-
-Send every completed task ID in the phase, its on-disk prior status, direct
-dependency statuses, the exact gate mode/evidence, and the exact target path. Do
-not invoke success extraction here; Phase 6 alone owns feature-wide learning.
+Send one batched dispatch per phase boundary with every accumulated task/phase
+status and one gate evidence line. On a triage skip, use `4b: PASS (lightweight —
+skip conditions met: [list])` as that line. Do not dispatch bookkeeping once per
+event or edit MASTER_PLAN.md directly. Do not invoke success extraction here;
+Phase 6 alone owns feature-wide learning.
 
 When task-planner returns:
 
-1. Require an explicit success result with previous/new states, recalculated
-   counts, recorded evidence, and a complete changed-path list.
-2. Verify the returned diff is confined to the supplied MASTER_PLAN.md and, only
-   when named, the one evidence task file and, when a `**CONTEXT DELTA**` was supplied, the same feature directory's CONTEXT.md (append-only `## Phase [N] Delta`).
-   No production, prompt, source, docs, tests, package, Git, generated, or
-   user-local path is allowed.
-3. Verify objectives, scope, file manifests, dependencies, and acceptance criteria
-   are unchanged; no `[x]` regressed; phase status, task rows, Quick Reference,
-   progress counts, and evidence agree.
+1. Require the one-line success confirmation defined by task-planner's
+   `PROGRESS_UPDATE` mode.
+2. Verify the returned diff is confined to the feature's MASTER_PLAN.md and only
+   status markers, Progress counts, and the gate-outcome log changed.
+3. Verify no task file, CONTEXT.md, objective, scope, file manifest, dependency,
+   estimate, or acceptance criterion changed and no `[x]` regressed.
 4. Only after these checks pass, continue: more implementation phases loop to 4a
    with fix iterations reset; otherwise proceed to Phase 5.
 
@@ -616,7 +596,7 @@ MASTER_PLAN.md directly, repair the result silently, or advance to another phase
 - [ ] code-quality reported QUALITY GATE STATUS: PASS for the entire phase, or a triage skip recorded `4b: PASS (lightweight — skip conditions met: [list])` after lightweight verification
 - [ ] Every fix iteration followed the iteration rule (iteration 1: direct fix from the 4b report; iteration ≥2: FAILURE_ANALYSIS first) and re-ran the original 4b dispatch scope
 - [ ] task-planner accepted `PROGRESS_UPDATE`
-- [ ] Returned diff is confined to authorized planning files and preserves task meaning
-- [ ] MASTER_PLAN.md mirrors completion across tasks, Quick Reference, counts, evidence, and phase status
+- [ ] Returned diff is confined to MASTER_PLAN.md status markers, Progress counts, and the gate-outcome log
+- [ ] One batched update recorded every phase-boundary status and the gate evidence line
 
 **Exit Criteria**: All phases complete, proceed to Phase 5.

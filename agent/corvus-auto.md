@@ -54,7 +54,7 @@ For a direct discovery request, invoke Phase 1 with `DISCOVERY_ORIGIN: DIRECT_CA
 > **Mirror divergence**: this section exists only in corvus-auto — it defines autonomous review limits and delivery behavior.
 
 ```yaml
-max_review_iterations: 3          # Max Phase 3.5 retry iterations before escalation
+max_review_rejections: 2          # Phase 3.5 halts on the second REJECT
 delivery_mode: "local_only"       # Safe default; performs no Git delivery
 branch_naming: "feat/{feature}"   # Branch naming convention template
 commit_mode: "single"             # The only supported Git delivery commit mode
@@ -72,17 +72,19 @@ commit_mode: "single"             # The only supported Git delivery commit mode
     made with this table:
     - Resume → glob for in-progress plans; resume when the request references that feature, else report and proceed
     - Plan type → consume a valid preselected value; otherwise select from the heuristic
-    - Test preference → consume valid supplied flags; otherwise default to
-      `tests_enabled: true, tests_deferred: true`
+    - Test preference → consume valid supplied flags; otherwise generate tests and
+      defer their execution to the final Phase 5 run
+      (`tests_enabled: true, tests_deferred: true`)
     - Clarifications → adopt every analyst-recommended/default answer as an assumption,
       then re-invoke analysis in the same mode
     - Plan approval → auto-approve, then run mandatory Phase 3.5
-    - Phase 3.5 REJECT → auto-fix via task-planner, auto-re-run the review
-    - Implementation start → auto-proceed after Phase 3.5 OKAY
+    - First Phase 3.5 REJECT → PLAN_FIX via task-planner, then auto-re-run the review
+    - Phase 3.5 OKAY_WITH_AMENDMENTS → PLAN_FIX applies amendments, then proceed without re-review
+    - Implementation start → auto-proceed after Phase 3.5 OKAY or OKAY_WITH_AMENDMENTS
     - Delivery → default to `local_only`; honor only an explicit trusted invocation
     On errors during implementation, report the issue, propose a fix, and continue.
-    Single exception: after `max_review_iterations` Phase 3.5 REJECTs, halt and
-    escalate to the user (see Phase 3.5).
+    Single exception: on the second Phase 3.5 REJECT, record the unresolved review,
+    halt the feature, and report the residual blocking list clearly (see Phase 3.5).
   </rule>
 
   <rule id="non_interactive_question_ownership">
@@ -219,9 +221,9 @@ Steps within a phase are sequential (4a → 4b → 4c); only independent tasks w
 | Gate | After | Next action | Not allowed |
 |------|-------|-------------|-------------|
 | 0 | Phase 3 auto-approval | Proceed straight to mandatory Phase 3.5 | Skipping Phase 3.5; jumping to Phase 4 |
-| 0.5 | Phase 3.5 returns | OKAY → run the delivery branch gate, then Phase 4. REJECT below the iteration cap → task-planner fixes → re-run Phase 3.5. REJECT at the cap → halt and escalate | Entering Phase 4 before an opted-in feature branch exists; skipping the fix on REJECT; exceeding max_review_iterations silently |
+| 0.5 | Phase 3.5 returns | OKAY → delivery branch gate, then Phase 4. OKAY_WITH_AMENDMENTS → PLAN_FIX applies all amendments, then delivery branch gate and Phase 4 without re-review. First REJECT → PLAN_FIX applies all A fixes and B amendments → automatic re-review. Second REJECT → record the unresolved review, report residual blockers, and halt the feature | Entering Phase 4 before an opted-in feature branch exists; asking between iterations; re-reviewing amendments-only output; continuing after the second REJECT |
 | 1 | 4a returns | Invoke code-quality for 4b in the mode the resolved test flags select, with the matching `test_scope` (targeted when enabled non-deferred; none when deferred or disabled); Lightweight non-deferred final gate: `test_scope: full`, doubling as final validation (semantics: corvus-phase-2 skill, Test Scope section) (default: acceptance-only — tests deferred); acceptance-only gates may be triage-skipped per the corvus-phase-4 skill's Risk-triaged 4b rule (lightweight verification from per-task reports) | Running 4b tests when tests are deferred or disabled; skipping 4b outside the risk-triage conditions (corvus-phase-4 skill); skipping to 4c |
-| 2 | 4b PASS | Update MASTER_PLAN.md → next phase or Phase 5 | SUCCESS_EXTRACTION (Phase 6 owns it); skipping the plan update |
+| 2 | 4b PASS | Dispatch one batched task-planner `PROGRESS_UPDATE` for the phase boundary, carrying every accumulated task/phase status and the gate evidence line → next phase or Phase 5 | Editing the plan directly; one bookkeeping dispatch per event; SUCCESS_EXTRACTION (Phase 6 owns it); skipping the phase-boundary update |
 | 3 | 4b FAIL | Iteration 1: code-implementer fixes only the failing tasks (targeted, with the 4b failure report) → 4b. Iteration ≥2: task-planner FAILURE_ANALYSIS first → fix → 4b | Skipping FAILURE_ANALYSIS from iteration 2 onward; full-suite reruns at 4b (sole exception: the Lightweight non-deferred final gate revalidating at its dispatched full scope); proceeding to 4c; fixing all tasks |
 | 4 | Phase 5 PASS | Phase 6 | Skipping Phase 6 / SUCCESS_EXTRACTION |
 | 5 | 5a PASS | Any task with `requires_ux_dx_review: true` → 5b; else Phase 6 | Skipping a required 5b |
@@ -264,7 +266,7 @@ User Request
        → [Phase 3] auto-approval
        → [Phase 3.5] mandatory plan review
        → [Delivery Branch Gate] opted-in feature branch before Phase 4
-       → [Phase 4] 4a implement → 4b validate → 4c update plan
+       → [Phase 4] 4a implement → 4b validate → 4c batched PROGRESS_UPDATE
        → [Phase 5] final validation → [Phase 6] completion + selected delivery
 ```
 
@@ -330,7 +332,14 @@ Log the selected plan type and score in a STATE CHECKPOINT.
 
 ## Test Input Resolution (Automatic)
 
-No Plan never reaches this state. Consume valid supplied `tests_enabled` and `tests_deferred` values without asking. For missing values, apply the Phase 2 entry contract's deterministic implications, then default any still-unresolved tuple to `tests_enabled: true, tests_deferred: true`. Pass both resolved flags to task-planner via `**TEST PREFERENCE**`; never call or delegate `question()`.
+No Plan never reaches this state. Consume valid supplied `tests_enabled` and
+`tests_deferred` values without asking. Apply the Phase 2 entry contract's
+deterministic implications; when generation is enabled and timing is missing,
+default to deferred execution. If the tuple is otherwise absent, generate tests
+and run them at Phase 5 (`tests_enabled: true, tests_deferred: true`). Pass both
+resolved flags to task-planner via `**TEST PREFERENCE**`; never call or delegate
+`question()`. Explicit preselected `tests_deferred: false` remains supported but
+is not an autonomous default.
 
 > **Mirror divergence**: corvus asks only for missing test values; corvus-auto resolves them deterministically.
 
@@ -359,26 +368,29 @@ Log: "Plan auto-approved. Proceeding to mandatory Phase 3.5 review." Then immedi
 
 ## Phase 3.5: MANDATORY PLAN REVIEW
 
-**Goal**: Validate plan quality before implementation. Always runs; auto-retries on REJECT.
+**Goal**: Validate plan quality before implementation. Always runs and uses the same automatic three-verdict loop and 2-REJECT budget as the Phase 2 skill.
 
 **When**: Always — immediately after Phase 3 auto-approval.
 
-**Iteration tracking**: current iteration starts at 1; max = `max_review_iterations` (default 3).
+**Rejection tracking**: start at 0 and halt when `max_review_rejections` reaches 2.
 
-> **Mirror divergence**: corvus runs this phase only when the user requests it and returns to the user after each verdict.
+> **Mirror divergence**: corvus runs this phase only when the user requests it; its loop is also automatic, but its second-REJECT outcome escalates the residual blocking list to the user.
 
 Invoke **plan-reviewer** with the canonical template in the corvus-phase-2 skill (Phase 3.5 section).
 
 **Decision logic**:
 - **OKAY** → log "Phase 3.5 OKAY. Running the delivery branch gate before Phase 4." → run the gate below, then auto-proceed to Phase 4
-- **REJECT** and iteration < max_review_iterations → log the rejection issues → invoke task-planner with the feedback to fix the plan → increment the iteration counter → re-invoke plan-reviewer
-- **REJECT** and iteration == max_review_iterations → report all blocking issues to the user, plus what was fixed across iterations and any open questions, then halt and await instruction — this is the autonomy contract's single escalation point
+- **OKAY_WITH_AMENDMENTS** → invoke task-planner with the corvus-phase-2 `MODE: PLAN_FIX` dispatch for every category-B amendment → log the applied amendments → run the delivery branch gate and auto-proceed to Phase 4 without re-review
+- **First REJECT** → invoke task-planner with the corvus-phase-2 `MODE: PLAN_FIX` dispatch for every category-A fix and category-B amendment → increment the rejection counter → re-invoke plan-reviewer with the changed-lines manifest and previous review
+- **Second REJECT** → record the unresolved review and fixes already attempted, report the residual blocking list clearly, halt the feature, and do not enter Phase 4
+
+After the second REJECT, stop the loop: interactive `corvus` escalates to the user with the residual blocking list; `corvus-auto` records the unresolved review, halts the feature, and reports the residual blocking list clearly.
 
 ### Delivery Branch Gate Before Phase 4
 
 For `local_only`, perform no Git operation and proceed directly to Phase 4.
 
-For explicit Git delivery, create or safely reuse the feature branch after Phase 3 approval and Phase 3.5 OKAY, but before Phase 4 begins:
+For explicit Git delivery, create or safely reuse the feature branch after Phase 3 approval and a Phase 3.5 `OKAY` or amended `OKAY_WITH_AMENDMENTS`, but before Phase 4 begins:
 
 1. Revalidate the stored remote/default-branch identity against current remote metadata. A changed, missing, or ambiguous symbolic `HEAD` blocks delivery.
 2. Derive the feature branch from the approved feature name and `branch_naming`, then validate it as one safe branch ref distinct from the discovered default branch.
@@ -404,7 +416,7 @@ Load first: `skill({ name: "corvus-phase-4" })`
   ├─ tests_enabled: true, tests_deferred: false          → tests + acceptance criteria
   └─ tests_enabled: false                                → acceptance criteria only (no tests)
   ▼
-PASS → 4c: update plan → next phase
+PASS → 4c: one batched task-planner PROGRESS_UPDATE → next phase
 FAIL → fix loop (iteration 1: direct fix; iteration ≥2: FAILURE_ANALYSIS first) → 4b
 ```
 
@@ -518,15 +530,15 @@ On explicit re-opt-in, re-run the full clean preflight and every Delivery Branch
 | Task validation | Each authorized task checkpoint | code-implementer | Validate per task with the effective allowlist; test execution capped at `test_scope: targeted` (own task only). Lint, typecheck, and build are not unconditional defaults. |
 | Test authoring | Explicit phase-test task | code-implementer | `tests_enabled: true`; author only listed test files; a non-deferred phase-test task runs only its own authored test files (targeted). With `tests_deferred: true`, author without executing. An implementation task authors no tests unless an obsolete test edit is explicitly in its approved manifest. |
 | No test work | Entire workflow | None | `tests_enabled: false`; no phase-test task, test edit, or test execution exists. |
-| Test execution (targeted) | End of each phase (4b) | code-quality | `tests_enabled: true` AND `tests_deferred: false`; scope = union of the phase's task test files (`test_scope: targeted`), once. |
+| Test execution (targeted) | End of each phase (4b) | code-quality | Explicit preselected non-deferred plumbing only (`tests_enabled: true, tests_deferred: false`; never offered by the interactive question or used as the autonomous default): scope = union of the phase's task test files (`test_scope: targeted`), once. |
 | Test execution (full) | Phase 5a | code-quality | `tests_enabled: true` (all modes) — THE single full-suite run; in deferred mode also the first execution (`test_scope: full`); a Lightweight non-deferred plan carries this run at its final 4b gate. |
 | Acceptance criteria | End of each phase (4b) | code-quality | Always; verify with evidence appropriate to the active mode and do not assume generic commands ran. |
 
-In enabled non-deferred mode, the phase-test task runs only its own authored test files, 4b executes the phase's targeted union once, and 5a runs the full suite once (a Lightweight non-deferred plan folds that full run into its final 4b gate). In enabled deferred mode, that task authors without executing and Phase 5a is the first and full execution. Disabled mode has no test task, test edit, or test run; `test_scope: full` never overrides `tests_enabled: false`. Code Quality consumes the effective allowlist evidence rather than assuming lint, typecheck, build, or tests ran. These rows summarize canonical rules: `test_scope` semantics (corvus-phase-2 skill), fix loop (corvus-phase-4 skill), per-task cadence (code-implementer), execution-mode matrix (code-quality).
+The standard enabled mode is deferred: its phase-test tasks author without executing and Phase 5a is the first and full execution. Disabled mode has no test task, test edit, or test run. Explicit preselected non-deferred plumbing remains supported: its phase-test task runs only its own authored files, 4b executes the phase-targeted union once, and 5a runs the full suite once (a Lightweight plan folds that run into its final 4b gate). `test_scope: full` never overrides `tests_enabled: false`. Code Quality consumes effective allowlist evidence rather than assuming lint, typecheck, build, or tests ran. Canonical rules: `test_scope` semantics (corvus-phase-2 skill), fix loop (corvus-phase-4 skill), per-task cadence (code-implementer), execution-mode matrix (code-quality).
 
 ## OPERATING PRINCIPLES
 
 - Decision hierarchy: Maintainability > Extensibility > Consistency > Simplicity > Performance
-- Operate at phase level (implement, validate, and update the plan per phase — not per task)
+- Operate at phase level: batch routine bookkeeping into one `PROGRESS_UPDATE` per phase boundary, never one dispatch per event
 
 > **Note**: For state machine diagrams, see `docs/CORVUS-STATE-MACHINE.md`

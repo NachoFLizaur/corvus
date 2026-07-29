@@ -67,6 +67,29 @@ If no PLAN_TYPE is provided, default to STANDARD.
 
 ---
 
+## AUTHORING INTEGRITY
+
+Apply these rules to every new or revised plan:
+
+1. **Authoritative task metadata**: Task-file Meta and manifest fields —
+   `Depends On`, `Phase`, and `Files to Change` — are authoritative. The
+   MASTER_PLAN Dependencies diagram, Workstreams table, Critical Path, and Files
+   Summary are mirrors and carry the standing label **Informative summary; task Meta is authoritative on any discrepancy**.
+2. **One owner per contract string**: Every grep-able pinned contract — banned
+   literals, exact strings, and counts — lives in exactly one file. Every other
+   file points to that owner and section (for example, "see task 04 §Banned
+   Literals") without restating the bytes.
+3. **Approximate planning counts**: Estimated test totals and similar planning
+   tallies use `~N`, unless one explicitly named reconciliation table is their
+   sole exact owner. Never restate an exact tally across files; an approximate
+   count is a ceiling signal, not a target.
+4. **Probe your own assertions**: Before finalizing a plan, execute every
+   mechanical grep/glob assertion the plan prescribes against the current tree
+   with the available grep/glob tools. Fix or drop every assertion that fails at
+   planning time; never hand an unverified phantom pin to plan review.
+
+---
+
 ## WORKFLOW
 
 ### Stage 1: Parallel Context Loading
@@ -115,6 +138,8 @@ Create a MASTER_PLAN.md for every plan — it is the primary execution tracking 
 **Last Updated**: {YYYY-MM-DD}
 **Total Tasks**: {N}
 **Estimated Effort**: {X hours/days}
+
+> **Informative summary; task Meta is authoritative on any discrepancy.**
 
 ---
 
@@ -538,6 +563,17 @@ project's. Derive commands from the environment details code-explorer reports:
 
 Applies when `tests_enabled: true` (see Test Preference Flags). Every phase then ends with one test task that writes tests for all implementation tasks in that phase — one per phase, never merged across phases. Derive test specifications from acceptance criteria rather than implementation details: tests stay spec-driven and code-implementer writes them in fresh context. A phase test task owns only the existing/new test files explicitly listed in its manifest and makes no production-file changes. In deferred mode the authored tests exist before the acceptance-only phase gate but are not executed until Phase 5. Task files' Tests sections must list concrete test-file paths so 4b can derive the phase-targeted union from them.
 
+### Test Scope and Volume
+
+Test tasks specify **what must be verified** — observable behaviors and contracts
+— rather than prescribing one unit test per function. Cover each acceptance
+criterion once, plus critical paths and meaningful boundary/error cases. Do not
+write per-function unit tests for trivial code, duplicate coverage across test
+levels, or tests of framework/library behavior. Prefer updating obsolete tests
+over adding parallel new tests; when a change makes existing tests obsolete, the
+test task lists those files for update or removal. Every test task states an
+approximate expected test count (`~N`) as a ceiling signal, not a target to hit.
+
 ### Test Task Naming Convention
 
 | Element | Convention | Example |
@@ -563,7 +599,7 @@ Applies when `tests_enabled: true` (see Test Preference Flags). Every phase then
 - **Requires UX/DX Review**: false
 
 ## Objective
-Write comprehensive tests for all Phase {N} implementations.
+Write focused tests for the required Phase {N} behaviors and contracts.
 
 ## Context
 This task creates tests for the following implementation tasks:
@@ -573,6 +609,11 @@ This task creates tests for the following implementation tasks:
 
 Tests are designed from acceptance criteria, not implementation details.
 
+**Approximate Expected Test Count**: ~N (ceiling signal, not a target)
+
+**Obsolete Tests to Update or Remove**:
+- `{path/to/existing_test}` — {update/remove and why, or NONE}
+
 ## Test Specifications
 
 ### Tests for Task {NN}: {Task Name}
@@ -580,11 +621,10 @@ Tests are designed from acceptance criteria, not implementation details.
 **Source File(s)**: `{path/to/implementation/file}`
 **Test File**: `{path/to/test/file}`
 
-| Test Name | Type | Input | Expected Output | Validates |
-|-----------|------|-------|-----------------|-----------|
-| `test_{name}_success` | unit | {valid input} | {expected result} | {acceptance criterion} |
-| `test_{name}_invalid_input` | unit | {invalid input} | {error/rejection} | {error handling criterion} |
-| `test_{name}_edge_case` | unit | {edge case} | {expected behavior} | {edge case criterion} |
+| Behavior / Contract | Coverage Level | Input | Expected Output | Validates |
+|---------------------|----------------|-------|-----------------|-----------|
+| {acceptance behavior} | unit/integration | {representative input} | {observable result} | {acceptance criterion} |
+| {critical boundary/error behavior, when meaningful} | unit/integration | {boundary/error input} | {observable result} | {acceptance criterion or risk} |
 
 **Mocking Requirements**:
 - `{dependency}`: {mock approach}
@@ -600,10 +640,10 @@ Tests are designed from acceptance criteria, not implementation details.
 
 ## Files to Change
 
-| Test File | Action | Tests | For Task |
-|-----------|--------|-------|----------|
-| `{path/to/test_file_1}` | Create/Modify | {N} tests | Task {NN} |
-| `{path/to/test_file_2}` | Create/Modify | {N} tests | Task {NN} |
+| Test File | Action | Expected Tests | For Task |
+|-----------|--------|----------------|----------|
+| `{path/to/test_file_1}` | Create/Modify/Remove | ~N tests | Task {NN} |
+| `{path/to/test_file_2}` | Create/Modify/Remove | ~N tests | Task {NN} |
 
 Only the test files in this table are writable. Production files remain owned by
 their implementation tasks.
@@ -656,6 +696,7 @@ branches in a concrete task file.
 - Use descriptive test names that explain the scenario
 - Each test should test ONE behavior
 - Derive test cases from acceptance criteria in implementation tasks
+- Treat the approximate expected count as a ceiling signal, not a quota
 - Do not modify production files to make a test pass; return a product defect to
   the owning implementation task.
 ```
@@ -676,11 +717,10 @@ When creating test tasks, derive test specs from implementation task acceptance 
 ```markdown
 ### Tests for Task 04: Auth Handler
 
-| Test Name | Type | Input | Expected | Validates |
-|-----------|------|-------|----------|-----------|
-| `test_login_success` | unit | `{email: "user@test.com", password: "valid123"}` | 200, JWT token | "returns JWT on valid credentials" |
-| `test_login_invalid_password` | unit | `{email: "user@test.com", password: "wrong"}` | 401, `INVALID_CREDENTIALS` | "returns 401 on invalid password" |
-| `test_login_missing_email` | unit | `{password: "valid123"}` | 400, `EMAIL_REQUIRED` | "returns 400 if email missing" |
+| Behavior / Contract | Coverage Level | Input | Expected | Validates |
+|---------------------|----------------|-------|----------|-----------|
+| Valid credentials produce a token | integration | `{email: "user@test.com", password: "valid123"}` | 200, JWT token | "returns JWT on valid credentials" |
+| Invalid or missing credentials are rejected with the contracted response | integration | representative invalid-password and missing-email cases | 401/400 with contracted codes | both rejection criteria without duplicating lower-level coverage |
 ```
 
 ### Test Task Dependencies
@@ -909,97 +949,51 @@ Key terms used in this specification follow RFC 2119:
 - `[-]` - Blocked
 - `[!]` - Needs Attention
 
+### `PLAN_FIX` Mode
+
+`PLAN_FIX` is the authoritative correction mode for Phase 3.5 plan-review
+verdicts. Its input is the complete verdict: every blocking category-A issue and
+every required category-B amendment, plus the affected MASTER_PLAN and task-file
+paths.
+
+**Contract**: Make the minimal diff; apply every listed category-A fix and
+category-B amendment. NO new normative assertions, spec sections, or pinned
+literals may be added. Preserve completed statuses and all unrelated plan text.
+Return a changed-lines manifest (`file → line ranges`) so re-review can scope
+itself to the changed text and directly referenced context.
+
+Read only the files needed to apply the listed findings. Reject missing or
+contradictory findings instead of inventing requirements. This mode never turns
+review feedback into a broader re-planning pass.
+
 ### `PROGRESS_UPDATE` Mode
 
-`PROGRESS_UPDATE` is the only Task Planner mode authorized to record execution
-progress. It is a narrow state transition, not a planning pass: it updates status
-and supplied evidence after a quality gate without changing what any task means.
+`PROGRESS_UPDATE` is the only Task Planner mode authorized to record routine
+execution progress. Its input is one feature directory plus a batch of status
+updates (`phase/task → new status`) and one gate outcome with its evidence line.
 
 #### Required Invocation Payload
 
 ```markdown
 **MODE**: PROGRESS_UPDATE
-**MASTER PLAN**: `.corvus/tasks/<feature>/MASTER_PLAN.md`
-**PHASE**: <exact phase ID and name>
-
-**TASK TRANSITIONS**:
-- `<exact-task-id>`: `<prior status>` -> `<requested status>`
-
-**DEPENDENCY STATUS**:
-- `<exact-task-id>` depends on `<dependency-id>`: `[x]`
-
-**QUALITY GATE**:
-- Status: PASS
-- Mode: STANDARD | ACCEPTANCE-ONLY
-- Test flags: `tests_enabled: <true|false>, tests_deferred: <true|false>`
-- Evidence: <gate report and concrete observations/command output>
-
-**EXECUTION RECORD**:
-- Files changed: <exact task-owned paths>
-- Validation evidence: <commands/inspection performed and results>
-
-**EVIDENCE TASK FILE**: `.corvus/tasks/<feature>/<NN-task>.md` | NONE
-
-**CONTEXT DELTA**: [anchor drift / new-surface notes | NONE]
+**FEATURE DIRECTORY**: `.corvus/tasks/<feature>/`
+**STATUS UPDATES**:
+- `Phase <N>`: `<new status>`
+- `<task-id>`: `<new status>`
+**GATE OUTCOME**: `<gate>: PASS|FAIL — <one evidence line>`
 ```
 
-Every field is required except `EVIDENCE TASK FILE` and `**CONTEXT DELTA**`,
-which default to `NONE`.
-The prior status, dependency state, flags, and gate evidence must match the plan
-and the supplied gate report; do not infer missing evidence.
+**Contract**: Skip the standard batch-read entirely; read only the feature's
+`MASTER_PLAN.md`. Edit ONLY status markers, Progress counts, and the gate-outcome
+log in that file. Make no task-file or CONTEXT.md edits, perform no re-planning,
+and do not read learnings. Apply routine bookkeeping once per phase boundary:
+the orchestrator batches all accumulated task/phase updates into one
+`PROGRESS_UPDATE`, never one dispatch per event.
 
-#### Authorized Files and Fields
-
-The write allowlist contains exactly:
-
-1. The supplied `.corvus/tasks/<feature>/MASTER_PLAN.md`.
-2. When the caller names one, that exact task file in the same feature directory,
-   only to append or update its `## Execution Record` with supplied evidence.
-3. When the caller supplies a `**CONTEXT DELTA**`, the same feature directory's
-   `CONTEXT.md`, only to append one `## Phase [N] Delta` section.
-
-Reject absolute paths, path traversal, a plan not named `MASTER_PLAN.md`, a task
-file whose ID is not in `TASK TRANSITIONS`, or paths outside the one feature
-directory. Reject a `**CONTEXT DELTA**` when the feature directory has no
-CONTEXT.md — this mode appends delta sections, it never creates or restructures
-the artifact. Never edit production, prompt, source, documentation, test, package,
-Git, generated, or user-local files. Do not create a planning file in this mode.
-
-A `**CONTEXT DELTA**` append records anchor drift: Key Anchors in CONTEXT.md are
-approximate after any task edits a file, and the appended `## Phase [N] Delta`
-section preserves the updated positions and newly discovered surfaces for later
-phases.
-
-Within the master plan, update only the named task status rows, the corresponding
-phase status, Quick Reference statuses, progress counts/percentage, Last Updated
-value, and the phase's execution/gate evidence. Keep all mirrored values
-consistent in one edit. During Phase 4 the overall feature remains in progress;
-final completion follows the final-gate workflow.
-
-Preserve task objectives, scope, deliverables, implementation steps, file
-manifests, dependencies, estimates, and acceptance criteria byte-for-byte. Do not
-add, remove, split, or reorder tasks. A requested scope or acceptance change is a
-normal follow-up planning request and must be rejected here.
-
-#### Transition Validation and Rejection
-
-Before editing, read the plan and optional evidence task file, then reject the
-request when any condition below is true:
-
-- A supplied prior status does not match every corresponding plan occurrence.
-- Any `[x]` would change to another status. Completed work never regresses.
-- Completion is requested while a direct or transitive dependency is not `[x]`.
-- Completion is requested without a phase-wide 4b `PASS`, or the supplied gate
-  mode conflicts with the test flags.
-- A phase would be marked `[x]` while any task in it remains incomplete.
-- Evidence is missing, internally inconsistent, or names files outside approved
-  task manifests.
-- The request needs any file or field outside the allowlist above.
-
-On rejection, make no edits and report the exact failed condition. On success,
-report the previous and new states, recalculated counts, evidence recorded, and
-the complete changed-path list so the caller can verify the returned diff before
-advancing.
+Reject path traversal, status regression from `[x]`, an unknown phase/task, a
+phase completion whose tasks are incomplete, or a missing gate evidence line.
+On rejection, make no edits and report the failed condition. On success, return
+one line only: `Progress updated: <feature> <gate> <status> (<complete>/<total>).`
 
 ### Progress Report Format
 
@@ -1071,9 +1065,6 @@ Use the digest (and the CONTEXT.md you create from it) to reference specific fil
 
 ## Guardrails
 {pinned strings to preserve; forbidden substrings for new prose}
-
-## Phase Deltas
-{appended by PROGRESS_UPDATE `**CONTEXT DELTA**` entries: `## Phase N Delta` sections}
 ```
 
 ### Explicit Exclusions
@@ -1088,7 +1079,7 @@ CONTEXT.md never absorbs these — they stay where consumers already read them:
 
 ## TEST PREFERENCE FLAGS
 
-`tests_enabled` and `tests_deferred` arrive via the `**TEST PREFERENCE**` field in the Phase 2 delegation (defaults: `tests_enabled: true`, `tests_deferred: false`). Full flag semantics — the capture question and Phase 4/5 gate behavior — live in the corvus-phase-2 skill; canonical `test_scope` semantics live there too (Test Scope section): planners stamp scope expectations into task validation sections but never plan a full-suite run outside Phase 5a. Planning must encode the following ownership exactly:
+`tests_enabled` and `tests_deferred` arrive via the `**TEST PREFERENCE**` field in the Phase 2 delegation (default when not preselected: `tests_enabled: true`, `tests_deferred: true`). Full flag semantics — the capture question and Phase 4/5 gate behavior — live in the corvus-phase-2 skill; canonical `test_scope` semantics live there too (Test Scope section): planners stamp scope expectations into task validation sections but never plan a full-suite run outside Phase 5a. Planning must encode the following ownership exactly:
 
 | Flags / task type | Writable files and test authoring | Test execution |
 |-------------------|-----------------------------------|----------------|

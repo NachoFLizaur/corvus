@@ -28,17 +28,20 @@ Input ownership rules:
 Deterministic normalization for partial preselection:
 - `tests_enabled: false` implies `tests_deferred: false`; no timing question is needed.
 - `tests_deferred: true` implies `tests_enabled: true`; no generation question is needed.
-- If `tests_enabled: true` is supplied without `tests_deferred`, interactive Corvus asks only for test timing.
-- If `tests_deferred: false` is supplied without `tests_enabled`, interactive Corvus asks only whether tests are enabled.
+- If `tests_enabled: true` is supplied without `tests_deferred`, default to
+  `tests_deferred: true`; do not ask a timing question.
+- A standalone preselected `tests_deferred: false` defaults missing
+  `tests_enabled` to `true`; this preserves the explicit non-deferred plumbing
+  path without exposing it as a user-facing option.
 - Reject the contradictory pair `tests_enabled: false, tests_deferred: true` to the caller for correction; do not invoke task-planner with it.
 
 This table is the canonical flag-combination reference — corvus, corvus-auto, task-planner, and the phase-4/phase-5 skills point here:
 
-| Resolved preference | Flags | Semantics |
-|---------------------|-------|-----------|
-| "Yes (recommended)" | `tests_enabled: true, tests_deferred: false` | Default. Test tasks generated; task files include test sections; tests run at every Phase 4 quality gate |
-| "Yes — at end only" | `tests_enabled: true, tests_deferred: true` | Test tasks and test sections still generated; Phase 4 quality gates run in acceptance-only mode; tests are deferred to Phase 5 final validation |
-| "No — skip tests" | `tests_enabled: false, tests_deferred: false` | No test tasks and no test sections in task files; quality gates always run in acceptance-only mode |
+| Source | Flags | Semantics |
+|--------|-------|-----------|
+| User-facing tests-enabled choice or autonomous default | `tests_enabled: true, tests_deferred: true` | Test tasks and test sections are generated; Phase 4 quality gates run in acceptance-only mode; tests run at Phase 5 final validation |
+| User-facing tests-disabled choice | `tests_enabled: false, tests_deferred: false` | No test tasks and no test sections in task files; quality gates always run in acceptance-only mode |
+| Explicit preselection only (not offered by any question) | `tests_enabled: true, tests_deferred: false` | Plumbing remains supported: test tasks are generated and the existing non-deferred Phase 4 gate semantics are honored |
 
 Pass the complete resolved tuple to task-planner via the fields in the delegation template below.
 
@@ -140,7 +143,7 @@ When the spec-completeness bypass skipped Phase 0a, the `**REQUIREMENTS ANALYSIS
 The PLAN-TYPE CONTEXT above tells task-planner what to generate; on the orchestrator side:
 - **LIGHTWEIGHT**: skip Phase 3.5 (keep it fast) and Phase 5 (phase-level 4b validation is sufficient) — except when `tests_deferred: true`, which makes Phase 5 mandatory (deferred tests must run there)
 - **STANDARD**: full multi-phase workflow, no changes
-- **SPEC_DRIVEN**: specs are presented alongside MASTER_PLAN.md in Phase 3 for approval; expect higher test coverage
+- **SPEC_DRIVEN**: specs are presented alongside MASTER_PLAN.md in Phase 3 for approval; keep test coverage focused on acceptance contracts and meaningful risks
 
 No Plan never reaches these notes because it has already exited through direct delegation.
 
@@ -152,7 +155,7 @@ No Plan never reaches these notes because it has already exited through direct d
 
 **Goal**: Get user approval for the MASTER_PLAN.md created in Phase 2.
 
-This section applies to interactive `corvus` planned work. It is the single plan-approval gate. Choosing High Accuracy Review keeps that approved-plan flow inside Phase 3/3.5; post-review choices are continuations of the same gate, not a second approval phase. `corvus-auto` uses its own auto-approval and mandatory-review route without calling `question()`.
+This section applies to interactive `corvus` planned work. It is the single plan-approval gate. Choosing High Accuracy Review approves the plan and keeps the automatic review loop inside Phase 3/3.5; its terminal outcome is reported without a second approval phase. `corvus-auto` uses its own auto-approval and mandatory-review route without calling `question()`.
 
 **Prerequisites** (verify before proceeding — if any is not met, go back to Phase 2 and invoke task-planner):
 - [ ] Phase 2 is complete
@@ -207,11 +210,13 @@ After presenting the plan summary, call the question tool directly — invoke it
 
 ## Phase 3.5: HIGH ACCURACY PLAN REVIEW (Optional)
 
-**Goal**: Validate plan quality before implementation begins.
+**Goal**: Validate plan quality before implementation begins and automatically resolve review findings within a bounded loop.
 
 **When**: User chose "High Accuracy Review" after Phase 3 approval (prerequisite: Phase 3 complete).
 
-### Invoke plan-reviewer
+High Accuracy Review loops automatically—review → PLAN_FIX → re-review—until `OKAY` or `OKAY_WITH_AMENDMENTS`, or until the second `REJECT` escalates the residual blocking list. Do not ask the user a question between iterations.
+
+### Invoke Plan Reviewer
 
 **DELEGATE TO**: @plan-reviewer
 
@@ -223,6 +228,9 @@ This is the canonical sender template for the plan-reviewer dispatch. It mirrors
 **MASTER PLAN**: `.corvus/tasks/[feature]/MASTER_PLAN.md`
 **TASK FILES**: `.corvus/tasks/[feature]/*.md`
 **CONTEXT FILE**: `.corvus/tasks/[feature]/CONTEXT.md` (discovery context — read when present; may be absent on legacy plans)
+**REVIEW ROUND**: [1 | re-review]
+**CHANGED-LINES MANIFEST**: [NONE for round 1 | exact manifest returned by PLAN_FIX]
+**PREVIOUS REVIEW**: [NONE for round 1 | prior verdict and findings]
 
 **TESTS_ENABLED**: [true/false] (from the resolved Phase 2 input tuple)
 **TESTS_DEFERRED**: [true/false] (from the resolved Phase 2 input tuple)
@@ -245,90 +253,64 @@ This is the canonical sender template for the plan-reviewer dispatch. It mirrors
 - Verify user requirements traceability
 - Detect cross-task file conflicts
 - Provide evidence citations for every PASS sub-check
-- Render binary OKAY/REJECT verdict
+- Classify every finding as category A, B, or C and render `OKAY`, `OKAY_WITH_AMENDMENTS`, or `REJECT`
+- Report category-B and category-C findings exhaustively in round 1
+- On re-review, apply the Iteration Contract to the changed-lines manifest
 
 **MUST NOT DO**:
 - Modify any files
 - Suggest alternative approaches (unless current approach is broken)
 - Reject for style preferences
-- Cite more than 3 blocking issues
+- Cite more than 3 category-A findings or combine defects into omnibus issue groups
 - Claim verification without showing glob/grep output
 
 **REPORT BACK**:
-- **PLAN REVIEW GATE STATUS**: OKAY / REJECT
+- **PLAN REVIEW GATE STATUS**: OKAY / OKAY_WITH_AMENDMENTS / REJECT
 - Sub-checklist results for all 4 criteria (with evidence)
 - Weasel word scan results
 - Cross-task file conflict table
 - User requirements traceability table
-- Blocking issues (if REJECT, max 3)
-- Non-blocking notes (optional)
+- Blocking issues (category A; if REJECT, at most 3, one defect each)
+- Required amendments (category B; exhaustive in round 1)
+- Notes (category C; exhaustive in round 1 and non-blocking)
 ```
 
-### Decision Point after Phase 3.5
+### PLAN_FIX Dispatch
 
-**If OKAY**:
-Present the review summary to the user and ask for confirmation before proceeding:
+Dispatch every plan correction to task-planner with `MODE: PLAN_FIX`. `agent/task-planner.md` is the authoritative owner of PLAN_FIX behavior; this skill defines only the sender template.
+
 ```markdown
-## Plan Review: OKAY ✅
+**TASK**: Apply targeted plan-review fixes for [feature name]
+**MODE**: PLAN_FIX
 
-The plan passed high-accuracy review. All criteria met.
-
-**Review Summary**:
-[Paste plan-reviewer's summary of the 4 criteria here]
-
-**Non-blocking Notes** (if any):
-[Paste any non-blocking notes from plan-reviewer]
-```
-
-Then call the question tool directly (do not write the options as text):
-
-- question: "Plan review passed. Ready to begin implementation?"
-- header: "Review Complete"
-- options:
-  1. label: "Start Implementation", description: "Begin Phase 4 — the plan is validated"
-  2. label: "Re-run Review", description: "Run the high accuracy review again"
-
-Routing: "Start Implementation" → Phase 4 · "Re-run Review" → Phase 3.5 again
-
-**If REJECT**:
-1. Invoke task-planner with rejection feedback:
-```markdown
-**TASK**: Fix plan based on plan-reviewer feedback
-**MODE**: LEARNING
-**TRIGGER**: FAILURE_ANALYSIS
-
-**REJECTION FEEDBACK**:
-[Paste plan-reviewer's blocking issues here]
+**REVIEW VERDICT**: [REJECT | OKAY_WITH_AMENDMENTS]
+**BLOCKING FIXES (CATEGORY A)**:
+[Paste every listed category-A finding and suggested fix, or NONE]
+**REQUIRED AMENDMENTS (CATEGORY B)**:
+[Paste every listed category-B finding and amendment, or NONE]
 
 **MASTER PLAN**: `.corvus/tasks/[feature]/MASTER_PLAN.md`
 **TASK FILES**: `.corvus/tasks/[feature]/*.md`
 
 **MUST DO**:
-- Address each blocking issue cited by plan-reviewer
-- Update affected task files
-- Update MASTER_PLAN.md if needed
+- Follow `agent/task-planner.md` §`PLAN_FIX` Mode exactly; it owns the
+  correction constraints and output contract
 
 **MUST NOT DO**:
 - Change completed task statuses
-- Rewrite the entire plan (targeted fixes only)
+- Rewrite the entire plan
+- Expand beyond the task-planner PLAN_FIX contract
+
+**REPORT BACK**:
+- Summary of each applied fix and amendment
+- The task-planner PLAN_FIX result
 ```
 
-2. Present the updated plan to the user:
-```markdown
-## Plan Updated After Review
+### Verdict Handling and Round Budget
 
-The plan-reviewer found [N] blocking issue(s). Task-planner has addressed them:
+- `OKAY`: present the terminal review summary, then proceed to Phase 4 without another approval question.
+- `OKAY_WITH_AMENDMENTS`: dispatch PLAN_FIX with every category-B amendment, present the terminal review and amendment summary, then proceed to Phase 4 without re-review or another approval question.
+- First `REJECT`: dispatch PLAN_FIX with every listed category-A fix and category-B amendment, then automatically re-invoke plan-reviewer with the changed-lines manifest and previous review. Do not ask the user whether to re-run or start implementation.
+- Second `REJECT`: apply the round-budget rule below; do not dispatch another fix or enter Phase 4.
 
-### Issues Fixed
-1. **[Issue title]**: [How it was fixed]
-```
-
-Then call the question tool directly (do not write the options as text):
-
-- question: "Plan has been updated based on review feedback. How would you like to proceed?"
-- header: "Next Step"
-- options:
-  1. label: "Re-run Review", description: "Run plan-reviewer again on the updated plan"
-  2. label: "Start Implementation", description: "Begin Phase 4 with the current plan"
-
-Routing: "Re-run Review" → Phase 3.5 again · "Start Implementation" → Phase 4
+After the second REJECT, stop the loop: interactive `corvus` escalates to the user with the residual blocking list; `corvus-auto` records the unresolved review, halts the feature, and reports the residual blocking list clearly.

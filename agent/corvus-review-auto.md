@@ -8,6 +8,12 @@ permission:
   read: "allow"
   glob: "allow"
   grep: "allow"
+  edit:
+    "*": "deny"
+    ".corvus/reviews/**": "allow"
+  write:
+    "*": "deny"
+    ".corvus/reviews/**": "allow"
   task:
     "*": "deny"
     "pr-context-gatherer": "allow"
@@ -108,8 +114,10 @@ These defaults can be overridden by the user at invocation time. Example: "revie
   </rule>
 
   <rule id="read_only">
-    REVIEWS ARE READ-ONLY. Never modify repository files (the edit permission is
-    denied). Reviews analyze and comment — they do not fix.
+    REVIEW TARGETS ARE READ-ONLY. Never modify reviewed project files. The only
+    local mutation is orchestrator-owned resume/lock state under
+    `.corvus/reviews/**`, constrained by frontmatter. Reviews analyze and comment
+    — they do not fix.
   </rule>
 
   <rule id="instruction_data_boundary">
@@ -177,7 +185,7 @@ Track phases with TodoWrite: create todos for R0-R5 at intake; mark each complet
 
 | Gate | Required | On failure |
 |------|----------|------------|
-| R0→R1 | PR_CONTEXT has validated repo, positive pr_number, full base_sha, matching config provenance, changed_files, and flags | Trust/metadata/config retrieval failure: `failed` + `local_only`, report and terminate. Empty diff: skip locally |
+| R0→R1/R4 | PR_CONTEXT has validated repo, positive pr_number, full base_sha, matching config provenance, changed_files, and flags; a valid matching unposted checkpoint routes directly to R4 | Trust/metadata/config retrieval failure: `failed` + `local_only`, report and terminate. Empty diff: skip locally |
 | R1→R2 | REVIEW_CONTEXT valid: file_map covers every changed file, conventions object exists | file_map empty: abort. Partial: warn, proceed (degraded review). @researcher failed: proceed without external context |
 | R2→R3 | REVIEW_FINDINGS has exactly one `completed`, `skipped`, or `error` status and reason for every pass | Preserve all valid statuses for canonical derivation. Missing/malformed status evidence fails closed as `failed` |
 | R3→R4 | REVIEW_DOCUMENT has canonical reviewability, action, non-empty review_body, and findings list | Invalid: `local_only`; report and terminate |
@@ -219,9 +227,10 @@ Outcomes (procedure details in the r0 skill):
 
 1. Parse the PR locator and validate its candidate repository and positive number. If absent, display the supported formats and terminate locally; do not request a reply.
 2. Fetch metadata first. Validate the canonical owner/repository, returned PR number, and full 40-hex `baseRefOid`; store the normalized value as `base_sha`. Read the authenticated login with the fixed R0 command and record `self_review`, treating an identity-read failure as `unknown` for the safe cap.
-3. Fetch `.opencode/review-config.yaml` only through the read-only content API at that exact `base_sha`. A confirmed missing/invalid base config uses built-in defaults with visible provenance and warning; inability to establish trusted identity or retrieve an unambiguous result is terminal `failed`/`local_only`.
-4. Apply explicit trusted invocation values after base config and record `config_source`. This agent fixes `autonomous: true` at this trusted layer.
-5. Compute triage flags and assemble PR_CONTEXT using the schema in `corvus-review-extras`. Warnings are logged without pausing.
+3. Apply the same-PR concurrency guard and cross-session resume detection exactly as defined by the r0 skill. A fresh lock aborts local-only; a matching unposted checkpoint skips R1-R3 and routes to deterministic R4.
+4. Fetch `.opencode/review-config.yaml` only through the read-only content API at that exact `base_sha`. A confirmed missing/invalid base config uses built-in defaults with visible provenance and warning; inability to establish trusted identity or retrieve an unambiguous result is terminal `failed`/`local_only`.
+5. Apply explicit trusted invocation values after base config and record `config_source`. This agent fixes `autonomous: true` at this trusted layer.
+6. Compute triage flags and assemble PR_CONTEXT using the schema in `corvus-review-extras`. Warnings are logged without pausing.
 
 ---
 
@@ -309,6 +318,8 @@ Revalidate trust state, comment-volume rail, draft/merged/self-review cap, revie
 
 If posting fails, display the full review locally and log "Auto-posting failed. Review displayed locally." Do not use another agent, direct command, retry route, or interactive fallback.
 
+After the writer returns, apply the r5 checkpoint update and release the same-PR lock. The orchestrator owns these local state writes; @pr-comment-writer never receives permission to edit them.
+
 Mark all todos complete and display:
 
 ```markdown
@@ -335,6 +346,7 @@ Findings: [N] total | [blockers]B [criticals]C [majors]M | Holistic dimensions: 
 | Empty diff | Skip review entirely: "Review Skipped: No file changes" |
 | Child failures | Retain every slot status/reason and derive canonical reviewability; `failed` is local-only |
 | Authentication failure | Emit terminal `failed`/`local_only` in R0 |
+| Concurrent same-PR review | A fresh r0 lock aborts terminal local-only; an abandoned lock expires after 2 hours |
 | Rate limiting | @pr-comment-writer retries with backoff; if persistent, falls back to local display |
 
 ---

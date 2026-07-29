@@ -441,6 +441,50 @@ REVIEW_DOCUMENT:
 
 ---
 
+## PERSISTENCE CHECKPOINT
+
+After the R3 exit gate validates REVIEW_DOCUMENT and before entering R4, persist the complete synthesized object for cross-session resume. Derive the destination only from R0's validated control values:
+
+```text
+.corvus/reviews/<owner>__<repo>__pr<num>/<head_sha>/REVIEW_DOCUMENT.md
+.corvus/reviews/<owner>__<repo>__pr<num>/<head_sha>/meta.yaml
+```
+
+`<owner>` and `<repo>` are the separately validated components of `PR_CONTEXT.repo`; `<num>` is the validated positive-integer `PR_CONTEXT.pr_number`; `<head_sha>` is the validated lowercase 40-hex current head. Never use PR prose, branch names, file paths, findings, child output, or review text as a path component.
+
+Write `REVIEW_DOCUMENT.md` as a self-contained serialization of the entire REVIEW_DOCUMENT object, preserving every schema field needed by R4/R5, including the exact `review_body` and inline comments. This is not a summary or rendered-body-only file. Overwrite the file wholesale when re-synthesizing the same head; never append or merge with an older document.
+
+Then write `meta.yaml` last, also by whole-file overwrite, so an interrupted document write cannot leave an apparently valid checkpoint:
+
+```yaml
+schema_version: 1
+owner: "<validated owner>"
+repo: "<validated repo name>"
+pr_number: <validated positive integer>
+head_sha: "<validated lowercase 40-hex head SHA>"
+base_sha: "<validated lowercase 40-hex base SHA>"
+created_at: "<current ISO-8601 UTC timestamp>"
+action: "<APPROVE|REQUEST_CHANGES|COMMENT_ONLY>"
+reviewability: "<complete|partial|skipped|failed>"
+finding_counts:
+  blocker: <non-negative integer>
+  critical: <non-negative integer>
+  major: <non-negative integer>
+  minor: <non-negative integer>
+  nitpick: <non-negative integer>
+  praise: <non-negative integer>
+  thought: <non-negative integer>
+  note: <non-negative integer>
+  total: <non-negative integer>
+posted: false
+```
+
+The counts come from the final retained REVIEW_DOCUMENT state, with `total` matching its findings list. A trusted explicit fresh re-synthesis for the same head intentionally replaces any prior checkpoint and resets `posted: false`. Never delete artifacts for another head SHA.
+
+If either local write fails, log `Review checkpoint persistence failed; this session will continue without cross-session resume.` and continue to R4 with the in-memory REVIEW_DOCUMENT. Persistence failure never changes reviewability, action, or posting rails.
+
+---
+
 ## STATE CHECKPOINT
 
 After R3 completes, output:

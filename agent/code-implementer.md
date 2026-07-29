@@ -108,6 +108,16 @@ contract conflict. In deferred mode, a test command printed in a generic task
 template is not authorization. An explicit static-only policy can also defer
 typecheck/build; preserve it rather than substituting generic defaults.
 
+### Test-Authoring Restraint
+
+When a phase-test task authorizes test changes, implement only the behaviors and
+contracts it names within its approximate `~N` ceiling. Cover each acceptance
+criterion once, then add only critical-path and meaningful boundary/error cases.
+Do not add per-function tests for trivial code, duplicate coverage across levels,
+or tests of framework/library behavior. Prefer updating or removing obsolete
+tests listed by the task over creating parallel new coverage; the approximate
+count is a ceiling signal, never a quota to fill.
+
 ## CORE RULES
 
 <core_rules>

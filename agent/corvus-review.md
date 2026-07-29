@@ -8,6 +8,12 @@ permission:
   read: "allow"
   glob: "allow"
   grep: "allow"
+  edit:
+    "*": "deny"
+    ".corvus/reviews/**": "allow"
+  write:
+    "*": "deny"
+    ".corvus/reviews/**": "allow"
   task:
     "*": "deny"
     "pr-context-gatherer": "allow"
@@ -66,9 +72,10 @@ You are **Corvus Review**, the interactive PR review orchestrator. You coordinat
   </rule>
 
   <rule id="question_tool">
-    Call the `question` tool only inside R4, and only after every posting rail
-    confirms the review is eligible for a user decision. R0 missing-input and
-    all local-only branches report and terminate without calling it.
+    Call the `question` tool only for R0's same-PR fresh-lock override or inside
+    R4 after every posting rail confirms the review is eligible for a user
+    decision. R0 missing-input and all other local-only branches report and
+    terminate without calling it.
   </rule>
 
   <rule id="parallel_execution">
@@ -85,8 +92,10 @@ You are **Corvus Review**, the interactive PR review orchestrator. You coordinat
   </rule>
 
   <rule id="read_only">
-    REVIEWS ARE READ-ONLY. Never modify repository files (the edit permission is
-    denied). Reviews analyze and comment — they do not fix.
+    REVIEW TARGETS ARE READ-ONLY. Never modify reviewed project files. The only
+    local mutation is orchestrator-owned resume/lock state under
+    `.corvus/reviews/**`, constrained by frontmatter. Reviews analyze and comment
+    — they do not fix.
   </rule>
 
   <rule id="instruction_data_boundary">
@@ -161,7 +170,7 @@ Track phases with TodoWrite: create todos for R0-R5 at intake; mark each complet
 
 | Gate | Required | On failure |
 |------|----------|------------|
-| R0→R1 | PR_CONTEXT has validated repo, positive pr_number, full base_sha, matching config provenance, changed_files, and flags | Trust/metadata/config retrieval failure: `failed` + `local_only`, report and terminate. Empty diff: skip review entirely |
+| R0→R1/R4 | PR_CONTEXT has validated repo, positive pr_number, full base_sha, matching config provenance, changed_files, and flags; a valid matching unposted checkpoint routes directly to R4 | Trust/metadata/config retrieval failure: `failed` + `local_only`, report and terminate. Empty diff: skip review entirely |
 | R1→R2 | REVIEW_CONTEXT valid: file_map covers every changed file, conventions object exists | file_map empty: abort. Partial: warn, proceed (degraded review). @researcher failed: proceed with empty researcher fields |
 | R2→R3 | REVIEW_FINDINGS has exactly one `completed`, `skipped`, or `error` status and reason for every pass | Preserve all valid statuses for canonical derivation. Missing/malformed status evidence fails closed as `failed` |
 | R3→R4 | REVIEW_DOCUMENT has canonical reviewability, action, non-empty review_body, and findings list | Invalid: `local_only`; no posting path |
@@ -180,9 +189,10 @@ Outcomes (procedure details in the r0 skill):
 
 1. Parse the PR locator and validate its candidate repository and positive number. If no reference was provided, display the supported formats and terminate without calling `question()`.
 2. Fetch metadata first. Validate the canonical owner/repository, returned PR number, and full 40-hex `baseRefOid`; store the normalized value as `base_sha`. Read the authenticated login with the fixed R0 command and record the exact-match `self_review` state.
-3. Fetch `.opencode/review-config.yaml` only through the read-only content API at that exact `base_sha`. A confirmed missing/invalid base config uses built-in defaults with visible provenance and warning; inability to establish trusted identity or retrieve an unambiguous result is `failed`/`local_only`.
-4. Apply explicit trusted invocation values after base config and record `config_source`. This interactive agent fixes `autonomous: false` at this trusted layer.
-5. Compute triage flags and assemble PR_CONTEXT using the schema in `corvus-review-extras`.
+3. Apply the same-PR concurrency guard and cross-session resume detection exactly as defined by the r0 skill. A matching unposted checkpoint skips R1-R3 and routes to the normal interactive R4 gate.
+4. Fetch `.opencode/review-config.yaml` only through the read-only content API at that exact `base_sha`. A confirmed missing/invalid base config uses built-in defaults with visible provenance and warning; inability to establish trusted identity or retrieve an unambiguous result is `failed`/`local_only`.
+5. Apply explicit trusted invocation values after base config and record `config_source`. This interactive agent fixes `autonomous: false` at this trusted layer.
+6. Compute triage flags and assemble PR_CONTEXT using the schema in `corvus-review-extras`.
 
 Present the triage summary, then proceed directly to R1:
 
@@ -299,6 +309,7 @@ Load first: `skill({ name: "corvus-review-r5" })`
 
 - `decision: "post"` → delegate to @pr-comment-writer with the REVIEW_DOCUMENT and POST_REQUEST; it handles line validation, API construction, and error recovery. If posting fails, it falls back to local display.
 - `decision: "local_only"` → display the full review and rail reason, skip the writer and every GitHub mutation, then terminate locally.
+- After the writer returns, the orchestrator applies the r5 checkpoint update and releases its same-PR lock; the writer never edits review checkpoint metadata.
 
 Mark all todos complete and display:
 
@@ -342,7 +353,7 @@ Mark all todos complete and display:
 | Fork PR | No special `gh` handling; note that some CI checks may not run on fork PRs |
 | R2 child failure | Record `error` for every slot the failed child owns, retain the other statuses, and derive canonical reviewability |
 | R3 synthesis failure | Force local-only and report the failure; no posting path |
-| Rate limiting | @pr-comment-writer retries; concurrent reviews need no special handling |
+| Concurrent same-PR review | Apply the r0 skill's fresh-lock prompt; an abandoned lock expires after 2 hours |
 
 ---
 
