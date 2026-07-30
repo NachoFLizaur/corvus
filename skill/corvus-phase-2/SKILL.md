@@ -113,6 +113,7 @@ Incorporate these into MASTER_PLAN.md and all relevant task files. Do not substi
 - Package manager: [npm/pnpm/yarn/pip/poetry]
 - Available scripts: [list from package.json or Makefile]
 - Command prefix: [e.g., ".venv/bin/python" or "pnpm"]
+- Validation-command semantics probe: [exact planning-time probe, working directory, package-manager version, and observed argument-forwarding/filter behavior]
 
 **MUST DO**:
 - Create MASTER_PLAN.md with phases, dependencies, and progress tracking
@@ -120,6 +121,7 @@ Incorporate these into MASTER_PLAN.md and all relevant task files. Do not substi
 - Create CONTEXT.md from the DISCOVERY DIGEST (schema: task-planner)
 - Read `.corvus/tasks/learnings.md` (when present) and apply relevant entries to task design
 - Include validation commands for each task using the project environment above (venv path, package manager) — not bare `python`/`pytest`/`npm`
+- Require smoke-test evidence that every targeted-test command actually filters; a nonexistent-file probe (or equivalent) must fail/filter rather than run the whole suite
 - Estimate effort for each task and phase
 - Group related tasks into logical phases
 - Respect `tests_enabled`: generate test tasks only when `true` (regardless of `tests_deferred` — deferred mode still generates test tasks)
@@ -247,7 +249,7 @@ This is the canonical sender template for the plan-reviewer dispatch. It mirrors
 
 **MUST DO**:
 - Run 3-pass review (Structural → Completeness & Reference → Adversarial)
-- Verify ALL file paths via glob (not spot-check)
+- Verify ALL file paths without spot-checking: read-tool directory listings for `.corvus/` because glob does not traverse hidden directories; glob for non-hidden product paths
 - Run weasel word detection via grep
 - Check `tests_enabled` compliance
 - Verify user requirements traceability
@@ -262,7 +264,7 @@ This is the canonical sender template for the plan-reviewer dispatch. It mirrors
 - Suggest alternative approaches (unless current approach is broken)
 - Reject for style preferences
 - Cite more than 3 category-A findings or combine defects into omnibus issue groups
-- Claim verification without showing glob/grep output
+- Claim verification without showing read-directory/glob/grep output
 
 **REPORT BACK**:
 - **PLAN REVIEW GATE STATUS**: OKAY / OKAY_WITH_AMENDMENTS / REJECT
@@ -273,6 +275,7 @@ This is the canonical sender template for the plan-reviewer dispatch. It mirrors
 - Blocking issues (category A; if REJECT, at most 3, one defect each)
 - Required amendments (category B; exhaustive in round 1)
 - Notes (category C; exhaustive in round 1 and non-blocking)
+- On re-review: `FIX_LOCATED_REJECT: true|false` with changed-range evidence
 ```
 
 ### PLAN_FIX Dispatch
@@ -310,7 +313,16 @@ Dispatch every plan correction to task-planner with `MODE: PLAN_FIX`. `agent/tas
 
 - `OKAY`: present the terminal review summary, then proceed to Phase 4 without another approval question.
 - `OKAY_WITH_AMENDMENTS`: dispatch PLAN_FIX with every category-B amendment, present the terminal review and amendment summary, then proceed to Phase 4 without re-review or another approval question.
-- First `REJECT`: dispatch PLAN_FIX with every listed category-A fix and category-B amendment, then automatically re-invoke plan-reviewer with the changed-lines manifest and previous review. Do not ask the user whether to re-run or start implementation.
-- Second `REJECT`: apply the round-budget rule below; do not dispatch another fix or enter Phase 4.
+- First budget-counting `REJECT`: dispatch PLAN_FIX with every listed category-A fix and category-B amendment, then automatically re-invoke plan-reviewer with the changed-lines manifest and previous review. Do not ask the user whether to re-run or start implementation.
+- Second budget-counting `REJECT`: apply the round-budget rule below; do not dispatch another fix or enter Phase 4.
 
-After the second REJECT, stop the loop: interactive `corvus` escalates to the user with the residual blocking list; `corvus-auto` records the unresolved review, halts the feature, and reports the residual blocking list clearly.
+**Amendment-verification carve-out (exactly once per feature)**: when a re-review's
+blocking findings are located exclusively in lines changed by the immediately
+previous PLAN_FIX (`FIX_LOCATED_REJECT: true` with range evidence), the first such
+verdict does not increment the REJECT budget. Dispatch one scoped PLAN_FIX limited
+to those findings, then one further scoped re-review. If that next re-review is
+again exclusively fix-located, it increments normally; the carve-out is consumed
+and cannot reset. Any blocking finding in unchanged or merely referenced context
+increments normally. This is the only exception to the two-REJECT ceiling.
+
+After the second budget-counting REJECT, stop the loop: interactive `corvus` escalates to the user with the residual blocking list; `corvus-auto` records the unresolved review, halts the feature, and reports the residual blocking list clearly.

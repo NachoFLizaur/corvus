@@ -28,9 +28,9 @@ description: Completion - success extraction and final summary
 - ...
 
 **IMPLEMENTATION SUMMARY**:
-- Total files created/modified: [count]
+- Changed-file manifest: [pointer to verified manifest]
 - Total effort: [actual vs estimated]
-- Iterations needed: [count across all phases]
+- Remediation history: [pointer to progress/gate records]
 - Key challenges overcome: [list]
 
 **MUST DO**:
@@ -62,22 +62,22 @@ Present final summary to user:
 
 ### Changes Made
 
-**Files Modified** ([N] files):
+**Files Modified**:
 - `[file1]` - [summary of changes]
 - `[file2]` - [summary of changes]
 
-**Files Created** ([N] files):
+**Files Created**:
 - `[file1]` - [purpose]
 
 ### Validation Results
 
 When `tests_enabled: true, tests_deferred: false`:
-- [x] All tests passing ([N] tests)
+- [x] Suite result verified — re-derive from the recorded validation command
 - [x] Build successful
 - [x] All acceptance criteria met
 
 When `tests_enabled: true, tests_deferred: true`:
-- [x] All tests passing ([N] tests — run in Phase 5, deferred from Phase 4)
+- [x] Deferred suite result verified — re-derive from the Phase 5 command
 - [x] Build successful
 - [x] All acceptance criteria met
 
@@ -106,9 +106,23 @@ When `tests_enabled: false`:
 2. Mark all todos as complete
 3. Provide summary to user
 
+### Review Thread Disposition
+
+When the completed work remediates a PR review, disposition every finding on the
+PR before delivery is complete. Reply to fixed findings with the fixing commit
+reference; reply to declined findings with the rationale. A declined finding with
+no posted reply is unfinished work. Verify all replies through the existing `gh`
+delivery allowlists; delegate posting through the delivery flow rather than adding
+writer permissions here.
+
 ### Git Delivery Checklist (when delivery is selected)
 
-Whenever the diff changes after the PR body was written (new commit, deletion, or retarget), re-derive every factual PR-body claim — file counts, test counts, and scope statements — from the current diff before push or PR update; never hand-patch the body incrementally.
+PR bodies are terse records: prose carries no literal counts or superlatives.
+Express machine-checkable claims as assertions or re-derivation commands (for
+example, “re-derive from the suite”) and point to validation evidence instead of
+copying it. Whenever the diff changes after the PR body was written (new commit,
+deletion, or retarget), re-derive every factual PR-body claim from the current diff
+before push or PR update; never hand-patch the body incrementally.
 
 - [ ] Revalidate the current base, head, and complete diff immediately before delivery.
 - [ ] Generate the PR body from that current diff and its final validation evidence.

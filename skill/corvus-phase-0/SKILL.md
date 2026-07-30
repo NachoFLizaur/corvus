@@ -133,6 +133,12 @@ Limit additional Phase 0b discovery passes to 2. At the cap, document unresolved
 
 This step runs after `REQUIREMENTS_CLEAR` from Phase 0a or Phase 0b, or directly via the Spec-Completeness Bypass (Pre-0a). The orchestrator owns interactive, autonomous, and preselected input handling.
 
+Before selecting a planned route, compare proposed apparatus with the user's
+stated scope. For disagreement/drift findings, evaluate deletion of one duplicate
+representation first. If apparatus still projects beyond roughly 10x the stated
+scope, route to the orchestrator's scope-amplification gate: interactive Corvus
+asks for explicit confirmation; Corvus Auto halts and reports the mismatch.
+
 | Plan Type | Next route |
 |-----------|------------|
 | No Plan | Delegate directly to the correct specialist. Do not load Phase 2, invoke task-planner, create a master plan, or ask test preferences. |

@@ -107,7 +107,7 @@ For `partial` and `skipped`, the structured `body` must include the exact immuta
 
 ## Step 4: Delegate and Reconcile One Authorized Post
 
-Make the initial delegation to `@pr-comment-writer` with only the structured POST_REQUEST. The delegation message is exactly one line followed by the fenced POST_REQUEST block, with no TASK, MUST, REPORT, PR-number, event, or other prose outside it. Record the dispatch time as the start of this run's posting window and retain the POST_REQUEST bytes unchanged until Step 4 settles:
+Make the initial delegation to `@pr-comment-writer` with only the structured POST_REQUEST. The delegation message is exactly one line followed by the fenced POST_REQUEST block, with no TASK, MUST, REPORT, PR-number, event, or other prose outside it. Immediately before dispatch, run `date -u +%Y-%m-%dT%H:%M:%SZ` byte-exact and record its exact output as the start of this run's posting window; never estimate or fabricate it. Retain the POST_REQUEST bytes unchanged until Step 4 settles:
 
 ````markdown
 Post the authorized review. The complete input is the following POST_REQUEST.
@@ -159,6 +159,14 @@ Classify every writer return into exactly one of these three states:
    - If the listing fails, is incomplete, yields multiple matches, lacks a usable URL for a match, or otherwise cannot establish exactly `posted` or `not_posted`, terminate local-only with `remote_state: unknown`, display the full review, and do not re-dispatch.
 3. **Retry bound exhausted** — after the mode's verified-not-posted re-dispatches are consumed, terminate local-only with `remote_state: not_posted` and display the full review.
 
+When the writer path is exhausted by retry bounds or an unknown/ambiguous remote state, the terminal local-only output MUST include the persisted `.corvus/reviews/<owner>__<repo>__pr<num>/<head_sha>/REVIEW_DOCUMENT.md` path and one copy-pasteable user-run command. Map the already capped action to the matching flag (`APPROVE` → `--approve`, `REQUEST_CHANGES` → `--request-changes`, `COMMENT_ONLY` → `--comment`); for COMMENT_ONLY the exact shape is:
+
+```bash
+gh pr review <pr_number> --repo <owner>/<repo> --comment --body-file <path>
+```
+
+This is a terminal manual handoff, not an orchestrator fallback route: never execute it, never change the capped event, and never re-enter writer recovery after displaying it. Ensure the persisted REVIEW_DOCUMENT path exists and contains the full review body before offering the command. R0's marker/checkpoint reconciliation records a later successful manual post on the next round.
+
 A verified-not-posted re-dispatch cannot create a duplicate because the absence check precedes every dispatch, and the payload `commit_id` pins the review; the irreversibility rail governs unverified/ambiguous states only.
 
 For either a valid `posted` result or a posted state recovered from the review listing, the ORCHESTRATOR — never `@pr-comment-writer` — updates the matching persisted checkpoint at `.corvus/reviews/<owner>__<repo>__pr<num>/<head_sha>/meta.yaml`, where `<num>` is the validated positive-integer PR number. Revalidate that every path component comes from R0's validated control values and that the existing metadata identity and head match this run, then overwrite `meta.yaml` wholesale while preserving its synthesis fields and changing only the posting state:
@@ -169,7 +177,7 @@ review_url: "<POST_RESULT.review_url>"
 posted_at: "<current ISO-8601 UTC timestamp>"
 ```
 
-Perform this update only when a valid `POST_RESULT` confirms `posted` with a non-empty `review_url`, or when the read-only listing confirms exactly one matching review with a usable URL. On terminal `local_only`, exhausted verified-not-posted retries, or unknown remote state, leave `posted: false` so the synthesized review remains resumable. A metadata-update failure after a confirmed post cannot undo the remote review: report it prominently with the review URL, do not post again, and continue to lock cleanup.
+Perform this update only when a valid `POST_RESULT` confirms `posted` with a non-empty `review_url`, or when the read-only listing confirms exactly one matching review with a usable URL. Run `date -u +%Y-%m-%dT%H:%M:%SZ` byte-exact and use its exact output for `posted_at`; never estimate it. On terminal `local_only`, exhausted verified-not-posted retries, or unknown remote state, leave `posted: false` so the synthesized review remains resumable. A metadata-update failure after a confirmed post cannot undo the remote review: report it prominently with the review URL, do not post again, and continue to lock cleanup.
 
 Never use another agent, a direct mutation command, a different endpoint or event, an interactive fallback, or any other posting route. The only sanctioned orchestrator recovery is the verified-state re-dispatch above to the same writer with the same POST_REQUEST; writer-internal `local_only` remains terminal.
 
@@ -185,7 +193,9 @@ run_id: "<this run identifier>"
 completed_at: "<current ISO-8601 UTC timestamp>"
 ```
 
-Do this for posted, pre-existing local-only, writer-failure, and malformed-result completions. Never remove or overwrite a lock owned by a different run. Terminal branches before R5 follow the same R0 lock-release contract. A crashed run leaves its active lock behind; R0 treats it as stale after 2 hours.
+When writing the inactive record, run `date -u +%Y-%m-%dT%H:%M:%SZ` byte-exact and use its exact output for `completed_at`; never estimate it. Do this for posted, pre-existing local-only, writer-failure, and malformed-result completions. Never remove or overwrite a lock owned by a different run. Terminal branches before R5 follow the same R0 lock-release contract. A crashed run leaves its active lock behind; R0 treats it as stale after 2 hours.
+
+Before displaying any completion summary, compute convergence from validated checkpoint history under `.corvus/reviews/<owner>__<repo>__pr<num>/`: the current series round number, each round's retained major/minor counts in order, and whether the current round is the first zero-major round. Ignore malformed or identity-mismatched metadata with a visible note; do not invent missing counts. Render these fields even for local-only completion so a human can decide whether another round is useful.
 
 Display the final summary to the user:
 
@@ -198,6 +208,9 @@ Display the final summary to the user:
 **Reviewability**: [complete | partial | skipped]
 **Action**: [ACTION_EMOJI] [action]
 **Review URL**: [url from API response]
+**Series round**: [N]
+**Major/minor trend**: [round 1: NM/Nm → ... → round N: NM/Nm]
+**First zero-major round**: [yes/no]
 [Render coverage_warning and state notices when present.]
 
 ### Summary
@@ -234,6 +247,9 @@ Display the final summary to the user:
 **Reviewability**: [complete | partial | skipped | failed]
 **Action**: [ACTION_EMOJI] [action] (not posted)
 **Reason**: [REVIEW_ACTION.decision_reason or final revalidation/writer failure]
+**Series round**: [N]
+**Major/minor trend**: [round 1: NM/Nm → ... → round N: NM/Nm]
+**First zero-major round**: [yes/no]
 
 The full review is displayed locally. It was NOT posted to GitHub, and `@pr-comment-writer` was not invoked when the decision was already local-only.
 [Render coverage_warning, state notices, and rails_applied.]
@@ -251,6 +267,7 @@ The full review is displayed locally. It was NOT posted to GitHub, and `@pr-comm
 **Reviewability**: [complete | partial | skipped]
 **Action**: [ACTION_EMOJI] [action]
 **Review URL**: [url]
+**Convergence**: Round [N] | Major/minor trend: [round 1: NM/Nm → ... → round N: NM/Nm] | First zero-major round: [yes/no]
 [Render coverage_warning when present.]
 
 [Abbreviated stats — 3 lines max for autonomous mode]
@@ -283,7 +300,7 @@ R5 is the terminal phase. Before finishing:
 3. Every eligible partial/skipped post retained its coverage warning.
 4. A confirmed posted result updated checkpoint metadata; every other result left `posted: false`.
 5. This run released only its own same-PR lock.
-6. Display a completion summary and mark all todos as completed.
+6. Display a completion summary with series round, per-round major/minor trend, and first-zero-major status, then mark all todos as completed.
 
 After R5, the Corvus-Review workflow is complete. Any follow-up request starts a NEW workflow from R0.
 

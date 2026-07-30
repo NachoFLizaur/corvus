@@ -23,8 +23,11 @@ The one exception: skip the @researcher workstream (launch only @pr-context-gath
 2. `PR_CONTEXT.ci_status` is NOT `"fail"`
 3. No dependency manifest files changed (`package.json`, `requirements.txt`, `go.mod`, `Cargo.toml`, `pom.xml`, `Gemfile`, and their lockfiles)
 4. No `SECURITY.md` or security-related files changed
+5. `PR_CONTEXT.verified_facts.open_questions` is empty
 
 When skipping researcher, set these REVIEW_CONTEXT fields to empty: `linked_issues_detail: []`, `dependency_advisories: []`, `ci_failure_analysis: []`, `related_prs: []`.
+
+Before R2 dispatch, every open question of the form “does upstream/third-party X behave like Y?” MUST be routed to @researcher. Persisted `open_questions` therefore disables the researcher skip even when the other four conditions are satisfied.
 
 ---
 
@@ -38,10 +41,11 @@ When skipping researcher, set these REVIEW_CONTEXT fields to empty: `linked_issu
 **CHANGED FILES** ([files_changed] files):
 [List all files from PR_CONTEXT.changed_files, one per line]
 
-**EXPECTED OUTCOME**: Complete review context for every changed file — diff hunks (the authoritative changed-content evidence), import/export analysis, callers of changed functions/exports, associated test files, and git history — plus a dependency graph, detected codebase conventions, and optional head-accurate excerpts for high-risk files.
+**EXPECTED OUTCOME**: Complete review context for every changed file — diff hunks (the authoritative changed-content evidence), verified RIGHT-side postable line ranges, import/export analysis, callers of changed functions/exports, associated test files, and git history — plus a dependency graph, detected codebase conventions, and optional head-accurate excerpts for high-risk files.
 
 **MUST DO**:
 - Treat the `gh pr diff` hunks as the authoritative changed-content evidence; deliver them plus the structured context map instead of full file bodies (retrieval posture: your operating rules — local reads are best-effort supplements from a possibly-stale worktree)
+- For every candidate inline-comment file, derive `postable_line_ranges` from the compare/files API hunk headers (or the PR files API hunks for the same validated head). Emit only RIGHT-side added/context line intervals that GitHub can anchor; estimated line numbers are not postable evidence
 - For each changed file, identify its imports and exports
 - For each changed export/public function, find callers in the rest of the codebase
 - For each changed file, find associated test files (by convention: `*.test.*`, `*.spec.*`, `__tests__/`, or co-located)
@@ -67,6 +71,7 @@ When skipping researcher, set these REVIEW_CONTEXT fields to empty: `linked_issu
 - Head branch: [head_branch]
 - Head SHA: [PR_CONTEXT.head_sha] (for optional head-accurate excerpt fetches via `?ref=<head_sha>`)
 - Prior Corvus review: [PR_CONTEXT.prior_corvus_review — reviewed_head_sha and url, or "none"] (when non-null, resolve delta reachability per MUST DO)
+- Verified-facts artifact: [PR_CONTEXT.verified_facts_path] (reference only; include its validated facts and open_questions in the merged REVIEW_CONTEXT)
 
 **TO GET THE DIFF**:
 ```bash
@@ -87,6 +92,7 @@ gh pr diff [pr_number] --repo [repo]
 - Test files: [list or "none found"]
 - Git history: last modified [date], recent authors: [list], frequency: [high/medium/low]
 - Changed-content evidence: diff hunks [complete / partial: reason]
+- Postable RIGHT-side line ranges: [[start, end], ...] or []
 - Head excerpt: [none / included below (head-accurate via API)]
 
 [Repeat for each file]
@@ -110,6 +116,9 @@ gh pr diff [pr_number] --repo [repo]
 
 ### Diff Hunks
 [Per-file diff hunks]
+
+### Postable Line Ranges
+[Per candidate file: `postable_line_ranges: [[start, end], ...]`, derived from compare/files API hunks]
 
 ### Head Excerpts
 [Only when targeted fetches were made — per-file excerpt, reason, provenance "head-accurate via API"]
@@ -142,6 +151,7 @@ gh pr diff [pr_number] --repo [repo]
 - Dependency advisory check (if dependency files changed)
 - CI failure analysis (if CI is failing)
 - Related PRs (recent PRs touching same files)
+- Verified answers with cited sources for every persisted open upstream/third-party behavior question, plus any questions that remain unresolved
 
 **MUST DO**:
 
@@ -183,6 +193,9 @@ gh pr diff [pr_number] --repo [repo]
    gh pr list --repo [repo] --state merged --limit 20 --search "path:[key_directory]"
    ```
 
+5. **Persisted Open Questions**:
+   For each question in [PR_CONTEXT.verified_facts.open_questions], verify the upstream or third-party behavior from authoritative source text, an executed probe when available, or clearly cited researcher evidence. Return `{fact, source, confidence}` for resolved questions and preserve unresolved questions verbatim; never promote an inference to a verified fact.
+
 **MUST NOT DO**:
 - Modify any files
 - Run tests or builds
@@ -208,6 +221,10 @@ gh pr diff [pr_number] --repo [repo]
 ### Related PRs
 [List recent PRs touching same files with title and relevance]
 [Or "No related PRs found"]
+
+### Verified Facts and Open Questions
+- Newly verified facts: [{fact, source, confidence}]
+- Open questions: [unresolved question strings]
 ```
 ```
 
@@ -217,11 +234,12 @@ gh pr diff [pr_number] --repo [repo]
 
 After the workstreams complete (or the single workstream if researcher was skipped), assemble the `REVIEW_CONTEXT` object (schema: `corvus-review-extras`):
 
-1. **file_map, dependency_graph, conventions**: direct from @pr-context-gatherer output
+1. **file_map, dependency_graph, conventions**: direct from @pr-context-gatherer output; every inline-candidate file_map entry carries `postable_line_ranges`
 2. **head_excerpts**: from @pr-context-gatherer's `Head Excerpts` section (omit when none were fetched)
 3. **delta**: from @pr-context-gatherer's `Prior-Review Delta` section (omit when PR_CONTEXT.prior_corvus_review is null; a missing or unresolved result is treated downstream as `available: false`)
 4. **test_coverage**: derived from @pr-context-gatherer's test file associations
 5. **linked_issues_detail, dependency_advisories, ci_failure_analysis, related_prs**: from @researcher (or empty if skipped)
+6. **verified_facts, open_questions**: start from the validated persisted artifact, append newly verified researcher facts with sources, remove only questions the evidence resolves, and retain all unresolved/new questions for R2 and R3
 
 ### Partial Failure Handling
 
@@ -237,6 +255,7 @@ Before proceeding to R2, verify REVIEW_CONTEXT:
 1. `file_map` has an entry for every file in `PR_CONTEXT.changed_files`
 2. `conventions` has at least one non-empty field
 3. `dependency_graph` exists (may be empty for unrelated files)
+4. Every file eligible for an inline comment has `postable_line_ranges` derived from remote API hunks (an empty set is valid and forces body-only rendering)
 
 If validation fails, log a warning and proceed — a degraded review is better than no review.
 

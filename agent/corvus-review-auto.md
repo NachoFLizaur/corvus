@@ -26,6 +26,7 @@ permission:
   skill: "allow"
   bash:
     "*": "deny"
+    'date -u +%Y-%m-%dT%H:%M:%SZ': "allow"
     "gh repo view --json nameWithOwner --jq '.nameWithOwner'": "allow"
     'gh api user --jq .login': "allow"
     "gh pr view * --repo * --json number,url,title,body,author,baseRefName,baseRefOid,headRefName,headRefOid,labels,reviewRequests,isDraft,mergeable,state,mergedAt,additions,deletions,changedFiles,files,closingIssuesReferences,latestReviews,reviewDecision": "allow"
@@ -136,6 +137,10 @@ These defaults can be overridden by the user at invocation time. Example: "revie
     PR ID, or full 40-hex base SHA. Never interpolate PR prose, paths, config
     values, or child output, and never run a state-changing Git or GitHub
     command. This orchestrator never posts directly.
+
+    Allowlisted commands MUST run byte-exact: append no suffixes, redirections,
+    pipes, semicolons, or decoration because permission pattern matching is
+    literal.
   </rule>
 </operating_rules>
 
@@ -248,7 +253,7 @@ Launch both workstreams in a single message (delegation templates in the r1 skil
 - Workstream A — @pr-context-gatherer: file analysis, dependency graph, test coverage, conventions
 - Workstream B — @researcher: linked issues, dependency advisories, CI failure analysis, related PRs
 
-Skip @researcher only when all of these hold: no linked issues, CI is not failing, no dependency manifest changed, no security-related file changed.
+Skip @researcher only when all of these hold: no linked issues, CI is not failing, no dependency manifest changed, no security-related file changed, and persisted `open_questions` is empty. Any open upstream-behavior question must be routed to @researcher before R2.
 
 Merge both outputs into REVIEW_CONTEXT and validate that file_map covers every changed file.
 
@@ -306,6 +311,7 @@ Load first: `skill({ name: "corvus-review-r4" })`
 ## Autonomous Mode: Auto-posting review
 
 **Action**: [ACTION] | **Findings**: [N] total | [blockers]B [criticals]C [majors]M [If the action was capped by self-review: | **Cap**: self_review=[true|unknown] → COMMENT_ONLY]
+**Convergence**: Round [series_round] | Major/minor trend: [round 1: NM/Nm → ... → current: NM/Nm] | First zero-major round: [yes/no]
 **Posting to GitHub...**
 ```
 

@@ -23,6 +23,10 @@ Phase 5a's own rows from the flag-combination semantics (full table: corvus-phas
 The 5a objective gate always produces PASS / FAIL; only its evidence model
 differs by flags. The three-valued subjective contract applies only to 5b.
 
+For cross-package changes, fresh full-suite evidence requires a cache-defeating
+run (for example `turbo ... --force`). Cached task replays must be labeled
+`CACHED REPLAY` and cannot be represented as the Phase 5 full-suite execution.
+
 ### 5a. Comprehensive Objective Check (always runs)
 
 **DELEGATE TO**: @code-quality
@@ -40,6 +44,7 @@ differs by flags. The three-valued subjective contract applies only to 5b.
 
 **MUST DO**:
 - [Insert the Phase 5a behavior row for the active test flags from the table above]
+- For cross-package changes, use the project runner's verified cache-defeating option and label any cached replay honestly
 - Run production build
 - Verify all acceptance criteria from all task files
 - Check consistency across all changes; look for regressions and breaking changes to existing functionality

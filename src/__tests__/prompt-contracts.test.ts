@@ -909,7 +909,7 @@ default_action: "COMMENT_ONLY"`
       "Every other label bypasses this budget. Never count, drop, or mark `minor`, `major`, `critical`, `blocker`, `praise`, `thought`, or `note` as suppressed because of `max_nits`.",
       "Sort `eligible_nitpicks` by confidence descending.",
       "Break confidence ties by normalized file path ascending, then `line_start` ascending, then finding `id` ascending.",
-      "Keep (retain) the first `max_nits` findings. When `max_nits == 0`, retain none.",
+      "Keep (retain) the first `max_nits` findings, then apply the protect-one-per-pass rule before finalizing suppression. When `max_nits == 0`, the protection rule still prevents budget suppression from zeroing out a pass's entire retained actionable set.",
     ])
     expectAbsent(REVIEW_R3, [
       /nitpick_count\s*\+\s*minor_count/i,
@@ -1109,7 +1109,7 @@ describe("prompt contracts: Phase H workflow + safety", () => {
         "`PROGRESS_UPDATE` is the only Task Planner mode authorized to record routine",
         "**FEATURE DIRECTORY**: `.corvus/tasks/<feature>/`",
         "Skip the standard batch-read entirely; read only the feature's",
-        "Edit ONLY status markers, Progress counts, and the gate-outcome",
+        "Edit ONLY status markers, structured Progress fields, and the",
         "Make no task-file or CONTEXT.md edits, perform no re-planning,",
         "one line only: `Progress updated: <feature> <gate> <status> (<complete>/<total>).`",
       ])
@@ -1203,7 +1203,7 @@ describe("prompt contracts: Phase H workflow + safety", () => {
         expectAbsent(file, obsoletePatterns)
       }
 
-      expectContains(PHASE_4, ["Phase 6 alone owns feature-wide learning."])
+      expectContains(PHASE_4, ["Phase 6 alone owns feature-wide", "learning."])
       expectContains(PHASE_5, ["6 alone owns `SUCCESS_EXTRACTION`."])
       expectContains(CORVUS_EXTRAS, [
         "Phase 6 alone owns `SUCCESS_EXTRACTION`.",
@@ -1717,7 +1717,7 @@ describe("review pipeline redesign — phase 1 pins", () => {
     test("falls back to the bounded full reviews listing", () => {
       expectContains(REVIEW_R0, [
         "When the `latestReviews` scan finds no valid marker",
-        "gh api repos/<owner>/<repo>/pulls/<pr_number>/reviews --jq '[.[] | {body: .body[0:200], submitted_at, commit_id}]'",
+        "gh api repos/<owner>/<repo>/pulls/<pr_number>/reviews --jq '[.[] | {body: .body[0:200], submitted_at, commit_id, html_url}]'",
         "Scan every returned truncated body for the marker.",
       ])
 
@@ -2037,7 +2037,7 @@ describe("review-pipeline-redesign: phase 2 contracts", () => {
       expectContains(REVIEW_R2, [
         "In interactive mode, re-dispatch that child exactly once (2 total dispatches). In autonomous mode, re-dispatch that child up to two times (3 total dispatches), after each validation failure.",
         "Every re-dispatch uses byte-identical inputs: the same `REVIEW_INPUT`, the same trusted `dimensions` control, and the same evidence.",
-        "In autonomous mode, if the third total dispatch fails validation, settle its slot or slots as `error`; never dispatch that child a fourth time.",
+        "In autonomous mode, if the third total transport dispatch fails validation, never make a fourth byte-identical transport dispatch: use the one final Reduced-Scope Retry when eligible, otherwise settle its slot or slots as `error`.",
         'Record in every affected slot\'s reason whether settlement happened "after N transport retries", using the actual count (for example, "after 1 transport retry" or "after 2 transport retries").',
       ])
       expectContains("agent/corvus-review-auto.md", [
@@ -2673,7 +2673,7 @@ describe("architectural-wave — phase 1 pins", () => {
     test("phase-3.5 owns PLAN_FIX routing and the two-reject budget", () => {
       expectContains(PHASE_2, [
         "**MODE**: PLAN_FIX",
-        "After the second REJECT, stop the loop: interactive `corvus` escalates to the user with the residual blocking list; `corvus-auto` records the unresolved review, halts the feature, and reports the residual blocking list clearly.",
+        "After the second budget-counting REJECT, stop the loop: interactive `corvus` escalates to the user with the residual blocking list; `corvus-auto` records the unresolved review, halts the feature, and reports the residual blocking list clearly.",
       ])
       expectContains(CORVUS, [
         "High Accuracy Review loops automatically—review → PLAN_FIX → re-review—until `OKAY` or `OKAY_WITH_AMENDMENTS`, or until the second `REJECT` escalates the residual blocking list to the user.",
@@ -2740,7 +2740,7 @@ describe("architectural-wave — phase 2 pins", () => {
     test("progress-update is master-plan-only bookkeeping", () => {
       expectContains(TASK_PLANNER, [
         "read only the feature's\n`MASTER_PLAN.md`",
-        "Edit ONLY status markers, Progress counts, and the gate-outcome\nlog in that file.",
+        "Edit ONLY status markers, structured Progress fields, and the\ngate-outcome log in that file.",
         "batch of status\nupdates (`phase/task → new status`)",
       ])
       expectAbsent(TASK_PLANNER, ["EVIDENCE TASK FILE", "**CONTEXT DELTA**"])
@@ -2798,7 +2798,7 @@ describe("architectural-wave — phase 2 pins", () => {
 
       // The reviewer consumes the pointer as a verification aid (Pass 2).
       expectContains(PLAN_REVIEWER, [
-        "When the CONTEXT FILE exists, use its Key Anchors and Repo State as verification aids — anchors are approximate after edits; on-disk glob/grep evidence remains the source of truth.",
+        "When the CONTEXT FILE exists, use its Key Anchors and Repo State as verification aids — anchors are approximate after edits; on-disk directory/read, glob, and grep evidence remains the source of truth.",
       ])
     })
 
@@ -2806,7 +2806,7 @@ describe("architectural-wave — phase 2 pins", () => {
       expectContains(PHASE_4, [
         "**FEATURE DIRECTORY**: `.corvus/tasks/[feature]/`",
         "**STATUS UPDATES**:",
-        "**GATE OUTCOME**: `4b: PASS — [one concrete evidence line]`",
+        "**GATE OUTCOME**: `4b: PASS — evidence: [stable pointer to command output/report section; do not copy the evidence]`",
         "Send one batched dispatch per phase boundary with every accumulated task/phase",
       ])
       expectAbsent(PHASE_4, ["**CONTEXT DELTA**", "EVIDENCE TASK FILE"])
@@ -2975,10 +2975,13 @@ describe("architectural-wave — phase 4 pins", () => {
       for (const file of [CORVUS, CORVUS_AUTO]) {
         expect(countOccurrences(file, '<rule id="resume_detection">')).toBe(1)
         expectContains(file, [
-          "At intake, before Phase 0, glob `.corvus/tasks/*/MASTER_PLAN.md` and grep the",
-          "for `[~] In Progress` on the `**Status**:` line. When an in-progress plan",
+          "At intake, before Phase 0, use bash `ls .corvus/tasks/*/MASTER_PLAN.md` (or",
+          "the glob tool does not traverse hidden directories.",
+          "also inspect `git worktree list`",
+          "files for `[~] In",
+          "Progress` on the `**Status**:` line.",
           "feature, phase statuses, `**Progress**:` counts, and",
-          "[Resume Detection] glob `.corvus/tasks/*/MASTER_PLAN.md`; grep `[~] In Progress`",
+          "[Resume Detection] `ls .corvus/tasks/*/MASTER_PLAN.md` or read `.corvus/tasks/`; inspect status (glob skips hidden directories); intersect referenced PR/branch with `git worktree list`",
         ])
       }
     })
@@ -3012,7 +3015,7 @@ describe("architectural-wave — phase 4 pins", () => {
       expect(
         countOccurrences(
           CORVUS_AUTO,
-          "    - Resume → glob for in-progress plans; resume when the request references that feature, else report and proceed",
+          "    - Resume → list/read in-progress plans (never glob hidden `.corvus/`); intersect a referenced PR/branch with `git worktree list`; resume a matching feature, else report and proceed",
         ),
       ).toBe(1)
     })
@@ -4384,7 +4387,7 @@ describe("planner authoring and simplified test-policy contracts", () => {
   test("PROGRESS_UPDATE is one master-only batch per phase boundary", () => {
     expectContains(TASK_PLANNER, [
       "Skip the standard batch-read entirely; read only the feature's",
-      "Edit ONLY status markers, Progress counts, and the gate-outcome",
+      "Edit ONLY status markers, structured Progress fields, and the",
       "Make no task-file or CONTEXT.md edits, perform no re-planning,",
       "the orchestrator batches all accumulated task/phase updates into one\n`PROGRESS_UPDATE`, never one dispatch per event.",
     ])
@@ -4395,7 +4398,7 @@ describe("planner authoring and simplified test-policy contracts", () => {
       expect(gate2).toContain("one bookkeeping dispatch per event")
     }
     expectContains(PHASE_4, [
-      "batch every accumulated status and the\n    gate evidence line into one task-planner `PROGRESS_UPDATE`",
+      "batch every accumulated status and the\n    pointer to gate evidence into one task-planner `PROGRESS_UPDATE`",
       "Send one batched dispatch per phase boundary",
     ])
   })
@@ -4472,13 +4475,17 @@ describe("production-retrospective BUILD pipeline contracts", () => {
 
   test("phase 4 flips repeated remediation-apparatus findings to simplification", () => {
     expectContains(PHASE_4, [
-      "When two consecutive fix iterations produce findings\n    in code or apparatus added by prior remediation, the default action flips from\n    fixing the finding to evaluating whether to revert or simplify that apparatus;\n    the orchestrator states this evaluation explicitly before dispatching another\n    fix.",
+      "The existing within-phase signal remains:",
+      "two consecutive fix iterations finding prior-remediation apparatus trigger the",
+      "same revert/simplify evaluation.",
     ])
   })
 
   test("phase 6 re-derives stale PR-body claims from the current diff", () => {
     expectContains(PHASE_6, [
-      "Whenever the diff changes after the PR body was written (new commit, deletion, or retarget), re-derive every factual PR-body claim — file counts, test counts, and scope statements — from the current diff before push or PR update; never hand-patch the body incrementally.",
+      "PR bodies are terse records: prose carries no literal counts or superlatives.",
+      "Whenever the diff changes after the PR body was written (new commit,",
+      "re-derive every factual PR-body claim from the current diff",
     ])
   })
 
@@ -4563,6 +4570,361 @@ describe("production-retrospective BUILD pipeline contracts", () => {
     ])
     expectContains(CORVUS_AUTO, [
       "gets one same-session final-report resume, then up to two byte-identical re-dispatches",
+    ])
+  })
+})
+
+// ============================================================================
+// Production-retrospective REVIEW pipeline fixes
+// ============================================================================
+
+describe("production-retrospective REVIEW pipeline contracts", () => {
+  test("1. evidence-gates upstream-dependent major findings", () => {
+    expectContains(REVIEW_R2, [
+      "a finding at `major` or above whose exploit or impact chain depends on third-party or upstream behavior must cite verified evidence (source read, @researcher verification, or executed probe). Without that evidence, cap it at `minor` and include the explicit body note `pending verification: <question>`.",
+    ])
+    expectContains(REVIEW_R3, [
+      "A finding at major or above whose exploit or impact chain depends on third-party or upstream behavior must cite verified evidence from a source read, @researcher verification, or an executed probe.",
+      "Otherwise set its label/severity to `minor`/2 and append `pending verification: <question>` to its body.",
+    ])
+    expectContains(REVIEW_R1, [
+      "Before R2 dispatch, every open question of the form “does upstream/third-party X behave like Y?” MUST be routed to @researcher.",
+    ])
+  })
+
+  test("2. persists verified facts and open questions across rounds", () => {
+    const path = ".corvus/reviews/<owner>__<repo>__pr<num>/verified_facts.yaml"
+    expectContains(REVIEW_R0, [path, "{fact, verified_in_round, source, confidence}"])
+    expectContains(REVIEW_R3, [
+      path,
+      'fact: "<verified statement>"',
+      "verified_in_round: <positive integer>",
+      'source: "<source read, researcher citation, or executed probe>"',
+      "confidence: <0.0-1.0>",
+      "open_questions:",
+      "append each newly verified fact once",
+    ])
+  })
+
+  test("3. reconciles manually posted reviews before resume", () => {
+    expectContains(REVIEW_R0, [
+      "When the marker scan finds a Corvus review for the CURRENT validated head and the matching schema-valid `meta.yaml` says `posted: false`, self-correct the checkpoint before resume logic runs",
+      "set `posted: true`, `review_url` to the found API `html_url`, and `posted_at` to the exact output",
+    ])
+  })
+
+  test("4. verifies every inline anchor against postable line ranges", () => {
+    expectContains(REVIEW_R1, [
+      "derive `postable_line_ranges` from the compare/files API hunk headers",
+      "Postable RIGHT-side line ranges: [[start, end], ...] or []",
+    ])
+    expectContains(REVIEW_R3, [
+      "falls inside that file's API-derived `postable_line_ranges`",
+      "Otherwise mark the finding body-only during synthesis; never leave anchor relocation to the writer.",
+    ])
+  })
+
+  test("5. embeds evidence and bounds both new retry arms", () => {
+    expectContains(REVIEW_R2, [
+      "Embed all review evidence in the delegation itself",
+      "A brief that instructs a child to fetch, open, retrieve, or otherwise obtain external evidence is a briefing bug",
+      "R2 may re-dispatch that child exactly once with the missing hunks or quoted R1 regions embedded directly.",
+      "the arm is available once per child per R2 entry in both interactive and autonomous modes.",
+      "R2 may make exactly one final reduced-scope dispatch for that child",
+      "This final dispatch is unavailable in interactive mode, receives no transport or degraded-evidence retries of its own",
+    ])
+  })
+
+  test("6. keeps concrete body remedies and protects one finding per pass", () => {
+    expectContains(REVIEW_R3, [
+      "concrete remedy in `suggestion` OR stated concretely in the body",
+      "Budget suppression must protect at least one retained actionable finding per pass",
+      "tie-breaks would suppress a pass's entire retained actionable set",
+    ])
+    expectContains(REVIEW_R2, [
+      "Do not emit a sub-0.7-confidence `nitpick` unless its `suggestion` or body states a concrete remedy",
+    ])
+  })
+
+  test("7. records evidence-backed confidence overrides", () => {
+    expectContains(REVIEW_R3, [
+      "The orchestrator may raise or lower a child's confidence only when it holds first-hand trusted evidence",
+      "Record every override and the exact evidence in `dedup_log`",
+      "Without that first-hand evidence, preserve the child's confidence unchanged",
+    ])
+  })
+
+  test("8. merges cross-source conflicts by default", () => {
+    expectContains(REVIEW_R3, [
+      "When security and holistic findings recommend conflicting approaches, merge them into one comment by default.",
+      "Present both positions faithfully and state the tension/trade-off explicitly; do not invent a third conflict-note finding.",
+    ])
+    expectAbsent(REVIEW_R3, ["Add a `note` finding"])
+  })
+
+  test("9. caps inline praise at three", () => {
+    expectContains(REVIEW_R3, [
+      "Render at most 3 `praise` findings inline",
+      "group every remaining praise in the review body",
+      "Inline placement is primarily for actionable findings.",
+    ])
+  })
+
+  test("10. uses honest timestamps and byte-exact allowlisted commands", () => {
+    for (const file of REVIEW_ORCHESTRATORS) {
+      expect(nestedFrontmatterBlock(file, "bash")).toContain(
+        `    'date -u +%Y-%m-%dT%H:%M:%SZ': "allow"`,
+      )
+      expectContains(file, [
+        "Allowlisted commands MUST run byte-exact: append no suffixes, redirections,",
+        "literal.",
+      ])
+    }
+    for (const file of [REVIEW_R0, REVIEW_R3, REVIEW_R5]) {
+      expectContains(file, ["date -u +%Y-%m-%dT%H:%M:%SZ"])
+      expect(read(file)).toMatch(/never estimate/i)
+    }
+  })
+
+  test("11. emits a terminal manual review command after writer exhaustion", () => {
+    expectContains(REVIEW_R5, [
+      "the terminal local-only output MUST include the persisted `.corvus/reviews/<owner>__<repo>__pr<num>/<head_sha>/REVIEW_DOCUMENT.md` path",
+      "gh pr review <pr_number> --repo <owner>/<repo> --comment --body-file <path>",
+      "This is a terminal manual handoff, not an orchestrator fallback route",
+    ])
+  })
+
+  test("12. reports review-series convergence", () => {
+    expectContains(REVIEW_R5, [
+      "the current series round number, each round's retained major/minor counts in order, and whether the current round is the first zero-major round.",
+      "**Series round**: [N]",
+      "**Major/minor trend**:",
+      "**First zero-major round**: [yes/no]",
+    ])
+    expectContains(AUTONOMOUS_REVIEW, [
+      "**Convergence**: Round [series_round] | Major/minor trend:",
+      "First zero-major round: [yes/no]",
+    ])
+  })
+
+  test("13. records every rail input on every round", () => {
+    expectContains(REVIEW_R0, [
+      "Evaluate and record every available rail input on every round, even when an earlier or lower rail already determines the eventual outcome.",
+      "always perform the authenticated identity read and record `self_review`",
+      "Never short-circuit remaining rail-input collection merely because another cap already forces `COMMENT_ONLY` or `local_only`.",
+    ])
+    expectContains(REVIEW_EXTRAS, [
+      "`rail_inputs` records every available R0 rail independently on every round; a cap never short-circuits another input such as `self_review`.",
+    ])
+  })
+})
+
+// ============================================================================
+// Production-retrospective BUILD pipeline fixes
+// ============================================================================
+
+describe("production-retrospective BUILD pipeline contracts", () => {
+  const PHASE_0_BUILD = "skill/corvus-phase-0/SKILL.md"
+  const PHASE_6_BUILD = "skill/corvus-phase-6/SKILL.md"
+  const PHASE_7_BUILD = "skill/corvus-phase-7/SKILL.md"
+
+  test("1. lists hidden resume plans and intersects referenced worktrees", () => {
+    for (const file of [CORVUS, CORVUS_AUTO]) {
+      expectContains(file, [
+        "`ls .corvus/tasks/*/MASTER_PLAN.md`",
+        "the glob tool does not traverse hidden directories",
+        "`git worktree list`",
+        "intersect those paths with the resume check",
+      ])
+      expectAbsent(file, [/glob `\.corvus\/tasks\/\*\/MASTER_PLAN\.md`/])
+    }
+    expectContains(PLAN_REVIEWER, [
+      "Use read-tool directory listings for `.corvus/` paths because the glob tool does not traverse hidden directories",
+    ])
+  })
+
+  test("2. widens the remediation stop rule across external review rounds", () => {
+    for (const file of [PHASE_4, PHASE_7_BUILD]) {
+      expectContains(file, [
+        "N=2",
+        "same defect class",
+        "simplif",
+      ])
+    }
+    expectContains(PHASE_4, ["consecutive external review rounds"])
+    expectContains(PHASE_7_BUILD, ["EXTERNAL review rounds", "consecutive rounds"])
+    expectContains(PHASE_4, ["what single decision", "point underlies these findings?"])
+    expectContains(PHASE_7_BUILD, ["single underlying decision", "point, trace it"])
+  })
+
+  test("3. gives crisp external findings a direct review-fix round", () => {
+    expectContains(PHASE_7_BUILD, [
+      "REVIEW-FIX ROUND MODE",
+      "verify every finding empirically",
+      "approximately three\nfiles or fewer",
+      "no task-planner plan and no\nplan-reviewer ceremony",
+      "run the full-suite gate, commit through the existing\ndelivery flow",
+      "Use standard planning for findings that require design decisions",
+    ])
+  })
+
+  test("4. replies to every fixed or declined PR finding", () => {
+    expectContains(PHASE_7_BUILD, [
+      "disposition every finding on the PR",
+      "Fixed → reply",
+      "Declined → reply",
+      "fixing commit reference",
+      "rationale",
+      "unfinished work",
+      "existing `gh`",
+    ])
+    expectContains(PHASE_6_BUILD, [
+      "disposition every finding on the",
+      "Reply to fixed findings with the fixing commit",
+      "reply to declined findings with the rationale",
+      "unfinished work",
+      "existing `gh`",
+    ])
+  })
+
+  test("5. separates mechanical and analytical premise verification", () => {
+    expectContains(CODE_IMPLEMENTER, [
+      "### Premise Verification Classes",
+      "**Mechanical premises**",
+      "**Analytical premises**",
+      "call-path\n  trace",
+      "failing-test demonstration",
+      "Reviewer/orchestrator reasoning alone is never sufficient.",
+    ])
+    expectContains(PHASE_4, [
+      "Classify premises as mechanical or analytical",
+      "call-path trace or failing-test",
+    ])
+  })
+
+  test("6. verifies claimed writes on disk after every dispatch", () => {
+    expectContains(PHASE_4, [
+      "After any report claims file writes, verify every claimed artifact on disk with",
+      "claims-writes-but-nothing-on-disk",
+      "resume-for-report retry ladder",
+    ])
+    for (const file of [CORVUS, CORVUS_AUTO]) {
+      expectContains(file, [
+        "After any child report claims file writes, verify the claimed artifacts on disk",
+        "claims-writes-but-",
+      ])
+    }
+  })
+
+  test("7. audits inherited state after cancelled dispatches", () => {
+    expectContains(PHASE_4, [
+      "**Cancelled-dispatch contract**",
+      "working tree may contain partial edits from task <ID>",
+      "`AUDIT INHERITED STATE`",
+      "overlapping file",
+    ])
+  })
+
+  test("8. routes malformed REPORT BACK schemas through transport recovery", () => {
+    expectContains(PHASE_4, [
+      "a final message is schema-invalid whenever any section required by its dispatch's `REPORT BACK` contract is missing",
+      "Never accept or improvise missing sections.",
+      "first attempt one session resume of the same child and request only its final report",
+    ])
+    for (const file of [CORVUS, CORVUS_AUTO]) {
+      expectContains(file, ["final report missing any required `REPORT BACK` section"])
+    }
+  })
+
+  test("9. accounts for one exclusively fix-located plan-review reject", () => {
+    expectContains(PHASE_2, [
+      "**Amendment-verification carve-out (exactly once per feature)**",
+      "does not increment the REJECT budget",
+      "again exclusively fix-located, it increments normally",
+      "the only exception to the two-REJECT ceiling",
+    ])
+    expectContains(PLAN_REVIEWER, [
+      "`FIX_LOCATED_REJECT: true`",
+      "exclusively in lines changed by the immediately previous PLAN_FIX",
+      "A second consecutive fix-located REJECT counts",
+    ])
+  })
+
+  test("10. keeps PLAN_FIX mirrors in the same changed-lines manifest", () => {
+    expectContains(TASK_PLANNER, [
+      "**Mirror integrity**",
+      "every\nrestatement, mirror, and validation command",
+      "changed-lines manifest lists each touched mirror",
+    ])
+  })
+
+  test("11. mechanically self-checks plan-format contracts before handoff", () => {
+    expectContains(TASK_PLANNER, [
+      "**Mechanical pre-handoff self-check**",
+      "exact `## Tests` H2",
+      "directive-comment adjacency",
+      "`set -euo pipefail` wherever",
+    ])
+  })
+
+  test("12. re-derives configurable invariants at every boundary", () => {
+    expectContains(PHASE_4, [
+      "the knob's minimum, shipped default, and maximum",
+      "re-derive the invariant at min, default, and max",
+      "Defaults-only evidence is insufficient",
+    ])
+  })
+
+  test("13. keeps prose records terse and points to gate evidence", () => {
+    expectContains(TASK_PLANNER, [
+      "**Terse records**",
+      "no\n   literal counts or superlatives",
+      "“re-derive from the suite”",
+    ])
+    expectContains(PHASE_4, [
+      "PROGRESS_UPDATE never copies evidence",
+      "adds literal counts to prose, or uses superlatives",
+    ])
+    expectContains(PHASE_6_BUILD, [
+      "PR bodies are terse records: prose carries no literal counts or superlatives.",
+      "re-derive from the suite",
+    ])
+  })
+
+  test("14. evaluates deletion first and gates tenfold scope amplification", () => {
+    for (const file of [CORVUS, CORVUS_AUTO]) {
+      expectContains(file, [
+        "evaluate deleting one",
+        "synchronization guard",
+        "10x your stated scope",
+      ])
+    }
+    expectContains(TASK_PLANNER, [
+      "**Deletion-first drift triage**",
+      "`SCOPE_AMPLIFICATION`",
+      "10x your stated scope",
+    ])
+    expectContains(PHASE_0_BUILD, [
+      "evaluate deletion of one duplicate",
+      "scope-amplification gate",
+    ])
+  })
+
+  test("15. probes validation filtering and defeats caches for full-suite evidence", () => {
+    expectContains(TASK_PLANNER, [
+      "**Validation-command semantics probe**",
+      "nonexistent-file probe",
+      "argument-forwarding/filter behavior",
+      "still runs the full suite is invalid",
+    ])
+    expectContains(PHASE_4, [
+      "cache-defeating run",
+      "`CACHED REPLAY`",
+    ])
+    expectContains(PHASE_5, [
+      "fresh full-suite evidence requires a cache-defeating",
+      "`turbo ... --force`",
+      "Cached task replays must be labeled",
     ])
   })
 })

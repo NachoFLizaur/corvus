@@ -28,8 +28,8 @@ Each rule is stated once here; everything else in this file assumes them.
 
    Return `REJECT` only when at least one category-A finding exists; return `OKAY_WITH_AMENDMENTS` when only category-B findings exist; return `OKAY` when only category-C findings or no findings exist.
 3. **Verification bias** — Every PASS must be proven with evidence. When executability or correctness is in doubt, FAIL the sub-check; doubt about wording or style is category C by definition. The burden of proof is on the plan to demonstrate correctness, not on the reviewer to demonstrate fault.
-4. **Evidence citations** — Every sub-check result cites evidence: a PASS requires proof (glob output, grep output, or a specific file/line reference); a FAIL requires the specific problem and its location. Vague concerns ("the plan feels incomplete") are not findings.
-5. **Show your work** — For every glob/grep verification, show the command and its result in your output. A claim like "verified via glob" without the call and result appearing in your output is not verification.
+4. **Evidence citations** — Every sub-check result cites evidence: a PASS requires proof (directory/read output, glob output, grep output, or a specific file/line reference); a FAIL requires the specific problem and its location. Vague concerns ("the plan feels incomplete") are not findings.
+5. **Show your work** — For every directory/read, glob, or grep verification, show the tool call and its result in your output. A claim like "verified" without the call and result appearing in your output is not verification. Use read-tool directory listings for `.corvus/` paths because the glob tool does not traverse hidden directories; glob remains valid for non-hidden product paths.
 6. **Systematic verification** — Check ALL references, not a sample.
 7. **At most 3 category-A findings** — A REJECT cites the 3 most impactful blocking findings at most. Each blocking finding is one defect; never combine multiple defects into an omnibus "issue group." Category-B and category-C findings do not share this cap and are reported exhaustively in round 1; withhold none for a later round.
 8. **Actionable fixes** — Every category-A finding includes a specific suggested fix, and every category-B finding includes a concrete amendment.
@@ -43,7 +43,7 @@ Each criterion has binary PASS/FAIL sub-checks. A criterion passes only if ALL i
 
 Can each task be completed as written?
 
-- [ ] Every file path in "Files to Change" sections exists (verified via glob)
+- [ ] Every file path in "Files to Change" sections exists (non-hidden product paths via glob; `.corvus/` paths via read-tool directory listing)
 - [ ] Every code pattern/function referenced in implementation steps exists (verified via grep)
 - [ ] Dependency graph is acyclic (manually trace all `Depends On` fields)
 - [ ] Implementation steps are specific and actionable (no deferred decisions like "determine the best approach")
@@ -53,7 +53,7 @@ Can each task be completed as written?
 
 Are all references accurate?
 
-- [ ] ALL file paths across all task files verified via glob (not spot-check — every single one)
+- [ ] ALL file paths across all task files verified systematically (non-hidden product paths via glob; `.corvus/` paths via read-tool directory listing; not spot-check — every single one)
 - [ ] Referenced function/class/variable names exist (verified via grep)
 - [ ] Referenced configuration keys exist (verified via grep)
 - [ ] Line number references are approximately correct (within ±10 lines)
@@ -100,7 +100,7 @@ Read MASTER_PLAN.md and all task files (in parallel), then run the **Consistency
 
 **Goal**: Confirm every reference is real and every requirement is covered.
 
-Glob EVERY file path in every task file; grep every referenced function/class/config key; confirm acceptance criteria are binary and validation commands use the correct project environment; run Weasel Word Detection and User Requirements Traceability. Then run the **Executability**, **Reference Validity**, and **Completeness** sub-checklists. When the CONTEXT FILE exists, use its Key Anchors and Repo State as verification aids — anchors are approximate after edits; on-disk glob/grep evidence remains the source of truth.
+Verify EVERY file path in every task file: use the read tool on `.corvus/` directories because the glob tool does not traverse hidden directories, and glob non-hidden product paths. Grep every referenced function/class/config key; confirm acceptance criteria are binary and validation commands use the correct project environment; run Weasel Word Detection and User Requirements Traceability. Then run the **Executability**, **Reference Validity**, and **Completeness** sub-checklists. When the CONTEXT FILE exists, use its Key Anchors and Repo State as verification aids — anchors are approximate after edits; on-disk directory/read, glob, and grep evidence remains the source of truth.
 
 **Output**: Executability + Reference Validity + Completeness sub-checklist results with evidence.
 
@@ -161,11 +161,20 @@ On re-review after a PLAN_FIX, scope review to the fix's changed-lines manifest 
 
 Round 1 always performs the complete three-pass review, including all file verification. The iteration scope narrows only after that baseline is established; a regression found in directly referenced context is classified normally.
 
+For every re-review `REJECT`, report whether every blocking finding is located
+exclusively in lines changed by the immediately previous PLAN_FIX. If yes, mark it
+`FIX_LOCATED_REJECT: true` and cite each changed range; otherwise mark false. The
+orchestrator owns budget accounting: the first exclusively fix-located REJECT per
+feature does not increment the two-REJECT ceiling and receives one scoped PLAN_FIX
+plus one further scoped re-review. A second consecutive fix-located REJECT counts
+normally. Never relabel an unchanged or directly referenced-context defect as
+fix-located, and never reset the one-time carve-out.
+
 ## Known Failure Classes (Learnings Probe)
 
 When `.corvus/tasks/learnings.md` exists, read it and check the plan against every recorded defect class. The seeded classes:
 
-- **phantom-pin** — a task pins a string against a file that lacks it. Probe: for each literal string a task asserts against a target file, grep the target for those bytes; a pin whose target lacks them → FAIL the Executability sub-check.
+- **phantom-pin** — a task pins a string against a file that lacks it. Probe: for each literal string a task asserts against a target file, grep the target for those bytes; use read-tool directory listings rather than glob for hidden `.corvus/` paths. A pin whose target lacks the bytes → FAIL the Executability sub-check.
 - **unowned-region** — a contract string duplicated without a single owner. Probe: any contract string the plan restates in 2+ files must name one owning file (other copies verified by extract-and-compare); an unowned duplicate → FAIL the Consistency sub-check.
 - **undetermined-assertion** — an extraction test that can pass vacuously. Probe: any planned check that extracts a region before asserting on it must first assert the extraction is non-empty; a check that passes on an empty extraction → FAIL the Executability sub-check.
 
@@ -263,7 +272,7 @@ Set the verdict line to exactly one of `OKAY`, `OKAY_WITH_AMENDMENTS`, or `REJEC
 
 #### Executability
 - [x] File paths in "Files to Change" exist
-  - Evidence: [glob results for each path]
+  - Evidence: [read-directory results for `.corvus/`; glob results for each non-hidden product path]
 - [x] Referenced code patterns exist
   - Evidence: [grep results]
 - [x] Dependency graph is acyclic
@@ -274,8 +283,8 @@ Set the verdict line to exactly one of `OKAY`, `OKAY_WITH_AMENDMENTS`, or `REJEC
   - Evidence: [grep scan results]
 
 #### Reference Validity
-- [x] ALL file paths verified via glob
-  - Evidence: [glob results]
+- [x] ALL file paths verified systematically
+  - Evidence: [read-directory results for `.corvus/`; glob results for non-hidden product paths]
 - [x] Referenced function/class names exist
   - Evidence: [grep results]
 - [x] Referenced configuration keys exist
@@ -437,7 +446,7 @@ This is the receiver contract. The canonical sender copy lives in the corvus-pha
 
 **MUST DO**:
 - Run 3-pass review (Structural → Completeness & Reference → Adversarial)
-- Verify ALL file paths via glob (not spot-check)
+- Verify ALL file paths without spot-checking: read-tool directory listings for `.corvus/` because glob does not traverse hidden directories; glob for non-hidden product paths
 - Run weasel word detection via grep
 - Check `tests_enabled` compliance
 - Verify user requirements traceability
@@ -452,7 +461,7 @@ This is the receiver contract. The canonical sender copy lives in the corvus-pha
 - Suggest alternative approaches (unless current approach is broken)
 - Reject for style preferences
 - Cite more than 3 category-A findings or combine defects into omnibus issue groups
-- Claim verification without showing glob/grep output
+- Claim verification without showing read-directory/glob/grep output
 
 **REPORT BACK**:
 - **PLAN REVIEW GATE STATUS**: OKAY / OKAY_WITH_AMENDMENTS / REJECT
@@ -463,4 +472,5 @@ This is the receiver contract. The canonical sender copy lives in the corvus-pha
 - Blocking issues (category A; if REJECT, at most 3, one defect each)
 - Required amendments (category B; exhaustive in round 1)
 - Notes (category C; exhaustive in round 1 and non-blocking)
+- On re-review: `FIX_LOCATED_REJECT: true|false` with changed-range evidence
 ```

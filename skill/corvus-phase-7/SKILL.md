@@ -51,6 +51,45 @@ New request received after completion
 
 A request referencing a plan still marked `[~] In Progress` is unfinished work, not a follow-up: hand it back to the orchestrator's resume flow (the `resume_detection` rule and RESUME section), which re-enters at the first incomplete step and re-runs the last quality gate unless MASTER_PLAN.md records its PASS with evidence.
 
+### EXTERNAL REVIEW REMEDIATION
+
+External-review findings, including PR-review threads, use a dedicated fast path
+when they are small and crisply specified. First verify every finding empirically;
+do not treat reviewer reasoning as proof.
+
+Use **REVIEW-FIX ROUND MODE** only when each finding affects approximately three
+files or fewer and the fix shape is stated by the reviewer or has been confirmed
+by a direct probe. Dispatch code-implementer directly with the verified findings,
+exact file allowlist, and validation contract — no task-planner plan and no
+plan-reviewer ceremony. Then run the full-suite gate, commit through the existing
+delivery flow, and disposition the PR threads. Smallness alone is insufficient if
+the fix requires an API, security, architecture, or product-design decision.
+
+Use standard planning for findings that require design decisions, have cross-
+cutting effects, or lack an empirically established fix shape.
+
+#### Cross-Round Remediation Stop Rule
+
+Track defect class and apparatus lineage across EXTERNAL review rounds, including
+PR reviews. When N=2 consecutive rounds find the same defect class or find defects
+in apparatus introduced by earlier rounds, stop before another symptom fix. The
+default flips to root-cause analysis: identify the single underlying decision
+point, trace it, and evaluate reverting or simplifying prior apparatus before any
+further code-implementer dispatch. A new review round does not reset this rule.
+
+#### Finding Disposition and Thread Replies
+
+After remediation, disposition every finding on the PR:
+
+- Fixed → reply in its review thread with the fixing commit reference.
+- Declined → reply in its review thread with the rationale.
+
+A declined finding without a posted reply is unfinished work. Verify that every
+finding has exactly one posted disposition before declaring the review-fix round
+complete. Thread posting uses existing `gh` allowlists through the selected
+delivery flow; this skill delegates the replies and does not add writer
+permissions.
+
 ### LIGHTWEIGHT PATH (Small Follow-ups)
 
 For small, clearly-scoped changes (< 3 files) to the just-completed work. Lightweight still means validated and documented — every change is tracked in MASTER_PLAN.md.

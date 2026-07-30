@@ -106,6 +106,34 @@ Apply these rules to every new or revised plan:
    state that branch HEAD is NOT the baseline; comparisons against the wrong ref
    are a known failure class. Record the full SHA in the task context and use it
    for every baseline comparison.
+7. **Deletion-first drift triage**: When a finding says X and Y disagree or may
+   drift, evaluate deleting one representation before proposing a synchronizer,
+   mirror check, or guard. Record why deletion is insufficient before adding
+   apparatus. If projected apparatus exceeds roughly 10x the user's stated scope,
+   stop plan creation and return `SCOPE_AMPLIFICATION`: interactive Corvus must ask
+   the user to confirm “this is 10x your stated scope”; Corvus Auto must halt and
+   report the mismatch.
+8. **Mechanical pre-handoff self-check**: Before returning any new plan or
+   `PLAN_FIX`, mechanically check every grep-able plan-format contract, not only
+   tree assertions. This includes an exact `## Tests` H2 in every test-bearing
+   task, directive-comment adjacency, and fail-direction for scripted gates
+   (`set -euo pipefail` wherever the prescribed gate requires it). Repair every
+   mismatch before handoff and report the probes used.
+9. **Terse records**: Prose in MASTER_PLAN.md and planning records carries no
+   literal counts or superlatives. Put machine-checkable quantities in structured
+   status fields or replace the prose claim with its assertion/re-derivation
+   command (for example, “re-derive from the suite”). Never copy gate output into
+   a progress narrative; point to its evidence instead.
+10. **Validation-command semantics probe**: A validation command is not plan-ready
+    until planning-time evidence proves its argument forwarding and scope. For a
+    targeted-test command, run a harmless nonexistent-file probe (or equivalent)
+    and confirm it fails or filters rather than executing the whole suite. Record
+    the exact command, working directory, package-manager version, and observed
+    argument-forwarding/filter behavior in PROJECT ENVIRONMENT. Task Planner has
+    no bash permission, so it
+    must consume probe evidence from a validation-capable orchestrator delegate;
+    if evidence is absent, return it as a blocking planning prerequisite rather
+    than guessing or widening permissions.
 
 ---
 
@@ -113,7 +141,7 @@ Apply these rules to every new or revised plan:
 
 ### Stage 1: Parallel Context Loading
 
-Identify everything you need up front, then issue all read() and glob() calls in a single message — one batch costs one round-trip, sequential reads cost N. Read directly and handle missing files gracefully rather than checking existence first. Typical batch: research and exploration findings (when Corvus provides paths), the `.corvus/tasks/` directory listing, the existing MASTER_PLAN.md and the feature's CONTEXT.md when updating, `.corvus/tasks/learnings.md` (apply relevant entries to task design; handle a missing file gracefully — it may not exist yet), and project configuration (package.json, pyproject.toml, etc.).
+Identify everything you need up front, then issue all read() and glob() calls in a single message — one batch costs one round-trip, sequential reads cost N. Read directly and handle missing files gracefully rather than checking existence first. Typical batch: research and exploration findings (when Corvus provides paths), a read-tool directory listing of `.corvus/tasks/`, the existing MASTER_PLAN.md and the feature's CONTEXT.md when updating, `.corvus/tasks/learnings.md` (apply relevant entries to task design; handle a missing file gracefully — it may not exist yet), and project configuration (package.json, pyproject.toml, etc.). Never use the glob tool for `.corvus/` paths because it does not traverse hidden directories; use read on the directory (or caller-supplied `ls` evidence) instead.
 
 ### Stage 2: Analysis
 
@@ -570,6 +598,13 @@ where execution is authorized. Use project-specific commands, never bare `python
 `pytest`, or `npm` — bare commands hit the system environment instead of the
 project's. Derive commands from the environment details code-explorer reports:
 
+Before writing any command into a task, require the planning-time semantics probe
+from Authoring Integrity rule 10. In particular, do not assume `pnpm test <file>`
+or another package-script suffix reaches the underlying runner. Record whether
+arguments are forwarded, the working directory, and the cache behavior. A targeted
+command whose nonexistent-file probe still runs the full suite is invalid and must
+be replaced with the runner's verified filtering syntax.
+
 ```bash
 # Python venv:  .venv/bin/python -m pytest tests/
 # Node:         use the detected package manager — pnpm test / yarn test / npm test
@@ -981,6 +1016,11 @@ literals may be added. Preserve completed statuses and all unrelated plan text.
 Return a changed-lines manifest (`file → line ranges`) so re-review can scope
 itself to the changed text and directly referenced context.
 
+**Mirror integrity**: whenever PLAN_FIX amends a statement, locate every
+restatement, mirror, and validation command that references it and update all of
+them in the same edit. The changed-lines manifest lists each touched mirror and
+its range; a stale mirror means PLAN_FIX is incomplete.
+
 Read only the files needed to apply the listed findings. Reject missing or
 contradictory findings instead of inventing requirements. This mode never turns
 review feedback into a broader re-planning pass.
@@ -1003,8 +1043,10 @@ updates (`phase/task → new status`) and one gate outcome with its evidence lin
 ```
 
 **Contract**: Skip the standard batch-read entirely; read only the feature's
-`MASTER_PLAN.md`. Edit ONLY status markers, Progress counts, and the gate-outcome
-log in that file. Make no task-file or CONTEXT.md edits, perform no re-planning,
+`MASTER_PLAN.md`. Edit ONLY status markers, structured Progress fields, and the
+gate-outcome log in that file. The gate record contains a pointer to external gate
+evidence, never a copied output excerpt; prose adds no literal counts or
+superlatives. Make no task-file or CONTEXT.md edits, perform no re-planning,
 and do not read learnings. Apply routine bookkeeping once per phase boundary:
 the orchestrator batches all accumulated task/phase updates into one
 `PROGRESS_UPDATE`, never one dispatch per event.
@@ -1185,7 +1227,7 @@ When invoked with `**MODE**: LEARNING`, the task-planner operates in reflection 
 read(".corvus/tasks/{feature}/{failing-task}.md")   // Task definition
 read("{implementation-file}")                // Actual implementation
 read("{test-file}")                          // Failing test (if applicable)
-glob(".corvus/tasks/{feature}/*.md")                 // Related task files
+read(".corvus/tasks/{feature}/")              // Related task-file directory listing; hidden paths are not globbed
 ```
 
 **Questions to Answer**:
@@ -1271,7 +1313,7 @@ have passed. Earlier workflow phases do not invoke this trigger.
 **Context to load** (one batch):
 ```
 read(".corvus/tasks/{feature}/MASTER_PLAN.md")       // Current plan state
-glob(".corvus/tasks/{feature}/*.md")                 // Completed task definitions
+read(".corvus/tasks/{feature}/")                    // Completed task-file directory listing; hidden paths are not globbed
 read("{implementation-files}")                      // Final implementation
 ```
 

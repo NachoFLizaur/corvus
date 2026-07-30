@@ -119,8 +119,13 @@ For a direct discovery request, invoke Phase 1 with `DISCOVERY_ORIGIN: DIRECT_CA
   </rule>
 
   <rule id="resume_detection">
-    At intake, before Phase 0, glob `.corvus/tasks/*/MASTER_PLAN.md` and grep the
-    results for `[~] In Progress` on the `**Status**:` line. When an in-progress plan
+    At intake, before Phase 0, use bash `ls .corvus/tasks/*/MASTER_PLAN.md` (or
+    the read tool on `.corvus/tasks/`) and inspect the returned files for `[~] In
+    Progress` on the `**Status**:` line. Never use the glob tool for this check:
+    the glob tool does not traverse hidden directories. When the request references
+    a PR or branch, also inspect `git worktree list`, identify the worktree(s) for
+    that reference, and intersect those paths with the resume check; a plan may live
+    in a linked worktree rather than the main checkout. When an in-progress plan
     exists, report its state — feature, phase statuses, `**Progress**:` counts, and
     the last recorded gate — then ask via question() whether to resume it or treat
     the request as new work. Resume re-enters at the first incomplete step and
@@ -178,9 +183,9 @@ Steps within a phase are sequential (4a → 4b → 4c); only independent tasks w
 | Gate | After | Next action | Not allowed |
 |------|-------|-------------|-------------|
 | 0 | Phase 3 approval | Present choice via question(): "Start Implementation" or "High Accuracy Review" | Skipping the choice; auto-running Phase 3.5 |
-| 0.5 | Phase 3.5 returns | OKAY → report outcome, then Phase 4. OKAY_WITH_AMENDMENTS → PLAN_FIX applies all amendments, report outcome, then Phase 4 without re-review. First REJECT → PLAN_FIX applies all A fixes and B amendments → automatic re-review. Second REJECT → escalate the residual blocking list to the user and halt | Asking between review iterations; re-reviewing amendments-only output; entering Phase 4 after the second REJECT |
+| 0.5 | Phase 3.5 returns | OKAY → report outcome, then Phase 4. OKAY_WITH_AMENDMENTS → PLAN_FIX applies all amendments, report outcome, then Phase 4 without re-review. First budget-counting REJECT → PLAN_FIX applies all A fixes and B amendments → automatic re-review. Second budget-counting REJECT → escalate the residual blocking list to the user and halt. The phase-2 amendment-verification carve-out alone may defer one increment. | Asking between review iterations; re-reviewing amendments-only output; entering Phase 4 after the second budget-counting REJECT |
 | 1 | 4a returns | Invoke code-quality for 4b in the mode the resolved test flags select, with the matching `test_scope` (targeted when enabled non-deferred; none when deferred or disabled); Lightweight non-deferred final gate: `test_scope: full`, doubling as final validation (semantics: corvus-phase-2 skill, Test Scope section); acceptance-only gates may be triage-skipped per the corvus-phase-4 skill's Risk-triaged 4b rule (lightweight verification from per-task reports) | Fixing (no failure yet), updating the plan, or skipping to 4c; skipping 4b outside the risk-triage conditions |
-| 2 | 4b PASS | Dispatch one batched task-planner `PROGRESS_UPDATE` for the phase boundary, carrying every accumulated task/phase status and the gate evidence line → next phase or Phase 5 | Editing the plan directly; one bookkeeping dispatch per event; SUCCESS_EXTRACTION (Phase 6 owns it); skipping the phase-boundary update |
+| 2 | 4b PASS | Dispatch one batched task-planner `PROGRESS_UPDATE` for the phase boundary, carrying every accumulated task/phase status and a pointer to gate evidence → next phase or Phase 5 | Editing the plan directly; copying gate evidence into progress prose; one bookkeeping dispatch per event; SUCCESS_EXTRACTION (Phase 6 owns it); skipping the phase-boundary update |
 | 3 | 4b FAIL | Iteration 1: code-implementer fixes only the failing tasks (targeted, with the 4b failure report) → 4b. Iteration ≥2: task-planner FAILURE_ANALYSIS first → fix → 4b | Skipping FAILURE_ANALYSIS from iteration 2 onward; full-suite reruns at 4b (sole exception: the Lightweight non-deferred final gate revalidating at its dispatched full scope); proceeding to 4c; fixing all tasks |
 | 4 | Phase 5 PASS | Phase 6 | Skipping Phase 6 / SUCCESS_EXTRACTION |
 | 5 | 5a PASS | Any task with `requires_ux_dx_review: true` → 5b; else Phase 6 | Skipping a required 5b |
@@ -191,6 +196,11 @@ Failure-loop detail: the iteration rule lives in the corvus-phase-4 skill.
 
 Build-pipeline child transport failures follow the corvus-phase-4 skill's Build-Pipeline Child Transport Retry rule: an empty, critically truncated, or schema-invalid report gets one same-session final-report resume, then at most one byte-identical re-dispatch; a well-formed failure report is a real result. Never blindly re-dispatch a mutation-capable code-implementer — verify Git/expected-file state and brief it on existing work first — and never let a transport replacement extend the Phase 3.5 REJECT or Phase 4b fix-iteration budget.
 
+After any child report claims file writes, verify the claimed artifacts on disk with
+`ls`/`read` before proceeding (never glob for `.corvus/` paths). A claims-writes-but-
+nothing-on-disk result, or a final report missing any required `REPORT BACK` section,
+is a schema/transport failure handled by that same retry rule, not a result to infer.
+
 ## WORKFLOW PHASES
 
 ```text
@@ -200,7 +210,7 @@ Direct discovery request
 
 User Request
   ▼
-[Resume Detection] glob `.corvus/tasks/*/MASTER_PLAN.md`; grep `[~] In Progress`
+[Resume Detection] `ls .corvus/tasks/*/MASTER_PLAN.md` or read `.corvus/tasks/`; inspect status (glob skips hidden directories); intersect referenced PR/branch with `git worktree list`
   ├─ in-progress plan found → question(): Resume → re-enter at first incomplete step (RESUME section)
   └─ none found, or user chooses new work
   ▼
@@ -266,6 +276,11 @@ Launch researcher + code-explorer in parallel for the unresolved scope. Pass `EX
 **When**: After requirements-analyst returns REQUIREMENTS_CLEAR (from Phase 0a or 0b), or directly after a spec-completeness bypass. Resolve this input before loading Phase 2.
 
 Small/mechanical work is a HARD apparatus budget, not a plan-type hint: when the projected functional diff is ≲50 lines or the user describes the change as mechanical/trivial, use a Lightweight plan, cap planning artifacts at `MASTER_PLAN.md` plus minimal task files, default planning docs to NOT being committed or delivered with the change, and keep test additions proportional to the diff under task-planner's `~N` ceiling rule.
+
+When a finding says two representations disagree or drift, evaluate deleting one
+representation first; do not default to adding a synchronization guard. If projected
+apparatus exceeds roughly 10x the scope stated by the user, call `question()` with an
+explicit confirmation such as “this is 10x your stated scope” before planning it.
 
 > **Mirror divergence**: corvus-auto auto-selects from the heuristic score instead of asking.
 
@@ -393,7 +408,7 @@ Invoke **plan-reviewer**:
 
 **MUST DO**:
 - Run 3-pass review (Structural → Completeness & Reference → Adversarial)
-- Verify ALL file paths via glob (not spot-check)
+- Verify ALL file paths without spot-checking: read-tool directory listings for `.corvus/` because glob does not traverse hidden directories; glob for non-hidden product paths
 - Run weasel word detection via grep
 - Check `tests_enabled` compliance
 - Verify user requirements traceability
@@ -408,7 +423,7 @@ Invoke **plan-reviewer**:
 - Suggest alternative approaches (unless current approach is broken)
 - Reject for style preferences
 - Cite more than 3 category-A findings or combine defects into omnibus issue groups
-- Claim verification without showing glob/grep output
+- Claim verification without showing read-directory/glob/grep output
 
 **REPORT BACK**:
 - **PLAN REVIEW GATE STATUS**: OKAY / OKAY_WITH_AMENDMENTS / REJECT
@@ -419,13 +434,17 @@ Invoke **plan-reviewer**:
 - Blocking issues (category A; if REJECT, at most 3, one defect each)
 - Required amendments (category B; exhaustive in round 1)
 - Notes (category C; exhaustive in round 1 and non-blocking)
+- On re-review: `FIX_LOCATED_REJECT: true|false` with changed-range evidence
 ```
 
 **Decision point**:
 - **OKAY** → present the terminal review outcome, then proceed to Phase 4 without another question
 - **OKAY_WITH_AMENDMENTS** → use the corvus-phase-2 PLAN_FIX dispatch to apply every category-B amendment, present the terminal outcome, then proceed to Phase 4 without re-review
-- **First REJECT** → use the corvus-phase-2 PLAN_FIX dispatch for every category-A fix and category-B amendment, then automatically re-review with its changed-lines manifest
-- **Second REJECT** → stop the loop, present the residual blocking list to the user, and halt pending the user's direction
+- **First budget-counting REJECT** → use the corvus-phase-2 PLAN_FIX dispatch for every category-A fix and category-B amendment, then automatically re-review with its changed-lines manifest
+- **Second budget-counting REJECT** → stop the loop, present the residual blocking list to the user, and halt pending the user's direction
+
+Count REJECTs exactly as the corvus-phase-2 amendment-verification rule specifies;
+only its one-time, fix-located carve-out may avoid an increment.
 
 ## Phase 4: IMPLEMENTATION LOOP
 

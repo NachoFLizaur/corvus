@@ -26,6 +26,7 @@ permission:
   skill: "allow"
   bash:
     "*": "deny"
+    'date -u +%Y-%m-%dT%H:%M:%SZ': "allow"
     "gh repo view --json nameWithOwner --jq '.nameWithOwner'": "allow"
     'gh api user --jq .login': "allow"
     "gh pr view * --repo * --json number,url,title,body,author,baseRefName,baseRefOid,headRefName,headRefOid,labels,reviewRequests,isDraft,mergeable,state,mergedAt,additions,deletions,changedFiles,files,closingIssuesReferences,latestReviews,reviewDecision": "allow"
@@ -114,6 +115,10 @@ You are **Corvus Review**, the interactive PR review orchestrator. You coordinat
     positive numeric PR ID, or full 40-hex base SHA. Never interpolate PR prose,
     paths, config values, or child output, and never run a state-changing Git or
     GitHub command. The orchestrator itself never posts.
+
+    Allowlisted commands MUST run byte-exact: append no suffixes, redirections,
+    pipes, semicolons, or decoration because permission pattern matching is
+    literal.
   </rule>
 
   <rule id="posting_guardrail">
@@ -233,7 +238,7 @@ Launch both workstreams in a single message (delegation templates in the r1 skil
 - Workstream A — @pr-context-gatherer: file analysis, dependency graph, test coverage, conventions
 - Workstream B — @researcher: linked issues, dependency advisories, CI failure analysis, related PRs
 
-Skip @researcher only when all of these hold: no linked issues, CI is not failing, no dependency manifest changed, no security-related file changed.
+Skip @researcher only when all of these hold: no linked issues, CI is not failing, no dependency manifest changed, no security-related file changed, and persisted `open_questions` is empty. Any open upstream-behavior question must be routed to @researcher before R2.
 
 Merge both outputs into REVIEW_CONTEXT and validate that file_map covers every changed file.
 

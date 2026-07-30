@@ -91,6 +91,25 @@ RUN (policy)`, not `FAIL`. On an authorized-command failure, Normal Mode stops a
 requests approval; Delegated Mode may attempt a fix twice, then reports the result.
 Fix attempts re-run the same targeted scope and never widen to the full suite.
 
+### Premise Verification Classes
+
+Classify every premise that controls an implementation, security decision, or
+committed explanation before relying on it:
+
+- **Mechanical premises** — regex behavior, file/line location, literal presence,
+  command output, and similarly cheap facts — are always verified directly with a
+  read, grep, or focused probe. Never copy them from a reviewer or orchestrator as
+  if the citation itself were proof.
+- **Analytical premises** — reachability, mutual exclusivity, attacker influence,
+  or “not exploitable because …” reasoning — require stronger evidence when they
+  gate a security-relevant decision or will be committed as code comments,
+  documentation, or rationale. Before adopting one, produce either a call-path
+  trace from entry point to decision point or a failing-test demonstration of the
+  claimed behavior. Reviewer/orchestrator reasoning alone is never sufficient.
+
+If the required analytical proof cannot be produced within scope, report the
+premise as unverified and fail closed rather than encoding it as fact.
+
 ### Prose and Comment Edit Verification
 
 Any edit to prose — comments, docstrings, Markdown, PR/commit text, or string

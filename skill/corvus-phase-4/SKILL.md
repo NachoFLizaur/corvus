@@ -59,18 +59,21 @@ Phase 4 operates at the **phase level**, not per-task: tasks within a phase are 
     run concurrently; a shared file forces sequential order.
   - **Update MASTER_PLAN.md at phase boundaries** (4c), not after each task or
     event. After a phase-wide 4b PASS, batch every accumulated status and the
-    gate evidence line into one task-planner `PROGRESS_UPDATE`. Corvus never
+    pointer to gate evidence into one task-planner `PROGRESS_UPDATE`. Corvus never
     edits the plan directly.
   - **Track finding origin**: for every gate or review finding, record whether it
     originates in the requested functional change, pre-existing code, or apparatus
     added by a prior remediation iteration (including guards, tripwires, decoys,
     and test scaffolding). Carry this lineage through every failure report.
-  - **Remediation stop rule**: When two consecutive fix iterations produce findings
-    in code or apparatus added by prior remediation, the default action flips from
-    fixing the finding to evaluating whether to revert or simplify that apparatus;
-    the orchestrator states this evaluation explicitly before dispatching another
-    fix. Remediation loops otherwise become self-sustaining: in production, rounds
-    2-5 findings were almost entirely in guard apparatus added by rounds 1-4.
+  - **Remediation stop rule across review rounds**: Track EXTERNAL review rounds
+    (including PR reviews) separately from Phase 4b fix iterations. When N=2
+    consecutive external review rounds produce findings in the same defect class,
+    or in code/apparatus introduced by prior rounds, stop before dispatching another
+    symptom fix. The default flips to root-cause analysis: ask “what single decision
+    point underlies these findings?”, trace that point, then choose revert or
+    simplification before any further fix. The existing within-phase signal remains:
+    two consecutive fix iterations finding prior-remediation apparatus trigger the
+    same revert/simplify evaluation. Review boundaries never reset either lineage.
   - **Max 3 fix iterations per phase**: at the cap, stop and escalate to the user with
     what passed, what still fails, and open questions — even if the phase is incomplete.
   - **Fix-attempt accounting**: code-implementer's in-task 2-attempt fix rule
@@ -117,6 +120,10 @@ tasks may verify their own authored files immediately before the 5a dispatch,
 without consuming the single-full-run budget; disabled mode → every dispatch
 carries `test_scope: none`.
 
+When a full-suite gate covers cross-package changes, only a cache-defeating run
+(for example Turbo with `--force`) is fresh full-suite evidence. A cached replay
+must be labeled `CACHED REPLAY` and cannot be presented as the gate's fresh run.
+
 ---
 
 ### Dispatch Premise Provenance
@@ -135,9 +142,17 @@ explicitly that branch HEAD is NOT the baseline. Every comparison must use the
 provided merge-base SHA; comparison against the wrong ref is a known failure
 class.
 
+Classify premises as mechanical or analytical in every implementation/fix
+dispatch. Mechanical premises (regex behavior, file:line, literal presence) are
+always checked cheaply in-session. Analytical premises (reachability, mutual
+exclusivity, “not exploitable because …”) that gate a security-relevant decision
+or will be committed as documentation require a call-path trace or failing-test
+demonstration first. Never dispatch such a premise as established solely because
+a reviewer or orchestrator reasoned it.
+
 ### Build-Pipeline Child Transport Retry
 
-This rule applies to every build-pipeline dispatch to `task-planner`, `code-implementer`, `code-quality`, `plan-reviewer`, `ux-dx-quality`, `requirements-analyst`, `code-explorer`, and `researcher`. An empty report, a report truncated at the critical point, or a schema-invalid report is a child-transport failure; a well-formed failure report is a real result and immediately follows the step's existing failure handling.
+This rule applies to every build-pipeline dispatch to `task-planner`, `code-implementer`, `code-quality`, `plan-reviewer`, `ux-dx-quality`, `requirements-analyst`, `code-explorer`, and `researcher`. An empty report, a report truncated at the critical point, or a schema-invalid report is a child-transport failure; a final message is schema-invalid whenever any section required by its dispatch's `REPORT BACK` contract is missing. Never accept or improvise missing sections. A well-formed failure report is a real result and immediately follows the step's existing failure handling.
 
 For a child-transport failure, first attempt one session resume of the same child and request only its final report. If the resumed report is still empty, critically truncated, or schema-invalid, re-dispatch with byte-identical task inputs: at most once in interactive Corvus and at most twice in Corvus Auto. Validate each returned report before proceeding. After the mode's bound is consumed, apply the step's existing failure handling, including a gate's FAIL path, 5b fail-closed handling, or the applicable phase halt. These are transport replacements, not new workflow decisions.
 
@@ -145,6 +160,19 @@ Two carve-outs are mandatory:
 
 1. **Mutation-aware implementer recovery** — because `code-implementer` may already have mutated the workspace before its report was lost, never re-dispatch it blindly. First verify workspace state with read-only Git status and the task's expected-file manifest, then brief the resumed or re-dispatched implementer on exactly what already exists. Preserve the original task inputs byte-for-byte; the state briefing is recovery metadata and cannot broaden scope, repeat completed mutations, or change the file/validation contract. If workspace state cannot be established, do not re-dispatch; apply the existing failure path.
 2. **Judgment-budget preservation** — transport retries never extend judgment budgets. A recovered or re-dispatched call replaces the flaked dispatch in the count; it is not additional to the Phase 3.5 two-REJECT budget or the Phase 4b three-fix-iteration budget.
+
+After any report claims file writes, verify every claimed artifact on disk with
+`ls`/`read` before proceeding; never use glob for hidden `.corvus/` paths because
+it does not traverse hidden directories. A claims-writes-but-nothing-on-disk
+report is a transport failure and enters the resume-for-report retry ladder.
+
+**Cancelled-dispatch contract**: whenever a dispatch is cancelled or aborted,
+record `working tree may contain partial edits from task <ID>` in orchestrator
+state. Before the next dispatch touching any overlapping file, inspect Git status
+and the expected artifacts, then include an explicit `AUDIT INHERITED STATE`
+instruction naming the cancelled task and requiring preservation/reconciliation
+of partial edits. This extends mutation-aware recovery to cancellations even when
+no transport retry occurs.
 
 Production evidence: ≥7 empty or critically truncated child reports occurred in one production week, and each required improvised recovery; this rule makes that recovery deterministic.
 
@@ -157,7 +185,7 @@ One workstream (1-5 related tasks from the master plan's `### Workstreams` secti
 
 A single-task workstream uses the Single-Task Delegation Template below; a multi-task workstream uses the Workstream Delegation Template after the Worked Example.
 
-**Success criteria for 4a**: every task in the phase dispatched exactly once through its workstream's code-implementer, and every dispatch reported back with per-task validation results.
+**Success criteria for 4a**: every task in the phase dispatched exactly once through its workstream's code-implementer, every dispatch reported back with per-task validation results, every required report section passed schema validation, and every claimed write was verified on disk with `ls`/`read`.
 
 #### Single-Task Delegation Template
 
@@ -178,6 +206,8 @@ A single-task workstream uses the Single-Task Delegation Template below; a multi
 **AUTHORIZED VALIDATION**: Exact commands permitted by the task and active workflow
 **MERGE BASE SHA**: [full SHA from `git merge-base HEAD <default-branch>` when baseline reasoning applies; otherwise NOT APPLICABLE]
 **PREMISE PROVENANCE**: [cite the session-read command or `file:line` inline beside every dispatch-authored fact; hand uncited premises to the child as verification questions]
+**PREMISE CLASS**: [mechanical premises with direct probe evidence; analytical security/documentation premises with call-path trace or failing-test demonstration]
+**AUDIT INHERITED STATE**: [NONE | cancelled/aborted task ID, overlapping files, observed partial state, and explicit reconcile-before-edit instruction]
 
 **MUST DO**:
 - Read `.corvus/tasks/[feature]/[NN-task-name].md` completely before starting
@@ -262,6 +292,8 @@ For a workstream of 2-5 tasks. Single-task workstreams use the Single-Task Deleg
 **AUTHORIZED VALIDATION**: per task — exactly the commands each task and the active workflow permit
 **MERGE BASE SHA**: [full SHA from `git merge-base HEAD <default-branch>` when baseline reasoning applies; otherwise NOT APPLICABLE]
 **PREMISE PROVENANCE**: [cite the session-read command or `file:line` inline beside every dispatch-authored fact; hand uncited premises to the child as verification questions]
+**PREMISE CLASS**: [mechanical premises with direct probe evidence; analytical security/documentation premises with call-path trace or failing-test demonstration]
+**AUDIT INHERITED STATE**: [NONE | cancelled/aborted task ID, overlapping files, observed partial state, and explicit reconcile-before-edit instruction]
 
 **MUST DO**:
 - Read every listed task file completely before starting
@@ -325,6 +357,10 @@ typecheck, build, or test commands ran when an approved task narrowed them.
 | `tests_enabled: true`, `tests_deferred: true` | Every task's acceptance criteria PASS (evidence: file inspection, code review, command output); tests deferred to Phase 5 | Acceptance-Only |
 | `tests_enabled: false` | Every task's acceptance criteria PASS (same evidence types); tests not run and not required | Acceptance-Only |
 
+If a configurable knob participates in an acceptance invariant, the 4b dispatch
+must re-derive that invariant at the knob's minimum, shipped default, and maximum.
+Defaults-only evidence is insufficient at the gate.
+
 **DELEGATE TO**: @code-quality
 
 #### Pre-Dispatch Triage (Risk-Triaged 4b)
@@ -368,6 +404,7 @@ the required phase test execution and acceptance verification in this mode.
 1. Run the phase-targeted test scope (union of this phase's task test files) — once
 2. Verify acceptance criteria from ALL task files (with evidence)
 3. Check for regressions within the dispatched test_scope plus acceptance-criteria evidence — the full suite belongs to Phase 5a only
+4. For every configurable knob participating in a gated invariant, re-derive the invariant at min, default, and max
 
 **MUST DO**:
 - Identify test files for the scope
@@ -440,6 +477,7 @@ generic command as missing evidence.
 1. Verify acceptance criteria from ALL task files (with evidence)
 2. Evidence must be concrete: file inspection, code review, or command output
 3. Check for regressions via code review (if existing code was modified)
+4. For every configurable knob participating in a gated invariant, re-derive the invariant at min, default, and max
 
 **MUST DO**:
 - Read all task files for the phase
@@ -624,14 +662,16 @@ Corvus is the caller and verifier, never the plan writer.
 **STATUS UPDATES**:
 - `Phase [N]`: `[x]`
 - `[exact-task-id]`: `[x]`
-**GATE OUTCOME**: `4b: PASS — [one concrete evidence line]`
+**GATE OUTCOME**: `4b: PASS — evidence: [stable pointer to command output/report section; do not copy the evidence]`
 ```
 
 Send one batched dispatch per phase boundary with every accumulated task/phase
-status and one gate evidence line. On a triage skip, use `4b: PASS (lightweight —
-skip conditions met: [list])` as that line. Do not dispatch bookkeeping once per
-event or edit MASTER_PLAN.md directly. Do not invoke success extraction here;
-Phase 6 alone owns feature-wide learning.
+status and one pointer to gate evidence. PROGRESS_UPDATE never copies evidence,
+adds literal counts to prose, or uses superlatives. On a triage skip, point to the
+per-task report sections proving the skip conditions rather than restating their
+contents. Do not dispatch bookkeeping once per event or edit MASTER_PLAN.md
+directly. Do not invoke success extraction here; Phase 6 alone owns feature-wide
+learning.
 
 When task-planner returns:
 
