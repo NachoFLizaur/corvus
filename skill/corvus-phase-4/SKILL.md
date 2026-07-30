@@ -135,6 +135,19 @@ explicitly that branch HEAD is NOT the baseline. Every comparison must use the
 provided merge-base SHA; comparison against the wrong ref is a known failure
 class.
 
+### Build-Pipeline Child Transport Retry
+
+This rule applies to every build-pipeline dispatch to `task-planner`, `code-implementer`, `code-quality`, `plan-reviewer`, `ux-dx-quality`, `requirements-analyst`, `code-explorer`, and `researcher`. An empty report, a report truncated at the critical point, or a schema-invalid report is a child-transport failure; a well-formed failure report is a real result and immediately follows the step's existing failure handling.
+
+For a child-transport failure, first attempt one session resume of the same child and request only its final report. If the resumed report is still empty, critically truncated, or schema-invalid, re-dispatch with byte-identical task inputs: at most once in interactive Corvus and at most twice in Corvus Auto. Validate each returned report before proceeding. After the mode's bound is consumed, apply the step's existing failure handling, including a gate's FAIL path, 5b fail-closed handling, or the applicable phase halt. These are transport replacements, not new workflow decisions.
+
+Two carve-outs are mandatory:
+
+1. **Mutation-aware implementer recovery** — because `code-implementer` may already have mutated the workspace before its report was lost, never re-dispatch it blindly. First verify workspace state with read-only Git status and the task's expected-file manifest, then brief the resumed or re-dispatched implementer on exactly what already exists. Preserve the original task inputs byte-for-byte; the state briefing is recovery metadata and cannot broaden scope, repeat completed mutations, or change the file/validation contract. If workspace state cannot be established, do not re-dispatch; apply the existing failure path.
+2. **Judgment-budget preservation** — transport retries never extend judgment budgets. A recovered or re-dispatched call replaces the flaked dispatch in the count; it is not additional to the Phase 3.5 two-REJECT budget or the Phase 4b three-fix-iteration budget.
+
+Production evidence: ≥7 empty or critically truncated child reports occurred in one production week, and each required improvised recovery; this rule makes that recovery deterministic.
+
 ### 4a. Implementation — One Workstream Per Code-Implementer
 
 One workstream (1-5 related tasks from the master plan's `### Workstreams` section) = one code-implementer invocation. The Task tool runs multiple `task()` calls from a single message concurrently ("use a single message with multiple tool uses" to parallelize), so:

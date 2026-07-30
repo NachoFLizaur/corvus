@@ -189,6 +189,8 @@ Steps within a phase are sequential (4a → 4b → 4c); only independent tasks w
 
 Failure-loop detail: the iteration rule lives in the corvus-phase-4 skill.
 
+Build-pipeline child transport failures follow the corvus-phase-4 skill's Build-Pipeline Child Transport Retry rule: an empty, critically truncated, or schema-invalid report gets one same-session final-report resume, then at most one byte-identical re-dispatch; a well-formed failure report is a real result. Never blindly re-dispatch a mutation-capable code-implementer — verify Git/expected-file state and brief it on existing work first — and never let a transport replacement extend the Phase 3.5 REJECT or Phase 4b fix-iteration budget.
+
 ## WORKFLOW PHASES
 
 ```text

@@ -963,7 +963,7 @@ default_action: "COMMENT_ONLY"`
       "PR diff changed after review synthesis",
     ])
     expectContains(REVIEW_R5, [
-      "Delegate exactly once to `@pr-comment-writer` with only the structured POST_REQUEST.",
+      "Make the initial delegation to `@pr-comment-writer` with only the structured POST_REQUEST.",
       "Post the authorized review. The complete input is the following POST_REQUEST.",
     ])
   })
@@ -4529,6 +4529,40 @@ describe("production-retrospective BUILD pipeline contracts", () => {
   test("researcher reports verification scope without safety overclaiming", () => {
     expectContains(RESEARCHER, [
       "When a verification establishes that X is unchanged or compatible, the report\n    MUST state the scope actually tested, enumerate what was NOT tested, and must not\n    present contract-level equivalence as a behavioral safety claim.",
+    ])
+  })
+
+  test("R5 retries only after verified-not-posted child transport failure", () => {
+    expectContains(REVIEW_R5, [
+      "Classify every writer return into exactly one of these three states:",
+      "A writer-internal `local_only` — including validation failure, deterministic HTTP rejection, or an unverified POST outcome — is terminal for this run because the writer already consumed its own bounded recovery.",
+      "If one matching review with a usable `html_url` exists, the POST succeeded and only its report was lost. Treat the run as posted, recover that URL, update the resume checkpoint to `posted: true`, and finish normally without another dispatch.",
+      "Re-dispatch the same `@pr-comment-writer` with the byte-identical POST_REQUEST: at most once in interactive mode and at most twice in autonomous mode.",
+      "terminate local-only with `remote_state: unknown`, display the full review, and do not re-dispatch.",
+      "A verified-not-posted re-dispatch cannot create a duplicate because the absence check precedes every dispatch, and the payload `commit_id` pins the review; the irreversibility rail governs unverified/ambiguous states only.",
+    ])
+    expectAbsent("agent/corvus-review-auto.md", [
+      "Posting-agent failure is also terminal local-only. Never retry",
+      "Do not use another agent, direct command, retry route",
+    ])
+  })
+
+  test("build child transport retries resume first and preserve safety budgets", () => {
+    expectContains(PHASE_4, [
+      "This rule applies to every build-pipeline dispatch to `task-planner`, `code-implementer`, `code-quality`, `plan-reviewer`, `ux-dx-quality`, `requirements-analyst`, `code-explorer`, and `researcher`.",
+      "For a child-transport failure, first attempt one session resume of the same child and request only its final report.",
+      "re-dispatch with byte-identical task inputs: at most once in interactive Corvus and at most twice in Corvus Auto.",
+      "because `code-implementer` may already have mutated the workspace before its report was lost, never re-dispatch it blindly.",
+      "First verify workspace state with read-only Git status and the task's expected-file manifest, then brief the resumed or re-dispatched implementer on exactly what already exists.",
+      "transport retries never extend judgment budgets.",
+      "A recovered or re-dispatched call replaces the flaked dispatch in the count; it is not additional to the Phase 3.5 two-REJECT budget or the Phase 4b three-fix-iteration budget.",
+      "≥7 empty or critically truncated child reports occurred in one production week",
+    ])
+    expectContains(CORVUS, [
+      "gets one same-session final-report resume, then at most one byte-identical re-dispatch",
+    ])
+    expectContains(CORVUS_AUTO, [
+      "gets one same-session final-report resume, then up to two byte-identical re-dispatches",
     ])
   })
 })

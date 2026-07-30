@@ -308,7 +308,7 @@ Goal: post the review to GitHub (or display it locally) and summarize.
 
 Load first: `skill({ name: "corvus-review-r5" })`
 
-- `decision: "post"` → delegate to @pr-comment-writer with the REVIEW_DOCUMENT and POST_REQUEST; it handles line validation, API construction, and error recovery. If posting fails, it falls back to local display.
+- `decision: "post"` → delegate to @pr-comment-writer with the REVIEW_DOCUMENT and POST_REQUEST, then apply the r5 skill's three-way return rule. A valid `posted` or writer-internal `local_only` result is terminal as reported. An empty, malformed, truncated, or schema-invalid return requires read-only review-list verification: recover a matching current-head review as posted; when absence is verified, re-dispatch the same writer with the byte-identical POST_REQUEST at most once; when verification is unknown or ambiguous, terminate local-only. Never use another agent, direct mutation command, different endpoint/event, interactive fallback, or fallback posting route.
 - `decision: "local_only"` → display the full review and rail reason, skip the writer and every GitHub mutation, then terminate locally.
 - After the writer returns, the orchestrator applies the r5 checkpoint update and releases its same-PR lock; the writer never edits review checkpoint metadata.
 

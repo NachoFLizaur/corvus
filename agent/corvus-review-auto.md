@@ -214,7 +214,7 @@ Apply the canonical precedence from `corvus-review-extras` in this exact order. 
 | Layer-5 severity/confidence action | Follow `corvus-review-extras`: escalation occurs only with `default_action: auto`; otherwise retain `COMMENT_ONLY` while reporting the complete review body |
 | Every preceding check remains eligible | Set `decision: auto_post`, then proceed to R5 exactly once |
 
-Posting-agent failure is also terminal local-only. Never retry through another agent, direct command, interactive route, or prose prompt.
+Apply the r5 skill's three-way writer-return rule. A valid `posted` or writer-internal `local_only` result is terminal as reported. An empty, malformed, truncated, or schema-invalid return first requires read-only review-list verification: recover a matching current-head review as posted; when absence is verified, re-dispatch the same writer with the byte-identical POST_REQUEST up to twice; when verification is unknown or ambiguous, terminate local-only. Never use another agent, direct mutation command, different endpoint/event, interactive route, prose prompt, or fallback posting path.
 
 The posting rails forbid downgrading an event to sneak a post through; they do not require repeating an action when direct evidence from this same review series shows that action deterministically fails (for example, an HTTP 422 identity rejection). When that evidence exists and no relevant precondition has changed, skip the doomed attempt, terminate `local_only`, and state the precondition change that would make posting viable.
 
@@ -317,9 +317,9 @@ Goal: post the review to GitHub and display the summary.
 
 Load first: `skill({ name: "corvus-review-r5" })`
 
-Revalidate trust state, comment-volume rail, draft/merged/self-review cap, reviewability, action, and `decision: auto_post` immediately before dispatch. If any value is missing or incompatible, convert to terminal local-only. Otherwise delegate once to @pr-comment-writer with the REVIEW_DOCUMENT and POST_REQUEST (repo, pr_number, event, review_body, inline_comments).
+Revalidate trust state, comment-volume rail, draft/merged/self-review cap, reviewability, action, and `decision: auto_post` immediately before dispatch. If any value is missing or incompatible, convert to terminal local-only. Otherwise make the initial delegation to @pr-comment-writer with the REVIEW_DOCUMENT and POST_REQUEST (repo, pr_number, event, review_body, inline_comments).
 
-If posting fails, display the full review locally and log "Auto-posting failed. Review displayed locally." Do not use another agent, direct command, retry route, or interactive fallback.
+Reconcile the return exactly as defined by r5. A valid writer-internal `local_only` remains terminal; do not try to overcome it. Only a transport-invalid return may trigger the read-only exists/not-posted/unknown check and, after verified absence, up to two re-dispatches of the same writer with the same POST_REQUEST. After an unknown/ambiguous check or exhausted bound, display the full review locally and log "Auto-posting failed. Review displayed locally." The prohibitions on another agent, direct mutation, a different endpoint/event, and interactive fallback remain absolute.
 
 After the writer returns, apply the r5 checkpoint update and release the same-PR lock. The orchestrator owns these local state writes; @pr-comment-writer never receives permission to edit them.
 

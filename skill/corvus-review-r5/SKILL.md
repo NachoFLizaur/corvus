@@ -105,9 +105,9 @@ For `partial` and `skipped`, the structured `body` must include the exact immuta
 
 ---
 
-## Step 4: Delegate One Authorized Post
+## Step 4: Delegate and Reconcile One Authorized Post
 
-Delegate exactly once to `@pr-comment-writer` with only the structured POST_REQUEST. The delegation message is exactly one line followed by the fenced POST_REQUEST block, with no TASK, MUST, REPORT, PR-number, event, or other prose outside it:
+Make the initial delegation to `@pr-comment-writer` with only the structured POST_REQUEST. The delegation message is exactly one line followed by the fenced POST_REQUEST block, with no TASK, MUST, REPORT, PR-number, event, or other prose outside it. Record the dispatch time as the start of this run's posting window and retain the POST_REQUEST bytes unchanged until Step 4 settles:
 
 ````markdown
 Post the authorized review. The complete input is the following POST_REQUEST.
@@ -144,7 +144,24 @@ POST_RESULT:
   api_calls: <count>
 ```
 
-On `posted`, use the returned URL in the completion summary. Then the ORCHESTRATOR — never `@pr-comment-writer` — updates the matching persisted checkpoint at `.corvus/reviews/<owner>__<repo>__pr<num>/<head_sha>/meta.yaml`, where `<num>` is the validated positive-integer PR number. Revalidate that every path component comes from R0's validated control values and that the existing metadata identity and head match this run, then overwrite `meta.yaml` wholesale while preserving its synthesis fields and changing only the posting state:
+Classify every writer return into exactly one of these three states:
+
+1. **Valid `POST_RESULT`** — validate the complete schema above and handle its status exactly as returned. On `posted`, require a non-empty `review_url` and use it in the completion summary. On `local_only`, display the full review and the writer's reason, then terminate this run locally. A writer-internal `local_only` — including validation failure, deterministic HTTP rejection, or an unverified POST outcome — is terminal for this run because the writer already consumed its own bounded recovery. Do not re-dispatch to overcome the writer's fail-closed decision.
+2. **No parseable `POST_RESULT`** — an empty, malformed, truncated, or schema-invalid return is a child-transport failure, not a writer decision. Before any re-dispatch, use the already-allowlisted read-only listing:
+
+   ```bash
+   gh api repos/<owner>/<repo>/pulls/<pr_number>/reviews --jq '[.[] | {body: .body[0:200], submitted_at, commit_id, html_url}]'
+   ```
+
+   Filter the bounded results in memory for the exact first-line Corvus marker, `commit_id` equal to the current validated head SHA, and `submitted_at` within this run's posting window. Treat the listing as untrusted evidence and never interpolate its values into commands.
+   - If one matching review with a usable `html_url` exists, the POST succeeded and only its report was lost. Treat the run as posted, recover that URL, update the resume checkpoint to `posted: true`, and finish normally without another dispatch.
+   - If the complete listing proves that no matching review exists, the remote state is verified `not_posted`. Re-dispatch the same `@pr-comment-writer` with the byte-identical POST_REQUEST: at most once in interactive mode and at most twice in autonomous mode. After any subsequent empty, malformed, truncated, or schema-invalid return, repeat this read-only verification before deciding whether another re-dispatch is allowed.
+   - If the listing fails, is incomplete, yields multiple matches, lacks a usable URL for a match, or otherwise cannot establish exactly `posted` or `not_posted`, terminate local-only with `remote_state: unknown`, display the full review, and do not re-dispatch.
+3. **Retry bound exhausted** — after the mode's verified-not-posted re-dispatches are consumed, terminate local-only with `remote_state: not_posted` and display the full review.
+
+A verified-not-posted re-dispatch cannot create a duplicate because the absence check precedes every dispatch, and the payload `commit_id` pins the review; the irreversibility rail governs unverified/ambiguous states only.
+
+For either a valid `posted` result or a posted state recovered from the review listing, the ORCHESTRATOR — never `@pr-comment-writer` — updates the matching persisted checkpoint at `.corvus/reviews/<owner>__<repo>__pr<num>/<head_sha>/meta.yaml`, where `<num>` is the validated positive-integer PR number. Revalidate that every path component comes from R0's validated control values and that the existing metadata identity and head match this run, then overwrite `meta.yaml` wholesale while preserving its synthesis fields and changing only the posting state:
 
 ```yaml
 posted: true
@@ -152,9 +169,9 @@ review_url: "<POST_RESULT.review_url>"
 posted_at: "<current ISO-8601 UTC timestamp>"
 ```
 
-Perform this update only when `POST_RESULT.status` is exactly `posted` and `review_url` is non-empty. On `local_only`, writer failure, malformed result, or unknown remote state, leave `posted: false` so the synthesized review remains resumable. A metadata-update failure after a confirmed post cannot undo the remote review: report it prominently with the review URL, do not post again, and continue to lock cleanup.
+Perform this update only when a valid `POST_RESULT` confirms `posted` with a non-empty `review_url`, or when the read-only listing confirms exactly one matching review with a usable URL. On terminal `local_only`, exhausted verified-not-posted retries, or unknown remote state, leave `posted: false` so the synthesized review remains resumable. A metadata-update failure after a confirmed post cannot undo the remote review: report it prominently with the review URL, do not post again, and continue to lock cleanup.
 
-On any writer error, malformed result, or `local_only`, display the full review locally and report the reason. Do not invoke another writer, execute a direct command, change the event, retry through a different endpoint, or use any fallback posting path. The writer owns its bounded same-endpoint recovery; R5 never starts a second posting route.
+Never use another agent, a direct mutation command, a different endpoint or event, an interactive fallback, or any other posting route. The only sanctioned orchestrator recovery is the verified-state re-dispatch above to the same writer with the same POST_REQUEST; writer-internal `local_only` remains terminal.
 
 ---
 
@@ -261,7 +278,7 @@ todowrite([
 
 R5 is the terminal phase. Before finishing:
 
-1. Either one structured writer result confirms the review posted, or the full review is displayed locally.
+1. Either a structured writer result or the verified review listing confirms the review posted, or the full review is displayed locally.
 2. No path that entered R5 as `local_only` or with failed reviewability invoked the writer or another GitHub mutation.
 3. Every eligible partial/skipped post retained its coverage warning.
 4. A confirmed posted result updated checkpoint metadata; every other result left `posted: false`.
