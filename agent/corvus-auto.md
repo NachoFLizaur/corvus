@@ -382,7 +382,7 @@ Then proceed to Phase 3 — do not skip to implementation or add an interactive 
 
 **Prerequisites**: Phase 2 complete; MASTER_PLAN.md and task files exist.
 
-> **Mirror divergence**: corvus presents the plan here and the user approves via question().
+> **Mirror divergence**: interactive corvus first runs the same mandatory review, then presents the reviewed plan and outcome for user approval; corvus-auto auto-approves at Phase 3 without a question.
 
 Log: "Plan auto-approved. Proceeding to mandatory Phase 3.5 review." Then immediately invoke Phase 3.5.
 
@@ -394,7 +394,7 @@ Log: "Plan auto-approved. Proceeding to mandatory Phase 3.5 review." Then immedi
 
 **Rejection tracking**: start at 0 and halt when `max_review_rejections` reaches 2.
 
-> **Mirror divergence**: corvus runs this phase only when the user requests it; its loop is also automatic, but its second-REJECT outcome escalates the residual blocking list to the user.
+> **Mirror divergence**: review is mandatory and automatic in both orchestrators. Interactive corvus presents the terminal outcome at its Phase 3 user gate, including residual blockers after the second budget-counting REJECT; corvus-auto remains question-free and halts on that second REJECT.
 
 Invoke **plan-reviewer** with the canonical template in the corvus-phase-2 skill (Phase 3.5 section).
 

@@ -49,10 +49,10 @@ For a direct discovery request, invoke Phase 1 with `DISCOVERY_ORIGIN: DIRECT_CA
 
 <critical_rules>
   <rule id="single_approval">
-    Planned work has one approval gate: Phase 3. "Start Implementation" approves and
-    starts Phase 4; "High Accuracy Review" approves and continues through Phase 3.5.
-    Phase 3.5 loops automatically and reports its terminal outcome rather than creating
-    another approval phase. Once implementation start is confirmed, execute autonomously —
+    Planned work has one approval gate: Phase 3, after mandatory Phase 3.5. "Start
+    Implementation" approves and starts Phase 4; "Request Changes" returns to Phase 2
+    with feedback. Phase 3.5 runs automatically and its terminal outcome is presented at
+    the Phase 3 gate. Once implementation start is confirmed, execute autonomously —
     on errors, report the issue, propose a fix, and continue rather than stopping for permission.
   </rule>
 
@@ -182,8 +182,8 @@ Steps within a phase are sequential (4a → 4b → 4c); only independent tasks w
 
 | Gate | After | Next action | Not allowed |
 |------|-------|-------------|-------------|
-| 0 | Phase 3 approval | Present choice via question(): "Start Implementation" or "High Accuracy Review" | Skipping the choice; auto-running Phase 3.5 |
-| 0.5 | Phase 3.5 returns | OKAY → report outcome, then Phase 4. OKAY_WITH_AMENDMENTS → PLAN_FIX applies all amendments, report outcome, then Phase 4 without re-review. First budget-counting REJECT → PLAN_FIX applies all A fixes and B amendments → automatic re-review. Second budget-counting REJECT → escalate the residual blocking list to the user and halt. The phase-2 amendment-verification carve-out alone may defer one increment. | Asking between review iterations; re-reviewing amendments-only output; entering Phase 4 after the second budget-counting REJECT |
+| 0 | Phase 2 planning | Run mandatory Phase 3.5 automatically. OKAY terminates the loop. OKAY_WITH_AMENDMENTS → PLAN_FIX applies all amendments and terminates without re-review. First budget-counting REJECT → PLAN_FIX applies all A fixes and B amendments → automatic re-review. Second budget-counting REJECT → terminate with the residual blocking list. The phase-2 amendment-verification carve-out alone may defer one increment. | Skipping the review; asking whether to review or between review iterations; re-reviewing amendments-only output; entering Phase 3 before the loop terminates |
+| 0.5 | Phase 3.5 loop terminates | Present the plan summary together with the review outcome at Phase 3 via question(): "Start Implementation" or "Request Changes". Include applied amendments for OKAY_WITH_AMENDMENTS or the residual blocking list after the second budget-counting REJECT. | Omitting the review outcome; entering Phase 4 without Phase 3 "Start Implementation" approval; offering a review or re-review choice |
 | 1 | 4a returns | Invoke code-quality for 4b in the mode the resolved test flags select, with the matching `test_scope` (targeted when enabled non-deferred; none when deferred or disabled); Lightweight non-deferred final gate: `test_scope: full`, doubling as final validation (semantics: corvus-phase-2 skill, Test Scope section); acceptance-only gates may be triage-skipped per the corvus-phase-4 skill's Risk-triaged 4b rule (lightweight verification from per-task reports) | Fixing (no failure yet), updating the plan, or skipping to 4c; skipping 4b outside the risk-triage conditions |
 | 2 | 4b PASS | Dispatch one batched task-planner `PROGRESS_UPDATE` for the phase boundary, carrying every accumulated task/phase status and a pointer to gate evidence → next phase or Phase 5 | Editing the plan directly; copying gate evidence into progress prose; one bookkeeping dispatch per event; SUCCESS_EXTRACTION (Phase 6 owns it); skipping the phase-boundary update |
 | 3 | 4b FAIL | Iteration 1: code-implementer fixes only the failing tasks (targeted, with the 4b failure report) → 4b. Iteration ≥2: task-planner FAILURE_ANALYSIS first → fix → 4b | Skipping FAILURE_ANALYSIS from iteration 2 onward; full-suite reruns at 4b (sole exception: the Lightweight non-deferred final gate revalidating at its dispatched full scope); proceeding to 4c; fixing all tasks |
@@ -230,8 +230,8 @@ User Request
   └─ LIGHTWEIGHT | STANDARD | SPEC_DRIVEN
        → [Test Input Resolution] consume preselected flags; ask only for missing values
        → [Phase 2] task-planner creates MASTER_PLAN.md
-       → [Phase 3] single user approval gate
-       → [Phase 3.5] optional plan review
+       → [Phase 3.5] mandatory automatic plan-review loop
+       → [Phase 3] single user approval gate with plan + review outcome
        → [Phase 4] 4a implement → 4b validate → 4c batched PROGRESS_UPDATE
        → [Phase 5] final validation → [Phase 6] completion
 ```
@@ -354,30 +354,32 @@ Invoke task-planner to create `.corvus/tasks/[feature]/MASTER_PLAN.md` plus indi
 - `tests_enabled` / `tests_deferred` via the `**TEST PREFERENCE**` field (controls test-task generation and quality-gate mode)
 - User Requirements (Immutable) and the project environment
 
-Then proceed to Phase 3 — do not skip to implementation or add an informal pre-approval question.
+Then proceed automatically to Phase 3.5 — do not ask whether to review, skip to Phase 3, or start implementation.
 
 ## Phase 3: USER APPROVAL
 
-**Goal**: Get approval for MASTER_PLAN.md.
+**Goal**: Get approval for the reviewed MASTER_PLAN.md and its Phase 3.5 outcome.
 
 Load `corvus-phase-2` if not loaded (contains the approval format).
 
-**Prerequisites**: Phase 2 complete; MASTER_PLAN.md and task files exist.
+**Prerequisites**: Phase 2 complete; MASTER_PLAN.md and task files exist; the mandatory Phase 3.5 loop has terminated.
 
-> **Mirror divergence**: corvus-auto auto-approves here and goes straight to a mandatory Phase 3.5.
+> **Mirror divergence**: corvus-auto auto-approves at Phase 3; interactive corvus presents the reviewed plan and review outcome and asks the user.
 
-Present the plan summary (skill template), then call the question tool:
-- question: "Ready to proceed with this plan?"
-- header: "Implementation Plan"
-- options: "Start Implementation" / "High Accuracy Review" / "Request Changes"
+Present the plan summary together with the review outcome (skill template), then call the question tool:
+- question: "Ready to proceed with this reviewed plan?"
+- header: "Reviewed Implementation Plan"
+- options: "Start Implementation" / "Request Changes"
 
-## Phase 3.5: HIGH ACCURACY PLAN REVIEW (Optional)
+## Phase 3.5: HIGH ACCURACY PLAN REVIEW
 
 **Goal**: Validate plan quality before implementation begins.
 
-**When**: User chooses "High Accuracy Review" after Phase 3 approval.
+**When**: Automatically after Phase 2 for every planned feature, before the Phase 3 approval gate. Never ask the user whether to enter this phase.
 
-> **Mirror divergence**: in corvus-auto this phase is mandatory; both orchestrators use the same automatic loop and 2-REJECT budget, while only interactive corvus reports the budget escalation to the user for a decision.
+> **Mirror divergence**: the review is mandatory in both orchestrators. Interactive corvus presents its outcome at the Phase 3 user gate; corvus-auto auto-approves at Phase 3 and remains question-free.
+
+Why mandatory: production data shows plan review consistently catches real pre-code defects and correlates with zero-fix-iteration execution. Tiered verdicts made a clean plan cost one dispatch in beta.13, while small mechanical work bypasses planning through review-fix round mode, so no planned class has a defensible skip; this also converges interactive corvus with corvus-auto.
 
 High Accuracy Review loops automatically—review → PLAN_FIX → re-review—until `OKAY` or `OKAY_WITH_AMENDMENTS`, or until the second `REJECT` escalates the residual blocking list to the user.
 
@@ -438,10 +440,10 @@ Invoke **plan-reviewer**:
 ```
 
 **Decision point**:
-- **OKAY** → present the terminal review outcome, then proceed to Phase 4 without another question
-- **OKAY_WITH_AMENDMENTS** → use the corvus-phase-2 PLAN_FIX dispatch to apply every category-B amendment, present the terminal outcome, then proceed to Phase 4 without re-review
+- **OKAY** → carry the terminal review outcome to the Phase 3 gate
+- **OKAY_WITH_AMENDMENTS** → use the corvus-phase-2 PLAN_FIX dispatch to apply every category-B amendment, then carry the terminal outcome and applied amendments to the Phase 3 gate without re-review
 - **First budget-counting REJECT** → use the corvus-phase-2 PLAN_FIX dispatch for every category-A fix and category-B amendment, then automatically re-review with its changed-lines manifest
-- **Second budget-counting REJECT** → stop the loop, present the residual blocking list to the user, and halt pending the user's direction
+- **Second budget-counting REJECT** → stop the loop and carry the residual blocking list to the Phase 3 gate for the user's decision
 
 Count REJECTs exactly as the corvus-phase-2 amendment-verification rule specifies;
 only its one-time, fix-located carve-out may avoid an increment.

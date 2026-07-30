@@ -1,6 +1,6 @@
 ---
 name: corvus-phase-2
-description: Planning (Phase 2), User Approval (Phase 3), and optional High Accuracy Plan Review (Phase 3.5)
+description: Planning (Phase 2), mandatory High Accuracy Plan Review (Phase 3.5), and User Approval (Phase 3)
 ---
 
 ## Phase 2: PLANNING (PLANNED WORK ONLY)
@@ -68,7 +68,7 @@ phase-4 (dispatch templates), phase-5 (5a), code-quality, code-implementer, and 
 
 ### Create Master Plan
 
-After requirements are clear and any required discovery has returned to its caller, invoke task-planner to create `.corvus/tasks/[feature-name]/MASTER_PLAN.md` (the execution tracking document) plus individual task files with detailed implementation steps. Wait for task-planner to create the actual files, then proceed to Phase 3 — Phase 3 needs real documents to approve, so present task-planner's files, not a verbal plan of your own, and save implementation discussion for Phase 4.
+After requirements are clear and any required discovery has returned to its caller, invoke task-planner to create `.corvus/tasks/[feature-name]/MASTER_PLAN.md` (the execution tracking document) plus individual task files with detailed implementation steps. Wait for task-planner to create the actual files, then proceed automatically to Phase 3.5. Phase 3 needs real reviewed documents to approve, so present task-planner's files and the review outcome, not a verbal plan of your own, and save implementation discussion for Phase 4.
 
 Invoke **task-planner** with the resolved inputs and available context:
 
@@ -143,7 +143,7 @@ When the spec-completeness bypass skipped Phase 0a, the `**REQUIREMENTS ANALYSIS
 ### Plan-Type Workflow Notes
 
 The PLAN-TYPE CONTEXT above tells task-planner what to generate; on the orchestrator side:
-- **LIGHTWEIGHT**: skip Phase 3.5 (keep it fast) and Phase 5 (phase-level 4b validation is sufficient) — except when `tests_deferred: true`, which makes Phase 5 mandatory (deferred tests must run there)
+- **LIGHTWEIGHT**: run mandatory Phase 3.5, then skip Phase 5 because phase-level 4b validation is sufficient — except when `tests_deferred: true`, which makes Phase 5 mandatory (deferred tests must run there)
 - **STANDARD**: full multi-phase workflow, no changes
 - **SPEC_DRIVEN**: specs are presented alongside MASTER_PLAN.md in Phase 3 for approval; keep test coverage focused on acceptance contracts and meaningful risks
 
@@ -155,14 +155,15 @@ No Plan never reaches these notes because it has already exited through direct d
 
 ## Phase 3: USER APPROVAL
 
-**Goal**: Get user approval for the MASTER_PLAN.md created in Phase 2.
+**Goal**: Get user approval for the reviewed MASTER_PLAN.md and its Phase 3.5 outcome.
 
-This section applies to interactive `corvus` planned work. It is the single plan-approval gate. Choosing High Accuracy Review approves the plan and keeps the automatic review loop inside Phase 3/3.5; its terminal outcome is reported without a second approval phase. `corvus-auto` uses its own auto-approval and mandatory-review route without calling `question()`.
+This section applies to interactive `corvus` planned work. It is the single plan-approval gate and occurs after the mandatory automatic Phase 3.5 loop. `corvus-auto` auto-approves at Phase 3 without calling `question()`; the review itself is mandatory in both modes.
 
 **Prerequisites** (verify before proceeding — if any is not met, go back to Phase 2 and invoke task-planner):
 - [ ] Phase 2 is complete
 - [ ] `.corvus/tasks/[feature]/MASTER_PLAN.md` file exists
 - [ ] Individual task files exist in `.corvus/tasks/[feature]/`
+- [ ] The mandatory Phase 3.5 loop has terminated with `OKAY`, amended `OKAY_WITH_AMENDMENTS`, or an escalated residual blocking list after the second budget-counting `REJECT`
 
 Present the created plan to the user in this format:
 
@@ -191,30 +192,35 @@ Present the created plan to the user in this format:
 ### Risks & Mitigations
 - [Risk 1] - [Mitigation]
 
+### High Accuracy Review Outcome
+
+**Verdict**: [OKAY | OKAY_WITH_AMENDMENTS (applied) | REJECT budget escalated]
+**Applied Amendments**: [summary for OKAY_WITH_AMENDMENTS, otherwise NONE]
+**Residual Blocking Issues**: [list after the second budget-counting REJECT, otherwise NONE]
+
 ### Master Plan Location
 `.corvus/tasks/[feature-name]/MASTER_PLAN.md`
 ```
 
 After presenting the plan summary, call the question tool directly — invoke it with these exact parameters rather than writing the options as text for the user to type:
 
-- question: "Ready to proceed with this plan?"
-- header: "Implementation Plan"
+- question: "Ready to proceed with this reviewed plan?"
+- header: "Reviewed Implementation Plan"
 - options:
-  1. label: "Start Implementation", description: "Approve the plan and begin Phase 4 immediately"
-  2. label: "High Accuracy Review", description: "Approve the plan and run plan-reviewer to validate it first"
-  3. label: "Request Changes", description: "Go back to planning with feedback"
+  1. label: "Start Implementation", description: "Approve the reviewed plan and begin Phase 4"
+  2. label: "Request Changes", description: "Return to Phase 2 with feedback; the revised plan will be reviewed automatically before this gate reappears"
 
-**Decision Point** (user's selection): "Start Implementation" → Phase 4 · "High Accuracy Review" → Phase 3.5 · "Request Changes" → return to Phase 2 with feedback
+**Decision Point** (user's selection): "Start Implementation" → Phase 4 · "Request Changes" → return to Phase 2 with feedback, then automatically run Phase 3.5 again before presenting Phase 3
 
 **Exit Criteria**: User selects an option via the question tool.
 
 ---
 
-## Phase 3.5: HIGH ACCURACY PLAN REVIEW (Optional)
+## Phase 3.5: HIGH ACCURACY PLAN REVIEW
 
 **Goal**: Validate plan quality before implementation begins and automatically resolve review findings within a bounded loop.
 
-**When**: User chose "High Accuracy Review" after Phase 3 approval (prerequisite: Phase 3 complete).
+**When**: Automatically after Phase 2 for every planned feature in both interactive and autonomous modes. It runs before interactive Phase 3 approval, with no question about whether to enter or re-run it.
 
 High Accuracy Review loops automatically—review → PLAN_FIX → re-review—until `OKAY` or `OKAY_WITH_AMENDMENTS`, or until the second `REJECT` escalates the residual blocking list. Do not ask the user a question between iterations.
 
@@ -311,10 +317,10 @@ Dispatch every plan correction to task-planner with `MODE: PLAN_FIX`. `agent/tas
 
 ### Verdict Handling and Round Budget
 
-- `OKAY`: present the terminal review summary, then proceed to Phase 4 without another approval question.
-- `OKAY_WITH_AMENDMENTS`: dispatch PLAN_FIX with every category-B amendment, present the terminal review and amendment summary, then proceed to Phase 4 without re-review or another approval question.
+- `OKAY`: carry the terminal review summary to the Phase 3 gate.
+- `OKAY_WITH_AMENDMENTS`: dispatch PLAN_FIX with every category-B amendment, then carry the terminal review and applied-amendment summary to the Phase 3 gate without re-review.
 - First budget-counting `REJECT`: dispatch PLAN_FIX with every listed category-A fix and category-B amendment, then automatically re-invoke plan-reviewer with the changed-lines manifest and previous review. Do not ask the user whether to re-run or start implementation.
-- Second budget-counting `REJECT`: apply the round-budget rule below; do not dispatch another fix or enter Phase 4.
+- Second budget-counting `REJECT`: apply the round-budget rule below; do not dispatch another fix or enter Phase 4. Interactive `corvus` carries the residual blocking list to its Phase 3 gate for the user's decision.
 
 **Amendment-verification carve-out (exactly once per feature)**: when a re-review's
 blocking findings are located exclusively in lines changed by the immediately
@@ -325,4 +331,4 @@ again exclusively fix-located, it increments normally; the carve-out is consumed
 and cannot reset. Any blocking finding in unchanged or merely referenced context
 increments normally. This is the only exception to the two-REJECT ceiling.
 
-After the second budget-counting REJECT, stop the loop: interactive `corvus` escalates to the user with the residual blocking list; `corvus-auto` records the unresolved review, halts the feature, and reports the residual blocking list clearly.
+After the second budget-counting REJECT, stop the loop: interactive `corvus` presents the residual blocking list at the Phase 3 gate; `corvus-auto` records the unresolved review, halts the feature, and reports the residual blocking list clearly.

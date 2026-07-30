@@ -2670,13 +2670,51 @@ describe("architectural-wave — phase 1 pins", () => {
       ])
     })
 
-    test("phase-3.5 owns PLAN_FIX routing and the two-reject budget", () => {
+    test("phase-3.5 is mandatory before the single interactive approval", () => {
       expectContains(PHASE_2, [
         "**MODE**: PLAN_FIX",
-        "After the second budget-counting REJECT, stop the loop: interactive `corvus` escalates to the user with the residual blocking list; `corvus-auto` records the unresolved review, halts the feature, and reports the residual blocking list clearly.",
+        "**When**: Automatically after Phase 2 for every planned feature in both interactive and autonomous modes. It runs before interactive Phase 3 approval, with no question about whether to enter or re-run it.",
+        "After the second budget-counting REJECT, stop the loop: interactive `corvus` presents the residual blocking list at the Phase 3 gate; `corvus-auto` records the unresolved review, halts the feature, and reports the residual blocking list clearly.",
+        "### High Accuracy Review Outcome",
+        "**Verdict**: [OKAY | OKAY_WITH_AMENDMENTS (applied) | REJECT budget escalated]",
+        '- question: "Ready to proceed with this reviewed plan?"',
+        '  1. label: "Start Implementation", description: "Approve the reviewed plan and begin Phase 4"',
+        '  2. label: "Request Changes", description: "Return to Phase 2 with feedback; the revised plan will be reviewed automatically before this gate reappears"',
       ])
       expectContains(CORVUS, [
+        "**When**: Automatically after Phase 2 for every planned feature, before the Phase 3 approval gate. Never ask the user whether to enter this phase.",
         "High Accuracy Review loops automatically—review → PLAN_FIX → re-review—until `OKAY` or `OKAY_WITH_AMENDMENTS`, or until the second `REJECT` escalates the residual blocking list to the user.",
+        "Present the plan summary together with the review outcome (skill template), then call the question tool:",
+        '- question: "Ready to proceed with this reviewed plan?"',
+        '- options: "Start Implementation" / "Request Changes"',
+        `    Planned work has one approval gate: Phase 3, after mandatory Phase 3.5. "Start
+    Implementation" approves and starts Phase 4; "Request Changes" returns to Phase 2
+    with feedback. Phase 3.5 runs automatically and its terminal outcome is presented at
+    the Phase 3 gate.`,
+        '| 0 | Phase 2 planning | Run mandatory Phase 3.5 automatically. OKAY terminates the loop. OKAY_WITH_AMENDMENTS → PLAN_FIX applies all amendments and terminates without re-review. First budget-counting REJECT → PLAN_FIX applies all A fixes and B amendments → automatic re-review. Second budget-counting REJECT → terminate with the residual blocking list. The phase-2 amendment-verification carve-out alone may defer one increment. | Skipping the review; asking whether to review or between review iterations; re-reviewing amendments-only output; entering Phase 3 before the loop terminates |',
+        '| 0.5 | Phase 3.5 loop terminates | Present the plan summary together with the review outcome at Phase 3 via question(): "Start Implementation" or "Request Changes". Include applied amendments for OKAY_WITH_AMENDMENTS or the residual blocking list after the second budget-counting REJECT. | Omitting the review outcome; entering Phase 4 without Phase 3 "Start Implementation" approval; offering a review or re-review choice |',
+      ])
+      expectContains(CORVUS_AUTO, [
+        "> **Mirror divergence**: interactive corvus first runs the same mandatory review, then presents the reviewed plan and outcome for user approval; corvus-auto auto-approves at Phase 3 without a question.",
+        "> **Mirror divergence**: review is mandatory and automatic in both orchestrators. Interactive corvus presents the terminal outcome at its Phase 3 user gate, including residual blockers after the second budget-counting REJECT; corvus-auto remains question-free and halts on that second REJECT.",
+      ])
+
+      expectAbsent(CORVUS, [
+        '- options: "Start Implementation" / "High Accuracy Review" / "Request Changes"',
+        "## Phase 3.5: HIGH ACCURACY PLAN REVIEW (Optional)",
+        '**When**: User chooses "High Accuracy Review" after Phase 3 approval.',
+        "| 0 | Phase 3 approval |",
+        "| 0.5 | Phase 3.5 returns |",
+        "Re-run Review",
+      ])
+      expectAbsent(PHASE_2, [
+        '  2. label: "High Accuracy Review", description: "Approve the plan and run plan-reviewer to validate it first"',
+        "## Phase 3.5: HIGH ACCURACY PLAN REVIEW (Optional)",
+        '**When**: User chose "High Accuracy Review" after Phase 3 approval',
+        "Re-run Review",
+      ])
+      expectAbsent(CORVUS_AUTO, [
+        "> **Mirror divergence**: corvus runs this phase only when the user requests it; its loop is also automatic, but its second-REJECT outcome escalates the residual blocking list to the user.",
       ])
     })
 
