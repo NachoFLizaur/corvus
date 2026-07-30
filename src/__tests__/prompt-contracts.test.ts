@@ -4927,4 +4927,19 @@ describe("production-retrospective BUILD pipeline contracts", () => {
       "Cached task replays must be labeled",
     ])
   })
+
+  test("16. fixes defects from the root cause before patching symptoms", () => {
+    expectContains(CODE_IMPLEMENTER, [
+      "The reported site is a hypothesis, not a verdict: review findings report where a defect was OBSERVED, which is frequently downstream of where it EXISTS.",
+      "patch, not root-cause fix — root cause is <X> at <file:line>, left unfixed because <in-scope reason>",
+      "Either fix every site or explicitly state\n   the remaining exposure per unfixed site.",
+      "include\n   or update a test that fails on the pre-fix code at the root-cause level, not\n   merely a test that the reported symptom message changed.",
+    ])
+    expectContains(PHASE_4, [
+      "Direct fix means applying the Defect-Fix Protocol without FAILURE_ANALYSIS ceremony; it never means symptom-patching.",
+    ])
+    expectContains(PHASE_7_BUILD, [
+      "Class-instances get one dispatch per CLASS (root cause + all siblings), never one dispatch per finding.",
+    ])
+  })
 })

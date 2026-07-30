@@ -44,6 +44,7 @@ Phase 4 operates at the **phase level**, not per-task: tasks within a phase are 
     code-implementer directly with the gate's failure report and task attribution,
     `test_scope: targeted` — no task-planner round-trip. The 4b report already
     attributes failures to tasks; a first fix needs that report, not a second analysis.
+    Direct fix means applying the Defect-Fix Protocol without FAILURE_ANALYSIS ceremony; it never means symptom-patching.
     From iteration ≥2, invoke task-planner LEARNING (FAILURE_ANALYSIS) first, then
     dispatch the fix (also `test_scope: targeted`) — a repeated failure signals a root
     cause the report alone did not surface.
@@ -73,7 +74,9 @@ Phase 4 operates at the **phase level**, not per-task: tasks within a phase are 
     point underlies these findings?”, trace that point, then choose revert or
     simplification before any further fix. The existing within-phase signal remains:
     two consecutive fix iterations finding prior-remediation apparatus trigger the
-    same revert/simplify evaluation. Review boundaries never reset either lineage.
+    same revert/simplify evaluation. A disclosed symptom-site patch feeds this
+    same-class tracking and can trigger the stop rule; disclosure does not reset
+    lineage. Review boundaries never reset either lineage.
   - **Max 3 fix iterations per phase**: at the cap, stop and escalate to the user with
     what passed, what still fails, and open questions — even if the phase is incomplete.
   - **Fix-attempt accounting**: code-implementer's in-task 2-attempt fix rule
@@ -536,7 +539,7 @@ No task-planner round-trip: the 4b report already attributes failures to tasks.
 **CONTEXT FILE**: `.corvus/tasks/[feature]/CONTEXT.md` (discovery context — read when present; may be absent on legacy plans)
 
 **FAILURE REPORT**:
-[4b gate output with task attribution — failing criteria, exact errors, files involved per task]
+[4b gate output with task attribution — treat each finding as a symptom report, including failing criteria, exact errors, and observed files per task]
 
 **FINDING ORIGINS**: [functional change | pre-existing code | prior-remediation apparatus, with iteration lineage]
 
@@ -546,6 +549,7 @@ No task-planner round-trip: the 4b report already attributes failures to tasks.
 
 **MUST DO**:
 - Address each attributed failure from the failure report
+- Apply the Defect-Fix Protocol; trace each reported symptom to its root-cause decision point or origin before editing
 - Reapply each failing task's type, test flags, file manifest, and validation allowlist
 - Modify ONLY files related to failing tasks, then run only authorized validation
 
@@ -556,9 +560,16 @@ No task-planner round-trip: the 4b report already attributes failures to tasks.
 
 **REPORT BACK**:
 - Changes made per failing task
+- Root-cause trace from each symptom report to the decision point or origin
+- Fix-placement classification and defect-class enumeration required by the Defect-Fix Protocol
 - Validation results
 - Ready for re-validation
 ```
+
+The orchestrator treats an undisclosed symptom-site patch as a Defect-Fix
+Protocol contract violation and does not advance to F3. A disclosed symptom-site
+patch remains eligible for F3 but feeds the same-class tracking in the Remediation
+stop rule.
 
 **Step F2 (Iteration ≥2): Failure Analysis, Then Fix — DELEGATE TO @task-planner, then @code-implementer**
 
@@ -631,7 +642,7 @@ Then dispatch the fix to @code-implementer:
 
 **MUST DO**:
 - Follow the fix approach from failure analysis
-- Address the root cause, not just symptoms
+- Apply the Defect-Fix Protocol and address the root cause, not just symptoms
 - Ensure fix aligns with updated task definition (if changed)
 - Reapply each failing task's type, test flags, file manifest, and validation allowlist
 - Modify ONLY files related to failing tasks, then run only authorized validation
@@ -642,7 +653,7 @@ Then dispatch the fix to @code-implementer:
 
 **REPORT BACK**:
 - Changes made per failing task
-- How root cause was addressed
+- Root-cause trace, fix-placement classification, and defect-class enumeration required by the Defect-Fix Protocol
 - Ready for re-validation
 ```
 

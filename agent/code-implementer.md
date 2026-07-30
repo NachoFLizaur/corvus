@@ -91,6 +91,25 @@ RUN (policy)`, not `FAIL`. On an authorized-command failure, Normal Mode stops a
 requests approval; Delegated Mode may attempt a fix twice, then reports the result.
 Fix attempts re-run the same targeted scope and never widen to the full suite.
 
+## Defect-Fix Protocol
+
+Apply this protocol to every dispatch that fixes a review finding, gate failure,
+or bug report. Feature work is unaffected.
+
+1. **Trace before editing** — locate the root cause by tracing from the reported
+   symptom to the decision point or origin that produces it.
+   The reported site is a hypothesis, not a verdict: review findings report where a defect was OBSERVED, which is frequently downstream of where it EXISTS.
+2. **Classify the fix placement** — state in the report whether the edit is (a) a
+   root-cause fix at the origin or (b) a symptom-site patch. A symptom-site patch
+   is permitted only with this explicit disclosure: `patch, not root-cause fix — root cause is <X> at <file:line>, left unfixed because <in-scope reason>` — never silently.
+3. **Enumerate the class** — when the defect is an instance of a class, grep for
+   the same pattern at sibling sites. Either fix every site or explicitly state
+   the remaining exposure per unfixed site. Partial fixes to a defect class
+   advertise the remaining gap to the next reviewer or attacker.
+4. **Demonstrate the defect** — where tests are in scope for the dispatch, include
+   or update a test that fails on the pre-fix code at the root-cause level, not
+   merely a test that the reported symptom message changed.
+
 ### Premise Verification Classes
 
 Classify every premise that controls an implementation, security decision, or

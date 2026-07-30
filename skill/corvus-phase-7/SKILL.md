@@ -57,13 +57,26 @@ External-review findings, including PR-review threads, use a dedicated fast path
 when they are small and crisply specified. First verify every finding empirically;
 do not treat reviewer reasoning as proof.
 
+Before dispatch, classify each verified finding as (a) self-contained or (b) an
+instance of a defect class.
+Class-instances get one dispatch per CLASS (root cause + all siblings), never one dispatch per finding.
+Determine the class by tracing the reported symptom to its root cause and grepping for sibling instances. Build the
+exact file allowlist from the root cause and all siblings, not merely the review's
+reported files; findings whose root cause lies outside those files still get fixed
+at the root cause. If that class exceeds the fast path's size or requires a design
+decision, route the whole class through standard planning rather than splitting it
+into finding-sized patches.
+
 Use **REVIEW-FIX ROUND MODE** only when each finding affects approximately three
 files or fewer and the fix shape is stated by the reviewer or has been confirmed
 by a direct probe. Dispatch code-implementer directly with the verified findings,
 exact file allowlist, and validation contract — no task-planner plan and no
-plan-reviewer ceremony. Then run the full-suite gate, commit through the existing
-delivery flow, and disposition the PR threads. Smallness alone is insufficient if
-the fix requires an API, security, architecture, or product-design decision.
+plan-reviewer ceremony. The dispatch names the Defect-Fix Protocol and presents
+each finding as a symptom report, not a prescribed edit.
+Then run the full-suite gate, commit through the existing
+delivery flow, and disposition the PR threads.
+Smallness alone is insufficient if the fix requires an API, security, architecture,
+or product-design decision.
 
 Use standard planning for findings that require design decisions, have cross-
 cutting effects, or lack an empirically established fix shape.
