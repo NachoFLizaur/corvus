@@ -126,6 +126,16 @@ committed explanation before relying on it:
   trace from entry point to decision point or a failing-test demonstration of the
   claimed behavior. Reviewer/orchestrator reasoning alone is never sufficient.
 
+Any directional or quantitative claim written into a durable record (ADR,
+security register, or docblock invariant) requires an in-report derivation at
+WRITE time: show the interval or case trace that establishes it. Reviewer
+acceptance is not verification.
+
+For every guard, fence, limiter, or admission control, write the task-required
+invariant paragraph in its owning docblock at implementation time: identify the
+oracle, read timing relative to mutations, fail direction per consumer, and what
+disables the control.
+
 If the required analytical proof cannot be produced within scope, report the
 premise as unverified and fail closed rather than encoding it as fact.
 
@@ -300,6 +310,10 @@ changed region as `before → after` and states what was preserved, not just wha
 changed. Without that evidence, the report must say `not verified` for that
 edit. Both undisclosed prose regressions in the production ledger shipped under
 an asserted `no deviations`.
+
+Deviation report contract: if the root fix lies outside the authorized manifest,
+state `production would need to change`, name the required paths or behavior, and
+never present assertions pinning defective output as intended behavior.
 
 ```markdown
 ## Task Complete (Delegated Mode)

@@ -57,6 +57,15 @@ External-review findings, including PR-review threads, use a dedicated fast path
 when they are small and crisply specified. First verify every finding empirically;
 do not treat reviewer reasoning as proof.
 
+Before dispatch, integrate the verified findings into one stated remediation
+policy or contract; do not execute reviewer suggestions verbatim finding by
+finding. When a finding proposes reviewer-originated apparatus, evaluate removal
+or a stated invariant first and add apparatus only when those options cannot
+satisfy the contract. When a finding reverses an earlier round's request, push
+back with the settled rationale on the FIRST flip. A finding explicitly
+declined-with-rationale is dispositioned and must not be re-raised without new
+evidence.
+
 Before dispatch, classify each verified finding as (a) self-contained or (b) an
 instance of a defect class.
 Class-instances get one dispatch per CLASS (root cause + all siblings), never one dispatch per finding.
@@ -66,6 +75,28 @@ reported files; findings whose root cause lies outside those files still get fix
 at the root cause. If that class exceeds the fast path's size or requires a design
 decision, route the whole class through standard planning rather than splitting it
 into finding-sized patches.
+
+#### Remediation Ledger and Mechanical Lineage Gate
+
+Maintain `.corvus/tasks/[feature]/REMEDIATION_LEDGER.md` as the durable review-
+series record. It has one row per finding per round with this exact schema:
+
+| Round | Finding ID | Defect Class | Origin | Disposition | Fixing Commit |
+|-------|------------|--------------|--------|-------------|---------------|
+| N | finding-id | defect-class | `functional-change` / `pre-existing` / `prior-round-apparatus` / `reviewer-suggested-apparatus` | open / fixed / declined / deferred | commit SHA or pending |
+
+The ledger makes every round and disposition visible, prevents thread-resolution
+misses, and exposes tensions where round N's remedy is reversed by round N+2.
+Corvus never edits it. Add the ledger path to the remediation dispatch's exact
+authorized manifest; the child persists the current rows before any other write.
+Before choosing that dispatch, Corvus reads the existing ledger, combines it with
+the current round's rows as a prospective update, computes the gate, and passes
+that same calculation to the child for persistence.
+
+**Hard gate**: Before EVERY remediation dispatch, update the ledger state with the current round, compute its origin distribution, and apply this rule: when `prior-round-apparatus` + same-defect-class rows dominate (>50%) OR the existing N=2 rule fires, the symptom-fix dispatch is BLOCKED — the next dispatch must be root-cause analysis that identifies the single underlying decision point or invariant and evaluates removal first.
+
+This replaces noticing with computing. A new review round never resets the
+ledger, its origin distribution, or either hard-gate trigger.
 
 Use **REVIEW-FIX ROUND MODE** only when each finding affects approximately three
 files or fewer and the fix shape is stated by the reviewer or has been confirmed
@@ -82,8 +113,13 @@ Include this consistency checklist inside that single dispatch:
 - [ ] Sweep prose that states derived values affected by the change.
 
 This checklist adds no dispatch, planning round, or review ceremony.
-Then run the full-suite gate, commit through the existing
-delivery flow, and disposition the PR threads.
+For a batch containing any code line, run the full-suite gate, commit through the
+existing delivery flow, and disposition the PR threads. A remediation batch may
+use the prose-only lightweight validation path only after
+`diff file-type + hunk inspection` proves that every changed line is a comment,
+documentation, or Markdown line. That path runs prose-accuracy checks against source plus build/typecheck only
+when documentation examples compile; it does not run the full suite. ANY code line
+in the diff disqualifies the prose-only path.
 Smallness alone is insufficient if the fix requires an API, security, architecture,
 or product-design decision.
 
@@ -99,6 +135,15 @@ default flips to root-cause analysis: identify the single underlying decision
 point, trace it, and evaluate reverting or simplifying prior apparatus before any
 further code-implementer dispatch. A new review round does not reset this rule.
 
+#### Contested Estimated Constants
+
+When a reviewer contests a constant whose justification is an acknowledged
+estimate, move it at most ONCE across the review series. Attach measurement debt
+to that move: state exactly what production data, benchmark, or observation would
+justify another movement. Decline every further move without that new evidence.
+When such an estimated constant ships, state this one-move rule and its measurement
+debt preemptively in the PR body.
+
 #### Finding Disposition and Thread Replies
 
 After remediation, disposition every finding on the PR:
@@ -111,6 +156,20 @@ finding has exactly one posted disposition before declaring the review-fix round
 complete. Thread posting uses existing `gh` allowlists through the selected
 delivery flow; this skill delegates the replies and does not add writer
 permissions.
+
+All `gh` text bodies—thread replies, comments, reviews, and PR bodies—travel
+exclusively via `--body-file` or a tool-managed stdin channel; never place a text
+body inline in a shell string, especially one containing code spans, backticks, or
+`$`. For every paginated GitHub list query, compare the number of retrieved items
+with `totalCount` and continue pagination until they match; never treat the result
+as complete before that check passes.
+
+#### Remediation Push Step
+
+The beta.14 re-derive rule fires on EVERY remediation push to a branch with an
+open PR: regenerate the PR body wholesale from the current diff, never
+string-patch it, and post it only through `--body-file` or a tool-managed stdin
+channel.
 
 ### LIGHTWEIGHT PATH (Small Follow-ups)
 

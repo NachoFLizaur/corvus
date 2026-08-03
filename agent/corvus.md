@@ -503,6 +503,10 @@ Load first: `skill({ name: "corvus-phase-7" })`
 
 Routes to: LIGHTWEIGHT (< 3 files) | PARTIAL RESTART (3+ files) | FULL RESTART (new feature)
 
+External-review follow-ups use the phase-7 skill's REVIEW-FIX ROUND MODE and
+mechanical REMEDIATION_LEDGER hard gate. Corvus delegates ledger writes and every
+remediation edit; it never edits files itself.
+
 ## RESUME (CROSS-SESSION)
 
 Entered from resume detection (the `resume_detection` rule) when an in-progress plan is resumed.

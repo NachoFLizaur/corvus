@@ -115,6 +115,29 @@ no posted reply is unfinished work. Verify all replies through the existing `gh`
 delivery allowlists; delegate posting through the delivery flow rather than adding
 writer permissions here.
 
+All `gh` text bodies—thread replies, comments, reviews, and PR bodies—travel
+exclusively via `--body-file` or a tool-managed stdin channel; never place a text
+body inline in a shell string, especially one containing code spans, backticks, or
+`$`. For every paginated GitHub list query, compare the number of retrieved items
+with `totalCount` and continue pagination until they match; never treat the result
+as complete before that check passes.
+
+### Pre-Delivery Adversarial Sweep
+
+Before opening a PR, dispatch one bounded @code-quality review that runs the
+reviewer's playbook against the final tree:
+
+1. Grep every doc or docblock claim introduced by THIS feature that quotes a
+   value, default, count, or behavior, and compare it with its source.
+2. Trace every new signal introduced by THIS feature end-to-end from producer to
+   every consumer.
+3. Diff every stated default introduced by THIS feature against the actual
+   default.
+
+This is feature-scoped, not a repo-wide audit. Fix every finding before the PR
+opens and mechanically recheck the affected claim, signal, or default after its
+fix.
+
 ### Git Delivery Checklist (when delivery is selected)
 
 PR bodies are terse records: prose carries no literal counts or superlatives.
@@ -124,6 +147,11 @@ copying it. Whenever the diff changes after the PR body was written (new commit,
 deletion, or retarget), re-derive every factual PR-body claim from the current diff
 before push or PR update; never hand-patch the body incrementally.
 
+The beta.14 re-derive rule fires on EVERY push to a branch with an open PR:
+regenerate the PR body wholesale from the current diff, never string-patch it,
+and post it only through `--body-file` or a tool-managed stdin channel.
+
 - [ ] Revalidate the current base, head, and complete diff immediately before delivery.
 - [ ] Generate the PR body from that current diff and its final validation evidence.
 - [ ] If the diff changed after body generation, discard the stale body and regenerate it wholesale before push or PR update.
+- [ ] On every push with an open PR, regenerate and post the whole current-diff body before declaring delivery complete.

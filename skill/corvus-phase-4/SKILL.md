@@ -77,6 +77,13 @@ Phase 4 operates at the **phase level**, not per-task: tasks within a phase are 
     same revert/simplify evaluation. A disclosed symptom-site patch feeds this
     same-class tracking and can trigger the stop rule; disclosure does not reset
     lineage. Review boundaries never reset either lineage.
+  - **Deviation → production-gap escalation**: When a child's disclosed deviation states or implies that the root fix lies outside the authorized manifest (`production would need to change`), the orchestrator must either widen the manifest through a new or amended task or record an explicit deferral with rationale; it must never accept a workaround that encodes the production gap as intended behavior—test assertions pinning defective output are the canonical forbidden form.
+  - **Prose-only remediation validation**: An external-review remediation batch
+    uses the lightweight path only after diff file-type and hunk inspection prove
+    every changed line is comments, documentation, or Markdown. The gate checks
+    prose claims against source and runs build/typecheck only when documentation
+    examples compile; it does not run the full suite. ANY code line in the diff
+    disqualifies this path and restores the batch's normal validation scope.
   - **Max 3 fix iterations per phase**: at the cap, stop and escalate to the user with
     what passed, what still fails, and open questions — even if the phase is incomplete.
   - **Fix-attempt accounting**: code-implementer's in-task 2-attempt fix rule

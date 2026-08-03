@@ -69,6 +69,11 @@ Is anything missing that would block implementation?
 - [ ] All files that need changes are listed in at least one task
 - [ ] `tests_enabled` and `tests_deferred` flags are respected: if `tests_enabled: true`, test tasks exist per phase (regardless of `tests_deferred`); if `tests_enabled: false`, no test tasks and no test sections
 - [ ] Every user requirement from the "User Requirements (Immutable)" section traces to at least one task
+- [ ] **Wire-both-ends check** — Every NEW env var, response field, status code,
+      event, or config knob names its producer, every consumer (including
+      deployment manifests and pod specs for env vars), and a test or verification
+      at each end; cross-check each new-signal task against discovery's consumer
+      inventory. A signal with one end wired is a blocking category-A plan defect.
 
 ### 4. Consistency
 
@@ -231,6 +236,14 @@ The delegation template includes `PROJECT ENVIRONMENT` info. Verify task validat
 - If no build/test system: validation commands should fit the project (e.g., manual review for docs-only repos)
 - Commands must not reference tools not available in the project
 
+## Wire-Both-Ends Check
+
+Execute the named Completeness sub-check by extracting every new signal from the
+task files and building a producer → consumers → endpoint-verification matrix.
+Compare the listed consumers with discovery's consumer inventory rather than
+accepting the task's list at face value. Any missing producer, consumer, or
+endpoint verification fails Completeness as a category-A defect.
+
 ## User Requirements Traceability
 
 Read the "User Requirements (Immutable)" section from the delegation context. For each requirement, search MASTER_PLAN.md and task files for coverage — every requirement must map to at least one task's objective, deliverables, or acceptance criteria. Unmapped requirements → FAIL the Completeness sub-check.
@@ -309,6 +322,8 @@ Set the verdict line to exactly one of `OKAY`, `OKAY_WITH_AMENDMENTS`, or `REJEC
   - Evidence: [compliance check result]
 - [x] User requirements traceability
   - Evidence: [traceability table]
+- [x] Wire-both-ends check
+  - Evidence: [new-signal producer/consumer/verification matrix cross-checked against discovery]
 
 ### Pass 3: Adversarial Review
 - [Adversarial findings and assessment]

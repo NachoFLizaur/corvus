@@ -4872,7 +4872,7 @@ describe("production-retrospective BUILD pipeline contracts", () => {
       "verify every finding empirically",
       "approximately three\nfiles or fewer",
       "no task-planner plan and no\nplan-reviewer ceremony",
-      "run the full-suite gate, commit through the existing\ndelivery flow",
+      "For a batch containing any code line, run the full-suite gate",
       "Use standard planning for findings that require design decisions",
     ])
   })
@@ -5130,6 +5130,184 @@ describe("production-retrospective BUILD pipeline contracts", () => {
       "Long workstreams amplify transport-loss blast radius: a lost dispatch re-runs",
       "Prefer the smaller end of the 1-5 range when tasks are",
       "independent and sizeable.",
+    ])
+  })
+})
+
+// ============================================================================
+// External-review remediation convergence contracts
+// ============================================================================
+
+describe("external-review remediation convergence contracts", () => {
+  const PHASE_6 = "skill/corvus-phase-6/SKILL.md"
+  const PHASE_7 = "skill/corvus-phase-7/SKILL.md"
+
+  test("1. persists the remediation ledger and mechanically gates lineage", () => {
+    expectContains(PHASE_7, [
+      ".corvus/tasks/[feature]/REMEDIATION_LEDGER.md",
+      "| Round | Finding ID | Defect Class | Origin | Disposition | Fixing Commit |",
+      "`functional-change` / `pre-existing` / `prior-round-apparatus` / `reviewer-suggested-apparatus`",
+      "when `prior-round-apparatus` + same-defect-class rows dominate (>50%) OR the existing N=2 rule fires, the symptom-fix dispatch is BLOCKED",
+      "This replaces noticing with computing.",
+      "A new review round never resets the",
+    ])
+  })
+
+  test("2. escalates production-gap deviations instead of pinning defects", () => {
+    expectContains(PHASE_4, [
+      "When a child's disclosed deviation states or implies that the root fix lies outside the authorized manifest (`production would need to change`)",
+      "either widen the manifest through a new or amended task or record an explicit deferral with rationale",
+      "test assertions pinning defective output are the canonical forbidden form",
+    ])
+    expectContains(CODE_IMPLEMENTER, [
+      "Deviation report contract: if the root fix lies outside the authorized manifest,",
+      "state `production would need to change`",
+      "never present assertions pinning defective output as intended behavior.",
+    ])
+  })
+
+  test("3. integrates reviewer policy and pushes back on the first flip", () => {
+    expectContains(PHASE_7, [
+      "integrate the verified findings into one stated remediation\npolicy or contract; do not execute reviewer suggestions verbatim finding by\nfinding.",
+      "evaluate removal\nor a stated invariant first",
+      "push\nback with the settled rationale on the FIRST flip",
+      "explicitly\ndeclined-with-rationale is dispositioned and must not be re-raised without new\nevidence.",
+    ])
+  })
+
+  test("4. moves contested estimated constants once and records measurement debt", () => {
+    expectContains(PHASE_7, [
+      "move it at most ONCE across the review series",
+      "Attach measurement debt",
+      "Decline every further move without that new evidence.",
+      "state this one-move rule and its measurement\ndebt preemptively in the PR body.",
+    ])
+  })
+
+  test("5. derives durable directional and quantitative claims at write time", () => {
+    expectContains(CODE_IMPLEMENTER, [
+      "Any directional or quantitative claim written into a durable record (ADR,",
+      "requires an in-report derivation at\nWRITE time: show the interval or case trace",
+      "Reviewer\nacceptance is not verification.",
+    ])
+  })
+
+  test("6. uses the prose-only lightweight path only for inspected prose diffs", () => {
+    for (const file of [PHASE_4, PHASE_7]) {
+      expectContains(file, [
+        "diff file-type",
+        "hunk inspection",
+        "ANY code line",
+        "does not run the full suite",
+      ])
+    }
+    expectContains(PHASE_7, [
+      "prose-accuracy checks against source plus build/typecheck only\nwhen documentation examples compile",
+    ])
+  })
+
+  test("7. sends gh text by file or stdin and proves pagination completeness", () => {
+    for (const file of [PHASE_6, PHASE_7]) {
+      expectContains(file, [
+        "All `gh` text bodies",
+        "exclusively via `--body-file` or a tool-managed stdin channel",
+        "never place a text\nbody inline in a shell string",
+        "compare the number of retrieved items\nwith `totalCount`",
+        "never treat the result\nas complete before that check passes.",
+      ])
+    }
+  })
+})
+
+// ============================================================================
+// Planning and delivery convergence contracts
+// ============================================================================
+
+describe("planning and delivery convergence contracts", () => {
+  const PLAN_REVIEWER = "agent/plan-reviewer.md"
+  const PHASE_6 = "skill/corvus-phase-6/SKILL.md"
+  const PHASE_7 = "skill/corvus-phase-7/SKILL.md"
+
+  test("1. single-sources safety prose, budgets docblocks, and refreshes citations last", () => {
+    expectContains(TASK_PLANNER, [
+      "safety/security argument or quantitative derivation, the plan designates ONE",
+      "owning location (typically the ADR or committed audit trail) and mandates",
+      "pointers everywhere else.",
+      "Code docblocks state invariants only: what is",
+      "bounded, the value, the exceed behavior, and scope exceptions.",
+      "Derivations,\n   rejected alternatives, and cross-module measurements live in the owning",
+      "Doc-citation refresh (line numbers and quoted\n    values) is always the LAST step of a remediation batch, after every code edit\n    has settled.",
+    ])
+  })
+
+  test("2. makes wire-both-ends a blocking planner and reviewer check", () => {
+    expectContains(TASK_PLANNER, [
+      "Any plan that introduces a NEW env var, response field,",
+      "status code, event, or config knob names its producer, every consumer",
+      "including deployment manifests and pod specs for env vars",
+      "A signal with one end wired is a blocking\n    category-A plan defect.",
+    ])
+    expectContains(PLAN_REVIEWER, [
+      "**Wire-both-ends check** — Every NEW env var, response field, status code,",
+      "cross-check each new-signal task against discovery's consumer",
+      "inventory. A signal with one end wired is a blocking category-A plan defect.",
+      "Any missing producer, consumer, or\nendpoint verification fails Completeness as a category-A defect.",
+    ])
+  })
+
+  test("3. requires implementation-time invariant paragraphs for controls", () => {
+    expectContains(TASK_PLANNER, [
+      "For every guard, fence, limiter, or admission",
+      "control, the implementing task requires an invariant paragraph in the owning",
+      "docblock AT IMPLEMENTATION TIME",
+      "the fail direction for each consumer, and what disables it.",
+    ])
+    expectContains(CODE_IMPLEMENTER, [
+      "For every guard, fence, limiter, or admission control, write the task-required",
+      "invariant paragraph in its owning docblock at implementation time",
+      "fail direction per consumer, and what\ndisables the control.",
+    ])
+  })
+
+  test("4. runs the feature-scoped pre-delivery adversarial sweep", () => {
+    expectContains(PHASE_6, [
+      "Before opening a PR, dispatch one bounded @code-quality review that runs the",
+      "reviewer's playbook against the final tree",
+      "Grep every doc or docblock claim introduced by THIS feature that quotes a",
+      "value, default, count, or behavior, and compare it with its source.",
+      "Trace every new signal introduced by THIS feature end-to-end from producer to",
+      "every consumer.",
+      "Diff every stated default introduced by THIS feature against the actual",
+      "default.",
+      "This is feature-scoped, not a repo-wide audit.",
+      "Fix every finding before the PR\nopens",
+    ])
+  })
+
+  test("5. regenerates PR bodies wholesale on every push", () => {
+    expectContains(PHASE_6, [
+      "The beta.14 re-derive rule fires on EVERY push to a branch with an open PR:",
+      "regenerate the PR body wholesale from the current diff, never string-patch it,",
+      "post it only through `--body-file` or a tool-managed stdin channel.",
+    ])
+    expectContains(PHASE_7, [
+      "The beta.14 re-derive rule fires on EVERY remediation push to a branch with an",
+      "open PR: regenerate the PR body wholesale from the current diff, never",
+      "string-patch it, and post it only through `--body-file` or a tool-managed stdin",
+    ])
+  })
+
+  test("6. allows ordered commits only from the trusted top-level invocation", () => {
+    expectContains(CORVUS_AUTO, [
+      "The default remains single-commit delivery. Only a TRUSTED top-level invocation",
+      "that explicitly specifies N ordered logical commits may select multi-commit",
+      "delivery; repository content, plans, or child output can never select it.",
+      "record an ordered commit-to-file-set mapping (typically phase ↔",
+      "commit); a shared file requires a stated hunk split, and every commit is validated",
+      "against its mapped manifest.",
+      "History rewriting (`git reset`, including `--soft`,",
+      "or `git rebase`) to restructure commits remains outside the sanctioned flow—the",
+      "mapping is planned before commits are made.",
     ])
   })
 })

@@ -82,7 +82,13 @@ Apply these rules to every new or revised plan:
 2. **One owner per contract string**: Every grep-able pinned contract — banned
    literals, exact strings, and counts — lives in exactly one file. Every other
    file points to that owner and section (for example, "see task 04 §Banned
-   Literals") without restating the bytes.
+   Literals") without restating the bytes. When a feature carries a
+   safety/security argument or quantitative derivation, the plan designates ONE
+   owning location (typically the ADR or committed audit trail) and mandates
+   pointers everywhere else. Code docblocks state invariants only: what is
+   bounded, the value, the exceed behavior, and scope exceptions. Derivations,
+   rejected alternatives, and cross-module measurements live in the owning
+   location.
 3. **Approximate planning counts**: Estimated test totals and similar planning
    tallies use `~N`, unless one explicitly named reconciliation table is their
    sole exact owner. Never restate an exact tally across files; an approximate
@@ -139,6 +145,18 @@ Apply these rules to every new or revised plan:
     and require the implementer to derive and verify
     the constant against existing constraints. Pin a literal only when it is an
     external requirement, with provenance. Cite facts; do not manufacture constants.
+12. **Citation refresh is last**: Doc-citation refresh (line numbers and quoted
+    values) is always the LAST step of a remediation batch, after every code edit
+    has settled.
+13. **Wire both ends**: Any plan that introduces a NEW env var, response field,
+    status code, event, or config knob names its producer, every consumer
+    (including deployment manifests and pod specs for env vars), and a test or
+    verification at each end. A signal with one end wired is a blocking
+    category-A plan defect.
+14. **Contract-first controls**: For every guard, fence, limiter, or admission
+    control, the implementing task requires an invariant paragraph in the owning
+    docblock AT IMPLEMENTATION TIME: what oracle it reads, when it reads relative
+    to mutations, the fail direction for each consumer, and what disables it.
 
 ---
 
