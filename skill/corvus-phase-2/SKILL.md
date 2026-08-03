@@ -119,6 +119,8 @@ Incorporate these into MASTER_PLAN.md and all relevant task files. Do not substi
 - Create MASTER_PLAN.md with phases, dependencies, and progress tracking
 - Create individual task files with detailed steps and acceptance criteria
 - Create CONTEXT.md from the DISCOVERY DIGEST (schema: task-planner)
+- Populate CONTEXT.md with immutable requirements, project environment details,
+  and stable premises/invariants for Phase 4 dispatches to reference by section
 - Read `.corvus/tasks/learnings.md` (when present) and apply relevant entries to task design
 - Include validation commands for each task using the project environment above (venv path, package manager) — not bare `python`/`pytest`/`npm`
 - Require smoke-test evidence that every targeted-test command actually filters; a nonexistent-file probe (or equivalent) must fail/filter rather than run the whole suite
@@ -165,42 +167,35 @@ This section applies to interactive `corvus` planned work. It is the single plan
 - [ ] Individual task files exist in `.corvus/tasks/[feature]/`
 - [ ] The mandatory Phase 3.5 loop has terminated with `OKAY`, amended `OKAY_WITH_AMENDMENTS`, or an escalated residual blocking list after the second budget-counting `REJECT`
 
-Present the created plan to the user in this format:
+Present a bounded summary. Details stay in the referenced artifacts rather than
+being inlined, so the entire presentation plus the question fits comfortably in
+one message.
 
 ```markdown
 ## Implementation Plan Ready
 
 **Feature**: [Name]
-**Total Tasks**: [N] tasks across [M] phases
-**Estimated Effort**: [X hours/days]
-
-### Phases
-
-| Phase | Name | Tasks | Effort | Description |
-|-------|------|-------|--------|-------------|
-| 1 | [Name] | [N] | [effort] | [Brief description] |
-| ... | | | | |
-
-### Key Changes
-
-**Files to Modify**:
-- `[file1]` - [what changes]
-
-**Files to Create**:
-- `[file1]` - [purpose]
-
-### Risks & Mitigations
-- [Risk 1] - [Mitigation]
+**Plan Type**: [LIGHTWEIGHT | STANDARD | SPEC_DRIVEN]
+**Scope**: [M] phases, [N] tasks
 
 ### High Accuracy Review Outcome
 
 **Verdict**: [OKAY | OKAY_WITH_AMENDMENTS (applied) | REJECT budget escalated]
-**Applied Amendments**: [summary for OKAY_WITH_AMENDMENTS, otherwise NONE]
-**Residual Blocking Issues**: [list after the second budget-counting REJECT, otherwise NONE]
+**Amendments**: [N applied]
 
-### Master Plan Location
-`.corvus/tasks/[feature-name]/MASTER_PLAN.md`
+### Immutable Requirements
+- [bounded requirement summary; authoritative verbatim text remains in MASTER_PLAN.md]
+
+### Risks
+- [top material risk and mitigation; remaining details stay in MASTER_PLAN.md]
+
+### Details
+- **Master Plan**: `.corvus/tasks/[feature-name]/MASTER_PLAN.md`
+- **Review Verdict**: [path or stable report reference]
 ```
+
+Do not inline phase tables, file lists, task descriptions, amendment bodies, or
+residual-review detail; reference their owning artifact.
 
 After presenting the plan summary, call the question tool directly — invoke it with these exact parameters rather than writing the options as text for the user to type:
 

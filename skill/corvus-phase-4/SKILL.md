@@ -138,6 +138,12 @@ outgoing, or previous value is X, counts, and paths asserted to exist. A premise
 that cannot be cited must be handed to the child as a question to verify, not a
 fact to execute. This extends the merge-base rule below to every premise class.
 
+When a task or dispatch involves a derived constant, state the governing
+property (for example, `each per-field max must boot` or `reject the multiplicative max`)
+and require the implementer to derive and verify the
+constant against existing constraints. Pin a literal only when it is an
+external requirement, with provenance. Cite facts; do not manufacture constants.
+
 Before any 4a, 4b, or fix dispatch that reasons about "current", "previous",
 "outgoing", or "baseline" repository state, compute `git merge-base HEAD
 <default-branch>` and include the resulting full SHA in the dispatch. State
@@ -183,10 +189,22 @@ Production evidence: ≥7 empty or critically truncated child reports occurred i
 
 One workstream (1-5 related tasks from the master plan's `### Workstreams` section) = one code-implementer invocation. The Task tool runs multiple `task()` calls from a single message concurrently ("use a single message with multiple tool uses" to parallelize), so:
 
+Long workstreams amplify transport-loss blast radius: a lost dispatch re-runs
+the whole workstream. Prefer the smaller end of the 1-5 range when tasks are
+independent and sizeable.
+
 - **Parallel** (workstreams with pairwise-disjoint file sets, per the plan's justification column): multiple `task()` calls in ONE message — each for exactly one workstream
 - **Sequential** (dependent workstreams, shared file modifications, output feeding forward): one `task()` call per message; wait for completion between each
 
 A single-task workstream uses the Single-Task Delegation Template below; a multi-task workstream uses the Workstream Delegation Template after the Worked Example.
+
+**Dispatch economy**: invariants, immutable requirements, environment details,
+and stable premises live in the feature's `CONTEXT.md`; dispatches reference
+that file by path plus section and carry only task-specific deltas: task-file
+paths, specific premises with provenance, and the report contract. Premise
+provenance may cite a `CONTEXT.md` entry as its source. Premise discipline
+demonstrably prevents errors; duplication of stable context across dispatches
+is the cost to remove, not the discipline.
 
 **Success criteria for 4a**: every task in the phase dispatched exactly once through its workstream's code-implementer, every dispatch reported back with per-task validation results, every required report section passed schema validation, and every claimed write was verified on disk with `ls`/`read`.
 
@@ -198,7 +216,7 @@ A single-task workstream uses the Single-Task Delegation Template below; a multi
 **TASK FILE**: `.corvus/tasks/[feature]/[NN-task-name].md`
 ⚠️ READ THIS FILE FIRST - It contains detailed steps, examples, and acceptance criteria.
 
-**CONTEXT FILE**: `.corvus/tasks/[feature]/CONTEXT.md` (discovery context — read when present; may be absent on legacy plans)
+**CONTEXT FILE**: `.corvus/tasks/[feature]/CONTEXT.md` — sections: User Requirements (Immutable), Project Environment, Stable Premises and Invariants (read when present; may be absent on legacy or Hard-apparatus-budget plans)
 
 **DELEGATED MODE**: Pre-approved via master plan. Do NOT ask for approval.
 
@@ -285,7 +303,7 @@ For a workstream of 2-5 tasks. Single-task workstreams use the Single-Task Deleg
 - `.corvus/tasks/[feature]/[NN-task-name].md`
 ⚠️ READ ALL TASK FILES FIRST — each is the atomic spec for its task.
 
-**CONTEXT FILE**: `.corvus/tasks/[feature]/CONTEXT.md` (discovery context — read when present; may be absent on legacy plans)
+**CONTEXT FILE**: `.corvus/tasks/[feature]/CONTEXT.md` — sections: User Requirements (Immutable), Project Environment, Stable Premises and Invariants (read when present; may be absent on legacy or Hard-apparatus-budget plans)
 
 **DELEGATED MODE**: Pre-approved via master plan. Do NOT ask for approval.
 
@@ -390,7 +408,7 @@ condition fails, dispatch the template the resolved flags select, as always.
 - Task NN: [name] - `.corvus/tasks/[feature]/NN-task.md`
 - Task NN: [name] - `.corvus/tasks/[feature]/NN-task.md`
 
-**CONTEXT FILE**: `.corvus/tasks/[feature]/CONTEXT.md` (discovery context — read when present; may be absent on legacy plans)
+**CONTEXT FILE**: `.corvus/tasks/[feature]/CONTEXT.md` — sections: User Requirements (Immutable), Project Environment, Stable Premises and Invariants (read when present; may be absent on legacy or Hard-apparatus-budget plans)
 
 **SCOPE**: All files created/modified in 4a for this phase
 
@@ -460,7 +478,7 @@ Only tasks [NN] require fixes. Tasks [NN] should NOT be modified.
 - Task NN: [name] - `.corvus/tasks/[feature]/NN-task.md`
 - Task NN: [name] - `.corvus/tasks/[feature]/NN-task.md`
 
-**CONTEXT FILE**: `.corvus/tasks/[feature]/CONTEXT.md` (discovery context — read when present; may be absent on legacy plans)
+**CONTEXT FILE**: `.corvus/tasks/[feature]/CONTEXT.md` — sections: User Requirements (Immutable), Project Environment, Stable Premises and Invariants (read when present; may be absent on legacy or Hard-apparatus-budget plans)
 
 **SCOPE**: All files created/modified in 4a for this phase
 
@@ -524,6 +542,14 @@ Only tasks [NN] require fixes. Tasks [NN] should NOT be modified.
 
 The canonical rule from Operating Rules applies: iteration 1 dispatches a direct fix from the gate's failure report (F1); iteration ≥2 runs FAILURE_ANALYSIS first, then the fix (F2); every iteration ends with revalidation at the original 4b dispatch scope (F3). A fix dispatch may target a subset of a workstream's tasks: scope it to the failing tasks — including tasks the gate reports as BLOCKED or unimplemented — as a single-task dispatch or a subset workstream carrying only those task files. Before every fix, classify each finding's origin; when the Remediation stop rule triggers, state the revert/simplify evaluation before choosing whether another fix dispatch is justified.
 
+#### Remediation Inheritance Rule
+
+Remediation output is new unreviewed content: every fix inherits the full consistency obligations of the work it touches—the same mirror sweeps, doc sweeps, prose-accuracy checks, and verification that applied to the original change apply to the fix, at the fix's blast radius.
+
+Production instance: a PLAN_FIX wrote a blanket “assertions preserved verbatim” claim that the next review rejected per occurrence.
+
+Production instance: a review-fix commit added a config invariant without sweeping the README that described those knobs, producing a next-round finding.
+
 **Step F1 (Iteration 1): Direct Fix — DELEGATE TO @code-implementer (failing tasks only)**
 
 No task-planner round-trip: the 4b report already attributes failures to tasks.
@@ -536,7 +562,7 @@ No task-planner round-trip: the 4b report already attributes failures to tasks.
 
 **DO NOT MODIFY**: Tasks [NN, NN] - these passed validation
 
-**CONTEXT FILE**: `.corvus/tasks/[feature]/CONTEXT.md` (discovery context — read when present; may be absent on legacy plans)
+**CONTEXT FILE**: `.corvus/tasks/[feature]/CONTEXT.md` — sections: User Requirements (Immutable), Project Environment, Stable Premises and Invariants (read when present; may be absent on legacy or Hard-apparatus-budget plans)
 
 **FAILURE REPORT**:
 [4b gate output with task attribution — treat each finding as a symptom report, including failing criteria, exact errors, and observed files per task]
@@ -625,7 +651,7 @@ Then dispatch the fix to @code-implementer:
 
 **DO NOT MODIFY**: Tasks [NN, NN] - these passed validation
 
-**CONTEXT FILE**: `.corvus/tasks/[feature]/CONTEXT.md` (discovery context — read when present; may be absent on legacy plans)
+**CONTEXT FILE**: `.corvus/tasks/[feature]/CONTEXT.md` — sections: User Requirements (Immutable), Project Environment, Stable Premises and Invariants (read when present; may be absent on legacy or Hard-apparatus-budget plans)
 
 **FAILURE ANALYSIS**:
 [Root cause and recommended fix approach from the analysis]

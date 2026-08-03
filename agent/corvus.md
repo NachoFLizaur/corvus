@@ -366,7 +366,12 @@ Load `corvus-phase-2` if not loaded (contains the approval format).
 
 > **Mirror divergence**: corvus-auto auto-approves at Phase 3; interactive corvus presents the reviewed plan and review outcome and asks the user.
 
-Present the plan summary together with the review outcome (skill template), then call the question tool:
+Present the bounded plan summary together with the review outcome (skill
+template): feature, plan type, phase/task counts, review verdict and amendments
+count, immutable requirements, and risks. Reference details by path to
+MASTER_PLAN.md and the review verdict rather than inlining them; the complete
+presentation plus the question must fit comfortably in one message. Then call
+the question tool:
 - question: "Ready to proceed with this reviewed plan?"
 - header: "Reviewed Implementation Plan"
 - options: "Start Implementation" / "Request Changes"

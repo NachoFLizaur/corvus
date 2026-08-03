@@ -73,6 +73,15 @@ by a direct probe. Dispatch code-implementer directly with the verified findings
 exact file allowlist, and validation contract — no task-planner plan and no
 plan-reviewer ceremony. The dispatch names the Defect-Fix Protocol and presents
 each finding as a symptom report, not a prescribed edit.
+Apply the corvus-phase-4 skill's **Remediation Inheritance Rule** at the review-fix blast radius.
+
+Include this consistency checklist inside that single dispatch:
+
+- [ ] Sweep docs (README, ADRs, and comments) describing any touched knob,
+      contract, or constant.
+- [ ] Sweep prose that states derived values affected by the change.
+
+This checklist adds no dispatch, planning round, or review ceremony.
 Then run the full-suite gate, commit through the existing
 delivery flow, and disposition the PR threads.
 Smallness alone is insufficient if the fix requires an API, security, architecture,

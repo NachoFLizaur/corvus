@@ -159,6 +159,8 @@ Show each tool call and its matches (file, line, context) in your output, per th
 
 On re-review after a PLAN_FIX, scope review to the fix's changed-lines manifest plus regression spot-checks of directly referenced context. Previously-passed checks carry forward without re-execution. Raise no new category-B or category-C findings on unchanged text. If only trivial residuals of prior findings remain (single-line and non-behavioral), return OKAY_WITH_AMENDMENTS rather than REJECT.
 
+Apply the corvus-phase-4 skill's **Remediation Inheritance Rule** at the PLAN_FIX re-review blast radius.
+
 Round 1 always performs the complete three-pass review, including all file verification. The iteration scope narrows only after that baseline is established; a regression found in directly referenced context is classified normally.
 
 For every re-review `REJECT`, report whether every blocking finding is located

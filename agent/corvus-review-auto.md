@@ -32,6 +32,9 @@ permission:
     "gh pr view * --repo * --json number,url,title,body,author,baseRefName,baseRefOid,headRefName,headRefOid,labels,reviewRequests,isDraft,mergeable,state,mergedAt,additions,deletions,changedFiles,files,closingIssuesReferences,latestReviews,reviewDecision": "allow"
     "gh pr checks * --repo * --json name,state,link": "allow"
     'gh api repos/*/pulls/*/reviews --jq *': "allow"
+    'gh api repos/*/pulls/*/comments --jq *': "allow"
+    'gh api repos/*/compare/* --jq *': "allow"
+    'gh pr diff * --repo *': "allow"
     "gh pr diff * --repo * --name-only": "allow"
     'gh api --method GET "repos/*/contents/.opencode/review-config.yaml?ref=*" -H "Accept: application/vnd.github.raw+json"': "allow"
 ---

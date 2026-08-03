@@ -389,9 +389,9 @@ Action emojis:
 
 ### 9b. Inline Comments
 
-Generate an inline comment only when the finding's path is present in `REVIEW_CONTEXT.file_map` and its RIGHT-side `line_start` (and every line through `line_end`, when present) falls inside that file's API-derived `postable_line_ranges`. Otherwise mark the finding body-only during synthesis; never leave anchor relocation to the writer. Estimated anchors are not eligible.
+Generate an inline comment only when the finding's path is present in `REVIEW_CONTEXT.file_map` and its RIGHT-side `line_start` (and every line through `line_end`, when present) falls inside that file's API-derived `postable_line_ranges`. When a finding span crosses a gap between postable ranges, first shrink the span to the nearest in-range line that still points at the finding's subject, preferring the line where the defect is introduced. Mark the finding body-only only when no in-range line represents the subject; never leave anchor relocation to the writer. Estimated anchors are not eligible.
 
-Inline placement is primarily for actionable findings. Render at most 3 `praise` findings inline, choosing the first three in deterministic presentation order; group every remaining praise in the review body. Praise without a verified postable anchor is also body-only and does not consume the cap.
+Inline placement is primarily for actionable findings. Render at most 3 `praise` findings inline, selecting the highest-value praise by subject significance and then confidence, not file order; use deterministic presentation order only as the final tie-break and group every remaining praise in the review body. Praise without a verified postable anchor is also body-only and does not consume the cap.
 
 For each eligible finding, generate an inline comment:
 
@@ -502,6 +502,7 @@ finding_counts:
   note: <non-negative integer>
   total: <non-negative integer>
 posted: false
+series_converged: false
 ```
 
 The counts come from the final retained REVIEW_DOCUMENT state, with `total` matching its findings list. A trusted explicit fresh re-synthesis for the same head intentionally replaces any prior checkpoint and resets `posted: false`. Never delete artifacts for another head SHA.
@@ -516,9 +517,10 @@ facts:
     confidence: <0.0-1.0>
 open_questions:
   - "<question still requiring verification>"
+config_absent_at_base: <true|false>
 ```
 
-Deduplicate exact facts/questions without discarding earlier sources. Never persist a child's unsupported inference as a fact. A verified-facts write failure is reported and does not invalidate the already synthesized review checkpoint.
+Deduplicate exact facts/questions without discarding earlier sources. Preserve R0's validated `config_absent_at_base` memo on every overwrite, changing it only from R0's verified-base config result. Never persist a child's unsupported inference as a fact. A verified-facts write failure is reported and does not invalidate the already synthesized review checkpoint.
 
 If either local write fails, log `Review checkpoint persistence failed; this session will continue without cross-session resume.` and continue to R4 with the in-memory REVIEW_DOCUMENT. Persistence failure never changes reviewability, action, or posting rails.
 

@@ -169,15 +169,16 @@ This is a terminal manual handoff, not an orchestrator fallback route: never exe
 
 A verified-not-posted re-dispatch cannot create a duplicate because the absence check precedes every dispatch, and the payload `commit_id` pins the review; the irreversibility rail governs unverified/ambiguous states only.
 
-For either a valid `posted` result or a posted state recovered from the review listing, the ORCHESTRATOR — never `@pr-comment-writer` — updates the matching persisted checkpoint at `.corvus/reviews/<owner>__<repo>__pr<num>/<head_sha>/meta.yaml`, where `<num>` is the validated positive-integer PR number. Revalidate that every path component comes from R0's validated control values and that the existing metadata identity and head match this run, then overwrite `meta.yaml` wholesale while preserving its synthesis fields and changing only the posting state:
+For either a valid `posted` result or a posted state recovered from the review listing, the ORCHESTRATOR — never `@pr-comment-writer` — updates the matching persisted checkpoint at `.corvus/reviews/<owner>__<repo>__pr<num>/<head_sha>/meta.yaml`, where `<num>` is the validated positive-integer PR number. Revalidate that every path component comes from R0's validated control values and that the existing metadata identity and head match this run, then overwrite `meta.yaml` wholesale while preserving its synthesis fields and changing only the posting and convergence state:
 
 ```yaml
 posted: true
 review_url: "<POST_RESULT.review_url>"
 posted_at: "<current ISO-8601 UTC timestamp>"
+series_converged: <true|false>
 ```
 
-Perform this update only when a valid `POST_RESULT` confirms `posted` with a non-empty `review_url`, or when the read-only listing confirms exactly one matching review with a usable URL. Run `date -u +%Y-%m-%dT%H:%M:%SZ` byte-exact and use its exact output for `posted_at`; never estimate it. On terminal `local_only`, exhausted verified-not-posted retries, or unknown remote state, leave `posted: false` so the synthesized review remains resumable. A metadata-update failure after a confirmed post cannot undo the remote review: report it prominently with the review URL, do not post again, and continue to lock cleanup.
+Perform this update only when a valid `POST_RESULT` confirms `posted` with a non-empty `review_url`, or when the read-only listing confirms exactly one matching review with a usable URL. Set `series_converged: true` exactly when the latest round has zero retained, non-suppressed actionable findings (`blocker`, `critical`, `major`, `minor`, or `nitpick`) and every prior finding has explicit disposition evidence (`fixed`, `resolved`, or `declined` with rationale); otherwise write `series_converged: false`. Run `date -u +%Y-%m-%dT%H:%M:%SZ` byte-exact and use its exact output for `posted_at`; never estimate it. On terminal `local_only`, exhausted verified-not-posted retries, or unknown remote state, leave `posted: false` and `series_converged: false` so the synthesized review remains resumable. A metadata-update failure after a confirmed post cannot undo the remote review: report it prominently with the review URL, do not post again, and continue to lock cleanup.
 
 Never use another agent, a direct mutation command, a different endpoint or event, an interactive fallback, or any other posting route. The only sanctioned orchestrator recovery is the verified-state re-dispatch above to the same writer with the same POST_REQUEST; writer-internal `local_only` remains terminal.
 
@@ -195,7 +196,7 @@ completed_at: "<current ISO-8601 UTC timestamp>"
 
 When writing the inactive record, run `date -u +%Y-%m-%dT%H:%M:%SZ` byte-exact and use its exact output for `completed_at`; never estimate it. Do this for posted, pre-existing local-only, writer-failure, and malformed-result completions. Never remove or overwrite a lock owned by a different run. Terminal branches before R5 follow the same R0 lock-release contract. A crashed run leaves its active lock behind; R0 treats it as stale after 2 hours.
 
-Before displaying any completion summary, compute convergence from validated checkpoint history under `.corvus/reviews/<owner>__<repo>__pr<num>/`: the current series round number, each round's retained major/minor counts in order, and whether the current round is the first zero-major round. Ignore malformed or identity-mismatched metadata with a visible note; do not invent missing counts. Render these fields even for local-only completion so a human can decide whether another round is useful.
+Before displaying any completion summary, compute convergence from validated checkpoint history under `.corvus/reviews/<owner>__<repo>__pr<num>/`: the current series round number, each round's retained major/minor counts in order, and whether the current round is the first zero-major round. Also determine whether the exact `series_converged` criteria above hold. Ignore malformed or identity-mismatched metadata with a visible note; do not invent missing counts. Render these fields even for local-only completion so a human can decide whether another round is useful.
 
 Display the final summary to the user:
 

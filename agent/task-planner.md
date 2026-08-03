@@ -134,6 +134,11 @@ Apply these rules to every new or revised plan:
     must consume probe evidence from a validation-capable orchestrator delegate;
     if evidence is absent, return it as a blocking planning prerequisite rather
     than guessing or widening permissions.
+11. **Derive, do not pin**: When a task involves a derived constant, state the
+    governing property (for example, `each per-field max must boot` or `reject the multiplicative max`)
+    and require the implementer to derive and verify
+    the constant against existing constraints. Pin a literal only when it is an
+    external requirement, with provenance. Cite facts; do not manufacture constants.
 
 ---
 
@@ -1021,6 +1026,13 @@ restatement, mirror, and validation command that references it and update all of
 them in the same edit. The changed-lines manifest lists each touched mirror and
 its range; a stale mirror means PLAN_FIX is incomplete.
 
+Apply the corvus-phase-4 skill's **Remediation Inheritance Rule** at the PLAN_FIX blast radius.
+
+Any preservation claim the fix writes (`X preserved`, `unchanged`,
+or `verbatim`) requires occurrence-level verification before the claim is
+written: enumerate every occurrence and verify each one individually. Blanket
+preservation claims without that enumeration are forbidden.
+
 Read only the files needed to apply the listed findings. Reject missing or
 contradictory findings instead of inventing requirements. This mode never turns
 review feedback into a broader re-planning pass.
@@ -1104,7 +1116,14 @@ Use the digest (and CONTEXT.md when the Hard apparatus budget does not omit it) 
 
 ## CONTEXT.MD (DISCOVERY CONTEXT ARTIFACT)
 
-Outside the Hard apparatus budget, `.corvus/tasks/{feature}/CONTEXT.md` persists Phase 1 discovery once so downstream dispatches reference it by PATH instead of re-pasting findings. Create it in Stage 4 from the dispatch's DISCOVERY DIGEST. This schema lives here only — every other agent and skill references CONTEXT.md by path and never restates the schema. Because `.corvus/` is gitignored, CONTEXT.md is a per-machine workflow artifact, not a committed deliverable.
+Outside the Hard apparatus budget, `.corvus/tasks/{feature}/CONTEXT.md` persists
+Phase 1 discovery, immutable requirements, environment details, and stable
+premises/invariants once so downstream dispatches reference them by path and
+section instead of re-pasting them. Create it in Stage 4 from those planning
+inputs. This schema lives here only — every other agent and skill references
+CONTEXT.md by path and never restates the schema. Because `.corvus/` is
+gitignored, CONTEXT.md is a per-machine workflow artifact, not a committed
+deliverable.
 
 ### Schema
 
@@ -1121,6 +1140,15 @@ Outside the Hard apparatus budget, `.corvus/tasks/{feature}/CONTEXT.md` persists
 ## Discovery Summary
 {distilled research + code-exploration findings from the DISCOVERY DIGEST}
 
+## User Requirements (Immutable)
+{verbatim immutable requirements from the planning dispatch}
+
+## Project Environment
+{stable environment details, command prefixes, and package-manager facts}
+
+## Stable Premises and Invariants
+{governing properties, stable verified premises with provenance, and invariants}
+
 ## Key Anchors
 {file:line references — treat as APPROXIMATE after any task edits a file}
 
@@ -1132,9 +1160,10 @@ Outside the Hard apparatus budget, `.corvus/tasks/{feature}/CONTEXT.md` persists
 
 CONTEXT.md never absorbs these — they stay where consumers already read them:
 
-- **User Requirements (Immutable)** stay verbatim in MASTER_PLAN.md, never summarized here.
 - **Test flags and `test_scope`** stay inline in every dispatch.
-- **The PROJECT ENVIRONMENT command prefix** stays inline in dispatches because validation-command generation needs it.
+
+The verbatim immutable requirements remain mirrored in MASTER_PLAN.md for the
+approval gate; CONTEXT.md is their Phase 4 dispatch carrier.
 
 ---
 

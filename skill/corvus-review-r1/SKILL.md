@@ -35,16 +35,19 @@ Before R2 dispatch, every open question of the form “does upstream/third-party
 
 **DELEGATE TO**: @pr-context-gatherer
 
+Evidence ownership: @pr-context-gatherer remains the primary evidence producer. The orchestrator's diff/compare/comment access exists only for brief verification and disposition reading; it never replaces R1 gathering.
+
 ```markdown
 **TASK**: Analyze all changed files in PR #[pr_number] for code review context
 
 **CHANGED FILES** ([files_changed] files):
 [List all files from PR_CONTEXT.changed_files, one per line]
 
-**EXPECTED OUTCOME**: Complete review context for every changed file — diff hunks (the authoritative changed-content evidence), verified RIGHT-side postable line ranges, import/export analysis, callers of changed functions/exports, associated test files, and git history — plus a dependency graph, detected codebase conventions, and optional head-accurate excerpts for high-risk files.
+**EXPECTED OUTCOME**: Complete review context for every changed file — diff hunks (the authoritative changed-content evidence), verified RIGHT-side postable line ranges, import/export analysis, callers of changed functions/exports, associated test files, and git history — plus a dependency graph, detected codebase conventions, optional head-accurate excerpts for high-risk files, and an explicit local-worktree head-accuracy result.
 
 **MUST DO**:
 - Treat the `gh pr diff` hunks as the authoritative changed-content evidence; deliver them plus the structured context map instead of full file bodies (retrieval posture: your operating rules — local reads are best-effort supplements from a possibly-stale worktree)
+- Report `head_accurate: true` only when local `HEAD` byte-equals `PR_CONTEXT.head_sha` AND the worktree is clean; otherwise report `head_accurate: false` with the observed SHA, cleanliness, and reason
 - For every candidate inline-comment file, derive `postable_line_ranges` from the compare/files API hunk headers (or the PR files API hunks for the same validated head). Emit only RIGHT-side added/context line intervals that GitHub can anchor; estimated line numbers are not postable evidence
 - For each changed file, identify its imports and exports
 - For each changed export/public function, find callers in the rest of the codebase
@@ -80,6 +83,13 @@ gh pr diff [pr_number] --repo [repo]
 
 **REPORT FORMAT**:
 ```
+### Local Worktree Head Accuracy
+- head_accurate: true|false
+- observed_head_sha: <40-hex SHA|unavailable>
+- expected_pr_head_sha: <PR_CONTEXT.head_sha>
+- clean_tree: true|false|unknown
+- reason: <one-line evidence>
+
 ### File Map
 
 #### [file_path]
@@ -235,11 +245,12 @@ gh pr diff [pr_number] --repo [repo]
 After the workstreams complete (or the single workstream if researcher was skipped), assemble the `REVIEW_CONTEXT` object (schema: `corvus-review-extras`):
 
 1. **file_map, dependency_graph, conventions**: direct from @pr-context-gatherer output; every inline-candidate file_map entry carries `postable_line_ranges`
-2. **head_excerpts**: from @pr-context-gatherer's `Head Excerpts` section (omit when none were fetched)
-3. **delta**: from @pr-context-gatherer's `Prior-Review Delta` section (omit when PR_CONTEXT.prior_corvus_review is null; a missing or unresolved result is treated downstream as `available: false`)
-4. **test_coverage**: derived from @pr-context-gatherer's test file associations
-5. **linked_issues_detail, dependency_advisories, ci_failure_analysis, related_prs**: from @researcher (or empty if skipped)
-6. **verified_facts, open_questions**: start from the validated persisted artifact, append newly verified researcher facts with sources, remove only questions the evidence resolves, and retain all unresolved/new questions for R2 and R3
+2. **worktree_head_accuracy**: retain the gatherer's `Local Worktree Head Accuracy` result alongside REVIEW_CONTEXT as R2 briefing-control evidence; it is true only for matching HEAD plus a clean tree
+3. **head_excerpts**: from @pr-context-gatherer's `Head Excerpts` section (omit when none were fetched)
+4. **delta**: from @pr-context-gatherer's `Prior-Review Delta` section (omit when PR_CONTEXT.prior_corvus_review is null; a missing or unresolved result is treated downstream as `available: false`)
+5. **test_coverage**: derived from @pr-context-gatherer's test file associations
+6. **linked_issues_detail, dependency_advisories, ci_failure_analysis, related_prs**: from @researcher (or empty if skipped)
+7. **verified_facts, open_questions**: start from the validated persisted artifact, append newly verified researcher facts with sources, remove only questions the evidence resolves, and retain all unresolved/new questions for R2 and R3
 
 ### Partial Failure Handling
 
@@ -256,6 +267,7 @@ Before proceeding to R2, verify REVIEW_CONTEXT:
 2. `conventions` has at least one non-empty field
 3. `dependency_graph` exists (may be empty for unrelated files)
 4. Every file eligible for an inline comment has `postable_line_ranges` derived from remote API hunks (an empty set is valid and forces body-only rendering)
+5. The gatherer reported `worktree_head_accuracy` with expected SHA, observed SHA, cleanliness, and reason
 
 If validation fails, log a warning and proceed — a degraded review is better than no review.
 

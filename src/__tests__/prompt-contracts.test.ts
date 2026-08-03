@@ -2684,7 +2684,7 @@ describe("architectural-wave — phase 1 pins", () => {
       expectContains(CORVUS, [
         "**When**: Automatically after Phase 2 for every planned feature, before the Phase 3 approval gate. Never ask the user whether to enter this phase.",
         "High Accuracy Review loops automatically—review → PLAN_FIX → re-review—until `OKAY` or `OKAY_WITH_AMENDMENTS`, or until the second `REJECT` escalates the residual blocking list to the user.",
-        "Present the plan summary together with the review outcome (skill template), then call the question tool:",
+        "Reference details by path to\nMASTER_PLAN.md and the review verdict rather than inlining them",
         '- question: "Ready to proceed with this reviewed plan?"',
         '- options: "Start Implementation" / "Request Changes"',
         `    Planned work has one approval gate: Phase 3, after mandatory Phase 3.5. "Start
@@ -2830,7 +2830,13 @@ describe("architectural-wave — phase 2 pins", () => {
       expect(countOccurrences(PHASE_2, canonical)).toBeGreaterThanOrEqual(1)
       expect(countOccurrences(PLAN_REVIEWER, canonical)).toBe(1)
       expect(countOccurrences(CORVUS, canonical)).toBe(1)
-      expect(countOccurrences(PHASE_4, canonical)).toBe(6)
+      expect(countOccurrences(PHASE_4, "**CONTEXT FILE**")).toBe(6)
+      expect(
+        countOccurrences(
+          PHASE_4,
+          "— sections: User Requirements (Immutable), Project Environment, Stable Premises and Invariants",
+        ),
+      ).toBe(6)
       expect(countOccurrences(PHASE_5, canonical)).toBe(2)
       expectAbsent(CORVUS_AUTO, ["CONTEXT FILE"])
 
@@ -4658,14 +4664,14 @@ describe("production-retrospective REVIEW pipeline contracts", () => {
     ])
     expectContains(REVIEW_R3, [
       "falls inside that file's API-derived `postable_line_ranges`",
-      "Otherwise mark the finding body-only during synthesis; never leave anchor relocation to the writer.",
+      "Mark the finding body-only only when no in-range line represents the subject; never leave anchor relocation to the writer.",
     ])
   })
 
   test("5. embeds evidence and bounds both new retry arms", () => {
     expectContains(REVIEW_R2, [
-      "Embed all review evidence in the delegation itself",
-      "A brief that instructs a child to fetch, open, retrieve, or otherwise obtain external evidence is a briefing bug",
+      "Embed all review evidence required to decide: complete relevant diff hunks are always inline",
+      "Never send a brief that leaves a sandboxed child without either verified local pointers or full inline evidence.",
       "R2 may re-dispatch that child exactly once with the missing hunks or quoted R1 regions embedded directly.",
       "the arm is available once per child per R2 entry in both interactive and autonomous modes.",
       "R2 may make exactly one final reduced-scope dispatch for that child",
@@ -4703,6 +4709,7 @@ describe("production-retrospective REVIEW pipeline contracts", () => {
   test("9. caps inline praise at three", () => {
     expectContains(REVIEW_R3, [
       "Render at most 3 `praise` findings inline",
+      "selecting the highest-value praise by subject significance and then confidence, not file order",
       "group every remaining praise in the review body",
       "Inline placement is primarily for actionable findings.",
     ])
@@ -4753,6 +4760,70 @@ describe("production-retrospective REVIEW pipeline contracts", () => {
     ])
     expectContains(REVIEW_EXTRAS, [
       "`rail_inputs` records every available R0 rail independently on every round; a cap never short-circuits another input such as `self_review`.",
+    ])
+  })
+
+  test("14. allowlists orchestrator evidence verification channels", () => {
+    const entries = [
+      `    'gh pr diff * --repo *': "allow"`,
+      `    'gh api repos/*/compare/* --jq *': "allow"`,
+      `    'gh api repos/*/pulls/*/comments --jq *': "allow"`,
+    ]
+    for (const file of REVIEW_ORCHESTRATORS) {
+      const bashPolicy = nestedFrontmatterBlock(file, "bash")
+      for (const entry of entries) expect(bashPolicy).toContain(entry)
+    }
+  })
+
+  test("15. reads inline-reply dispositions from comment threads", () => {
+    expectContains(REVIEW_R0, [
+      "An author's replies to inline review comments can surface as empty-body reviews in the reviews listing.",
+      "treat those replies as disposition evidence (fixed/declined rationale), not noise",
+    ])
+  })
+
+  test("16. reports head accuracy and adapts child evidence briefs", () => {
+    expectContains(REVIEW_R1, [
+      "### Local Worktree Head Accuracy",
+      "- head_accurate: true|false",
+      "local `HEAD` byte-equals `PR_CONTEXT.head_sha` AND the worktree is clean",
+      "@pr-context-gatherer remains the primary evidence producer",
+    ])
+    expectContains(REVIEW_R2, [
+      "When `worktree_head_accuracy.head_accurate` is true",
+      "send file:line pointers plus only the complete relevant diff hunks",
+      "When the worktree is stale, dirty, absent, or unverified, embed the full relevant R1 evidence inline",
+      "If a pointer-mode child reports evidence unreachable, use the existing one-shot Degraded-Evidence Retry unchanged",
+    ])
+  })
+
+  test("17. shrinks split anchors before body-only fallback", () => {
+    expectContains(REVIEW_R3, [
+      "When a finding span crosses a gap between postable ranges, first shrink the span to the nearest in-range line that still points at the finding's subject, preferring the line where the defect is introduced.",
+      "Mark the finding body-only only when no in-range line represents the subject",
+    ])
+  })
+
+  test("18. persists and short-circuits converged review series", () => {
+    expectContains(REVIEW_R5, [
+      "Set `series_converged: true` exactly when the latest round has zero retained, non-suppressed actionable findings",
+      "every prior finding has explicit disposition evidence",
+    ])
+    expectContains(REVIEW_R0, [
+      "If the matching valid checkpoint for the CURRENT `head_sha` has `series_converged: true`",
+      "Review series converged for exact head <sha8>: <review_url>",
+      "a NEW head clears `series_converged` for the current run and reviews normally",
+    ])
+  })
+
+  test("19. memoizes missing base config across a review series", () => {
+    expectContains(REVIEW_R0, [
+      "record `config_absent_at_base: true` in `verified_facts`",
+      "On subsequent rounds of the same review series",
+      "instead of repeating the full warning block",
+    ])
+    expectContains(REVIEW_R3, [
+      "Preserve R0's validated `config_absent_at_base` memo on every overwrite",
     ])
   })
 })
@@ -4978,6 +5049,87 @@ describe("production-retrospective BUILD pipeline contracts", () => {
     ])
     expectContains(PHASE_7_BUILD, [
       "Class-instances get one dispatch per CLASS (root cause + all siblings), never one dispatch per finding.",
+    ])
+  })
+
+  test("17. makes remediation inherit the original consistency obligations", () => {
+    const ruleName = "Remediation Inheritance Rule"
+    const core =
+      "Remediation output is new unreviewed content: every fix inherits the full consistency obligations of the work it touches—the same mirror sweeps, doc sweeps, prose-accuracy checks, and verification that applied to the original change apply to the fix, at the fix's blast radius."
+    expectContains(PHASE_4, [ruleName, core])
+    expect(countOccurrences(PHASE_4, core)).toBe(1)
+    for (const file of [TASK_PLANNER, PHASE_7_BUILD, PLAN_REVIEWER]) {
+      expectContains(file, [ruleName])
+    }
+  })
+
+  test("18. verifies PLAN_FIX preservation claims occurrence by occurrence", () => {
+    expectContains(TASK_PLANNER, [
+      "Any preservation claim the fix writes (`X preserved`, `unchanged`,",
+      "requires occurrence-level verification before the claim is",
+      "enumerate every occurrence and verify each one individually.",
+      "Blanket\npreservation claims without that enumeration are forbidden.",
+    ])
+  })
+
+  test("19. keeps review-fix consistency sweeps inside one dispatch", () => {
+    expectContains(PHASE_7_BUILD, [
+      "Include this consistency checklist inside that single dispatch:",
+      "Sweep docs (README, ADRs, and comments) describing any touched knob,",
+      "Sweep prose that states derived values affected by the change.",
+      "This checklist adds no dispatch, planning round, or review ceremony.",
+    ])
+  })
+
+  test("20. derives constants from governing properties instead of pinning them", () => {
+    for (const file of [PHASE_4, TASK_PLANNER]) {
+      expectContains(file, [
+        "each per-field max must boot",
+        "reject the multiplicative max",
+        "derive and verify",
+        "Pin a literal only when it is an",
+        "external requirement, with provenance. Cite facts; do not manufacture constants.",
+      ])
+    }
+  })
+
+  test("21. carries stable dispatch context in CONTEXT.md", () => {
+    expectContains(PHASE_4, [
+      "**Dispatch economy**: invariants, immutable requirements, environment details,",
+      "live in the feature's `CONTEXT.md`; dispatches reference",
+      "carry only task-specific deltas: task-file",
+      "Premise\nprovenance may cite a `CONTEXT.md` entry as its source.",
+      "duplication of stable context across dispatches\nis the cost to remove, not the discipline.",
+    ])
+    expectContains(TASK_PLANNER, [
+      "## User Requirements (Immutable)",
+      "## Project Environment",
+      "## Stable Premises and Invariants",
+    ])
+  })
+
+  test("22. bounds the interactive Phase 3 presentation", () => {
+    expectContains(CORVUS, [
+      "Present the bounded plan summary together with the review outcome",
+      "feature, plan type, phase/task counts, review verdict and amendments",
+      "presentation plus the question must fit comfortably in one message.",
+    ])
+    expectContains(PHASE_2, [
+      "Present a bounded summary.",
+      "**Plan Type**: [LIGHTWEIGHT | STANDARD | SPEC_DRIVEN]",
+      "**Scope**: [M] phases, [N] tasks",
+      "**Amendments**: [N applied]",
+      "**Master Plan**: `.corvus/tasks/[feature-name]/MASTER_PLAN.md`",
+      "**Review Verdict**: [path or stable report reference]",
+      "Do not inline phase tables, file lists, task descriptions, amendment bodies, or",
+    ])
+  })
+
+  test("23. sizes sizeable independent workstreams for transport loss", () => {
+    expectContains(PHASE_4, [
+      "Long workstreams amplify transport-loss blast radius: a lost dispatch re-runs",
+      "Prefer the smaller end of the 1-5 range when tasks are",
+      "independent and sizeable.",
     ])
   })
 })
