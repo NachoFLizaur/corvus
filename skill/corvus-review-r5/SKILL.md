@@ -178,7 +178,7 @@ posted_at: "<current ISO-8601 UTC timestamp>"
 series_converged: <true|false>
 ```
 
-Perform this update only when a valid `POST_RESULT` confirms `posted` with a non-empty `review_url`, or when the read-only listing confirms exactly one matching review with a usable URL. Set `series_converged: true` exactly when the latest round has zero retained, non-suppressed actionable findings (`blocker`, `critical`, `major`, `minor`, or `nitpick`) and every prior finding has explicit disposition evidence (`fixed`, `resolved`, or `declined` with rationale); otherwise write `series_converged: false`. Run `date -u +%Y-%m-%dT%H:%M:%SZ` byte-exact and use its exact output for `posted_at`; never estimate it. On terminal `local_only`, exhausted verified-not-posted retries, or unknown remote state, leave `posted: false` and `series_converged: false` so the synthesized review remains resumable. A metadata-update failure after a confirmed post cannot undo the remote review: report it prominently with the review URL, do not post again, and continue to lock cleanup.
+Perform this update only when a valid `POST_RESULT` confirms `posted` with a non-empty `review_url`, or when the read-only listing confirms exactly one matching review with a usable URL. Set `series_converged: true` exactly when the latest round has zero retained, non-suppressed actionable findings (`blocker`, `critical`, `major`, or `minor`) and every prior actionable finding has explicit disposition evidence (`fixed`, `resolved`, or `declined` with rationale); otherwise write `series_converged: false`. Nitpick severity is non-actionable by definition (r3 Step 8): open nitpicks are posted as take-or-leave comments for the human to accept or ignore at merge, so they never count toward this criterion and never block convergence. Run `date -u +%Y-%m-%dT%H:%M:%SZ` byte-exact and use its exact output for `posted_at`; never estimate it. On terminal `local_only`, exhausted verified-not-posted retries, or unknown remote state, leave `posted: false` and `series_converged: false` so the synthesized review remains resumable. A metadata-update failure after a confirmed post cannot undo the remote review: report it prominently with the review URL, do not post again, and continue to lock cleanup.
 
 Never use another agent, a direct mutation command, a different endpoint or event, an interactive fallback, or any other posting route. The only sanctioned orchestrator recovery is the verified-state re-dispatch above to the same writer with the same POST_REQUEST; writer-internal `local_only` remains terminal.
 
@@ -198,6 +198,8 @@ When writing the inactive record, run `date -u +%Y-%m-%dT%H:%M:%SZ` byte-exact a
 
 Before displaying any completion summary, compute convergence from validated checkpoint history under `.corvus/reviews/<owner>__<repo>__pr<num>/`: the current series round number, each round's retained major/minor counts in order, and whether the current round is the first zero-major round. Also determine whether the exact `series_converged` criteria above hold. Ignore malformed or identity-mismatched metadata with a visible note; do not invent missing counts. Render these fields even for local-only completion so a human can decide whether another round is useful.
 
+Every summary below reports findings split as `Findings: [N] total | [X] actionable ([blockers]B [criticals]C [majors]M [minors]minor) | [Y] nitpicks (take-or-leave)`. Nitpicks are reported separately and never inside the actionable count: the convergence signal counts actionable findings only, so open nitpicks leave the trend and `series_converged` untouched.
+
 Display the final summary to the user:
 
 ### For Posted Reviews
@@ -209,6 +211,7 @@ Display the final summary to the user:
 **Reviewability**: [complete | partial | skipped]
 **Action**: [ACTION_EMOJI] [action]
 **Review URL**: [url from API response]
+**Findings**: [N] total | [X] actionable ([blockers]B [criticals]C [majors]M [minors]minor) | [Y] nitpicks (take-or-leave)
 **Series round**: [N]
 **Major/minor trend**: [round 1: NM/Nm → ... → round N: NM/Nm]
 **First zero-major round**: [yes/no]
@@ -248,6 +251,7 @@ Display the final summary to the user:
 **Reviewability**: [complete | partial | skipped | failed]
 **Action**: [ACTION_EMOJI] [action] (not posted)
 **Reason**: [REVIEW_ACTION.decision_reason or final revalidation/writer failure]
+**Findings**: [N] total | [X] actionable ([blockers]B [criticals]C [majors]M [minors]minor) | [Y] nitpicks (take-or-leave)
 **Series round**: [N]
 **Major/minor trend**: [round 1: NM/Nm → ... → round N: NM/Nm]
 **First zero-major round**: [yes/no]
@@ -272,7 +276,7 @@ The full review is displayed locally. It was NOT posted to GitHub, and `@pr-comm
 [Render coverage_warning when present.]
 
 [Abbreviated stats — 3 lines max for autonomous mode]
-Findings: [N] total | [blockers]B [criticals]C [majors]M | [action]
+Findings: [N] total | [X] actionable ([blockers]B [criticals]C [majors]M [minors]minor) | [Y] nitpicks (take-or-leave) | [action]
 ```
 
 ---

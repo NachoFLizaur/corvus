@@ -310,6 +310,12 @@ Coverage text is derived control-plane evidence, not an editable finding. Preser
 
 Determine the review action: `APPROVE`, `REQUEST_CHANGES`, or `COMMENT_ONLY`.
 
+### Nitpicks Are Non-Actionable By Definition
+
+Nitpick severity is non-actionable BY DEFINITION: nitpicks are rendered as take-or-leave comments (subject to the existing nit budget) but are excluded from every actionable-finding count and from all severity-derived action logic. Actionable findings are exactly the retained, non-suppressed `blocker`, `critical`, `major`, and `minor` findings; a human takes or leaves each nitpick at merge, so an open nitpick never derives or escalates an action, never blocks convergence, and never appears inside an actionable count.
+
+This definition scopes actionable counting, action derivation, and convergence only. Steps 1-5 keep their own scope: false-positive filtering, severity threshold, suppression, the minor budget, and the nitpick budget — including its protect-one-per-pass rule over each pass's retained findings, nitpicks included — decide which nitpicks are rendered, and nothing here changes that set.
+
 Action is an opinion; it never authorizes a GitHub post. R4 produces the separate posting decision. Apply the canonical Fail-Closed Precedence in `corvus-review-extras` by reference, without reproducing or reinterpreting its truth table. In particular, layer 2 caps draft, merged, and self-review PRs (`self_review: unknown` is fail-safe capped) at `COMMENT_ONLY`; layer 4 keeps a trusted `action_override` eligible to strengthen an action only inside all higher caps; and layer 5 permits severity/confidence escalation only when `default_action: auto`. The built-in `default_action: COMMENT_ONLY` renders every severity outcome as `COMMENT_ONLY` while preserving all findings, severities, and coverage warnings in `review_body`.
 
 Set `action_reasoning` from the canonical layer that determined the action, including the name of any cap, override, default-action mode, or confidence downgrade that applied.
@@ -356,6 +362,8 @@ Generate the GitHub-compatible review document.
 | Nitpicks | [N shown] ([M] suppressed) |
 | Praise | [N] |
 
+**Findings**: [N] total | [X] actionable ([blockers]B [criticals]C [majors]M [minors]minor) | [Y] nitpicks (take-or-leave)
+
 [For each pass, preserve its status and reason. Do not use these notes in place of coverage_warning:]
 > **Note**: [Pass name] was [skipped/encountered an error]. [Brief reason.]
 
@@ -386,6 +394,8 @@ Action emojis:
 - `APPROVE` → `[APPROVED]`
 - `REQUEST_CHANGES` → `[CHANGES REQUESTED]`
 - `COMMENT_ONLY` → `[COMMENTED]`
+
+The split findings line reports nitpicks separately from the actionable count, exactly as Step 8 defines it: `[X] actionable` sums only the retained, non-suppressed blocker, critical, major, and minor findings, while `[Y] nitpicks (take-or-leave)` reports every rendered nitpick. Never fold nitpicks into the actionable number, and never omit them from the report.
 
 ### 9b. Inline Comments
 
@@ -531,7 +541,7 @@ If either local write fails, log `Review checkpoint persistence failed; this ses
 After R3 completes, output:
 
 ```
-[R3 COMPLETE] Reviewability: [complete/partial/skipped/failed] | Action: [ACTION] | Findings: [N] total ([M] inline)
+[R3 COMPLETE] Reviewability: [complete/partial/skipped/failed] | Action: [ACTION] | Findings: [N] total | [X] actionable ([blockers]B [criticals]C [majors]M [minors]minor) | [Y] nitpicks (take-or-leave) | [M] inline
 Dedup: [N] merged | Filtered: [N] false-positive, [N] below-threshold, [N] minor-budget, [N] nit-budget, [N] suppressed, [N] previously-reported
 [If failed: → R4 must emit local_only without a posting prompt]
 [Otherwise: → Proceeding to R4 (Decision Gate)]

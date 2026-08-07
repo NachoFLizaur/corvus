@@ -330,6 +330,7 @@ Mark all todos complete and display:
 **PR**: #[pr_number] — [title]
 **Action**: [EMOJI] [action]
 **Review URL**: [url] (or "Not posted — local only")
+**Findings**: [N] total | [X] actionable ([blockers]B [criticals]C [majors]M [minors]minor) | [Y] nitpicks (take-or-leave)
 
 ### Summary
 | Metric | Value |
@@ -348,6 +349,8 @@ Mark all todos complete and display:
 | Conventions & Polish (holistic) | `conventions` | [N] | [completed/skipped/error] |
 | Security (security child) | `security` | [N] | [completed/skipped/error] |
 ```
+
+Nitpick severity is non-actionable by definition: nitpicks are posted as take-or-leave comments for the human to accept or ignore at merge, never counted inside the actionable total, never used to derive or escalate an action, and never a block on convergence.
 
 ---
 

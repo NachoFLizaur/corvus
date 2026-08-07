@@ -4807,7 +4807,7 @@ describe("production-retrospective REVIEW pipeline contracts", () => {
   test("18. persists and short-circuits converged review series", () => {
     expectContains(REVIEW_R5, [
       "Set `series_converged: true` exactly when the latest round has zero retained, non-suppressed actionable findings",
-      "every prior finding has explicit disposition evidence",
+      "every prior actionable finding has explicit disposition evidence",
     ])
     expectContains(REVIEW_R0, [
       "If the matching valid checkpoint for the CURRENT `head_sha` has `series_converged: true`",
@@ -5309,5 +5309,83 @@ describe("planning and delivery convergence contracts", () => {
       "or `git rebase`) to restructure commits remains outside the sanctioned flow—the",
       "mapping is planned before commits are made.",
     ])
+  })
+})
+
+// ============================================================================
+// Nitpick counting contracts (nitpicks are reported, never counted actionable)
+// ============================================================================
+
+describe("nitpick counting contracts", () => {
+  /**
+   * The one split findings line, byte-identical everywhere it is rendered:
+   * r3's review body + R3 checkpoint, all three r5 completion summaries, and
+   * both orchestrators' announce/summary blocks. Pinning the shared substring
+   * (never a per-file variant) is what keeps the copies in lockstep; the
+   * `**Findings**:`/`Findings:` prefix legitimately differs by surface.
+   */
+  const SPLIT_FINDINGS_LINE =
+    "[X] actionable ([blockers]B [criticals]C [majors]M [minors]minor) | [Y] nitpicks (take-or-leave)"
+
+  test("1. r3 defines nitpick severity as non-actionable by definition", () => {
+    expectContains(REVIEW_R3, [
+      "### Nitpicks Are Non-Actionable By Definition",
+      "Nitpick severity is non-actionable BY DEFINITION: nitpicks are rendered as take-or-leave comments (subject to the existing nit budget) but are excluded from every actionable-finding count and from all severity-derived action logic.",
+      "Actionable findings are exactly the retained, non-suppressed `blocker`, `critical`, `major`, and `minor` findings",
+      "an open nitpick never derives or escalates an action, never blocks convergence, and never appears inside an actionable count",
+    ])
+  })
+
+  test("2. keeps the nit budget's own scope untouched by that definition", () => {
+    // The definition governs counting/action/convergence ONLY. Step 5's
+    // budgets — including protect-one-per-pass over each pass's retained
+    // findings, nitpicks included — still decide which nitpicks render, so
+    // their baseline pins below must keep passing byte-unchanged.
+    expectContains(REVIEW_R3, [
+      "This definition scopes actionable counting, action derivation, and convergence only.",
+      "the nitpick budget — including its protect-one-per-pass rule over each pass's retained findings, nitpicks included — decide which nitpicks are rendered, and nothing here changes that set.",
+      "Budget suppression must protect at least one retained actionable finding per pass",
+      "Keep (retain) the first `max_nits` findings, then apply the protect-one-per-pass rule before finalizing suppression.",
+    ])
+  })
+
+  test("3. renders one split findings line on every reporting surface", () => {
+    for (const file of [REVIEW_R3, REVIEW_R5, INTERACTIVE_REVIEW, AUTONOMOUS_REVIEW]) {
+      expectContains(file, [SPLIT_FINDINGS_LINE])
+    }
+    // r5 carries 4 copies: the convergence-computation rule plus all three
+    // completion summaries (posted, local-only, autonomous). r3 carries 2:
+    // the rendered review body and the R3 checkpoint line.
+    expect(read(REVIEW_R5).split(SPLIT_FINDINGS_LINE)).toHaveLength(5)
+    expect(read(REVIEW_R3).split(SPLIT_FINDINGS_LINE)).toHaveLength(3)
+    expectContains(REVIEW_R3, [
+      "[R3 COMPLETE] Reviewability: [complete/partial/skipped/failed] | Action: [ACTION] | Findings: [N] total | ",
+      "`[X] actionable` sums only the retained, non-suppressed blocker, critical, major, and minor findings",
+      "Never fold nitpicks into the actionable number, and never omit them from the report.",
+    ])
+    // The pre-split abbreviated stat lines are gone from both surfaces.
+    for (const file of [REVIEW_R5, AUTONOMOUS_REVIEW]) {
+      expectAbsent(file, ["Findings: [N] total | [blockers]B [criticals]C [majors]M |"])
+    }
+    expectAbsent(AUTONOMOUS_REVIEW, [
+      "**Findings**: [N] total | [blockers]B [criticals]C [majors]M [If",
+    ])
+  })
+
+  test("4. keeps open nitpicks out of the convergence signal", () => {
+    expectContains(REVIEW_R5, [
+      "zero retained, non-suppressed actionable findings (`blocker`, `critical`, `major`, or `minor`)",
+      "Nitpick severity is non-actionable by definition (r3 Step 8): open nitpicks are posted as take-or-leave comments for the human to accept or ignore at merge, so they never count toward this criterion and never block convergence.",
+      "Nitpicks are reported separately and never inside the actionable count: the convergence signal counts actionable findings only, so open nitpicks leave the trend and `series_converged` untouched.",
+    ])
+    expectAbsent(REVIEW_R5, ["`major`, `minor`, or `nitpick`"])
+  })
+
+  test("5. states the same counting rule in both review orchestrators", () => {
+    for (const file of REVIEW_ORCHESTRATORS) {
+      expectContains(file, [
+        "Nitpick severity is non-actionable by definition: nitpicks are posted as take-or-leave comments for the human to accept or ignore at merge, never counted inside the actionable total, never used to derive or escalate an action, and never a block on convergence.",
+      ])
+    }
   })
 })

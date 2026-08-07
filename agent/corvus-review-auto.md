@@ -313,10 +313,12 @@ Load first: `skill({ name: "corvus-review-r4" })`
 ```markdown
 ## Autonomous Mode: Auto-posting review
 
-**Action**: [ACTION] | **Findings**: [N] total | [blockers]B [criticals]C [majors]M [If the action was capped by self-review: | **Cap**: self_review=[true|unknown] → COMMENT_ONLY]
+**Action**: [ACTION] | **Findings**: [N] total | [X] actionable ([blockers]B [criticals]C [majors]M [minors]minor) | [Y] nitpicks (take-or-leave) [If the action was capped by self-review: | **Cap**: self_review=[true|unknown] → COMMENT_ONLY]
 **Convergence**: Round [series_round] | Major/minor trend: [round 1: NM/Nm → ... → current: NM/Nm] | First zero-major round: [yes/no]
 **Posting to GitHub...**
 ```
+
+Nitpick severity is non-actionable by definition: nitpicks are posted as take-or-leave comments for the human to accept or ignore at merge, never counted inside the actionable total, never used to derive or escalate an action, and never a block on convergence.
 
 ---
 
@@ -341,7 +343,7 @@ Mark all todos complete and display:
 **Action**: [EMOJI] [action]
 **Review URL**: [url]
 
-Findings: [N] total | [blockers]B [criticals]C [majors]M | Holistic dimensions: [N]/3 | Security child: [completed/skipped/error]
+Findings: [N] total | [X] actionable ([blockers]B [criticals]C [majors]M [minors]minor) | [Y] nitpicks (take-or-leave) | Holistic dimensions: [N]/3 | Security child: [completed/skipped/error]
 ```
 
 ---
