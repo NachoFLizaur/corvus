@@ -35,7 +35,7 @@ web-research_multi_search({
 - Use specific technical terms, not natural language
 - Include version numbers when relevant (e.g., "React 19 useEffect")
 - Include error codes/messages verbatim when debugging
-- Max 3 queries — if you need more, this should be deep research
+- Max 3 queries — needing more signals deep research (see Escalation below)
 
 ### Step 2: Scan Snippets
 
@@ -58,7 +58,7 @@ web-research_fetch_pages({
 - Prefer official docs over third-party
 - Prefer recent content over old
 - Skip pages whose snippets already answered the question
-- Max 3 pages — if you need more, this should be deep research
+- Max 3 pages — needing more signals deep research (see Escalation below)
 
 ### Step 4: Synthesize Answer
 
@@ -87,7 +87,7 @@ If during quick search you discover:
 
 ## Anti-Patterns
 
-- **Over-researching**: Don't fetch 10 pages for a simple question
-- **Query sprawl**: Don't issue 5+ queries — that's deep research territory
-- **Skipping snippets**: Always scan snippets first — the answer might be right there
-- **Ignoring official docs**: If official docs have the answer, don't keep searching
+- **Over-researching**: A simple question needs 2-3 pages, not 10
+- **Query sprawl**: Needing 5+ queries signals deep research — escalate instead
+- **Skipping snippets**: Scan snippets before fetching — the answer is often already there
+- **Ignoring official docs**: When official docs answer the question, stop searching

@@ -5,13 +5,29 @@ description: Final validation - comprehensive objective and subjective checks
 
 ## Phase 5: FINAL VALIDATION (Two-Step)
 
-**Goal**: Comprehensive check of entire implementation with two-step validation.
+**Goal**: Comprehensive check of the entire implementation.
 
-Phase 5 has two steps:
-- **5a**: Objective validation (code-quality) - ALWAYS runs
-- **5b**: Subjective validation (ux-dx-quality) - ONLY if ANY task had `requires_ux_dx_review: true`
+- **5a**: Objective validation (code-quality) — always runs
+- **5b**: Subjective validation (ux-dx-quality) — runs only if any task had `requires_ux_dx_review: true`
 
-### 5a. Comprehensive Objective Check (MANDATORY)
+### Test Flags in Phase 5
+
+Phase 5a's own rows from the flag-combination semantics (full table: corvus-phase-2 skill, Entry Contract (canonical flag table) and Test Scope section):
+
+| Flags | Phase 5a behavior |
+|-------|-------------------|
+| `tests_enabled: true, tests_deferred: false` | Run the full test suite (`test_scope: full`) — the feature's single full-suite run, owned by code-quality (not just affected tests) |
+| `tests_enabled: true, tests_deferred: true` | Run the full test suite (`test_scope: full`) — the feature's single full-suite run, owned by code-quality, and the first test execution in deferred mode (tests were deferred during Phase 4); report it clearly as the deferred test run |
+| `tests_enabled: false` | Acceptance-only: production build + acceptance criteria with concrete evidence + regression review via code review; do not run tests or report missing tests as a gap |
+
+The 5a objective gate always produces PASS / FAIL; only its evidence model
+differs by flags. The three-valued subjective contract applies only to 5b.
+
+For cross-package changes, fresh full-suite evidence requires a cache-defeating
+run (for example `turbo ... --force`). Cached task replays must be labeled
+`CACHED REPLAY` and cannot be represented as the Phase 5 full-suite execution.
+
+### 5a. Comprehensive Objective Check (always runs)
 
 **DELEGATE TO**: @code-quality
 
@@ -22,74 +38,35 @@ Phase 5 has two steps:
 
 **ALL TASK FILES**: `.corvus/tasks/[feature]/*.md`
 
+**CONTEXT FILE**: `.corvus/tasks/[feature]/CONTEXT.md` (discovery context — read when present; may be absent on legacy plans)
+
+**TEST SCOPE**: `test_scope: [full|none]` — full when `tests_enabled: true`; none when `tests_enabled: false`
+
 **MUST DO**:
-
-When `tests_enabled: true, tests_deferred: false` (default):
-- Run FULL test suite (not just affected tests)
+- [Insert the Phase 5a behavior row for the active test flags from the table above]
+- For cross-package changes, use the project runner's verified cache-defeating option and label any cached replay honestly
 - Run production build
-- Verify ALL acceptance criteria from ALL task files
-- Check for consistency across all changes
-- Look for any regressions
-- Verify no breaking changes to existing functionality
-
-When `tests_enabled: true, tests_deferred: true` (deferred mode):
-- Run FULL test suite — this is the FIRST time tests are executed (they were deferred during Phase 4)
-- Run production build
-- Verify ALL acceptance criteria from ALL task files
-- Check for consistency across all changes
-- Look for any regressions
-- Verify no breaking changes to existing functionality
-- Report clearly that this is the deferred test run
-
-When `tests_enabled: false` (acceptance-only mode):
-- Run production build
-- Verify ALL acceptance criteria from ALL task files (with concrete evidence)
-- Check for consistency across all changes
-- Look for any regressions via code review
-- Verify no breaking changes to existing functionality
-- Do NOT attempt to run tests or report missing tests as a gap
+- Verify all acceptance criteria from all task files
+- Check consistency across all changes; look for regressions and breaking changes to existing functionality
 
 **REPORT BACK**:
-
-When `tests_enabled: true, tests_deferred: false`:
 - **5a OBJECTIVE GATE STATUS**: PASS / FAIL
-- Test results: [N]/[M] passing
+- **Mode**: ACCEPTANCE-ONLY when `tests_enabled: false`; DEFERRED TEST RUN (first test execution) when `tests_deferred: true`; omit otherwise
+- Test results: [N]/[M] passing (omit in acceptance-only mode)
 - Build status: PASS/FAIL
-- Acceptance criteria: [N]/[M] met (list any failures)
+- Acceptance criteria: [N]/[M] met (list failures; include concrete evidence in acceptance-only mode)
 - Regressions found: [list or none]
-- Any remaining issues (with severity)
-
-When `tests_enabled: true, tests_deferred: true` (deferred mode):
-- **5a OBJECTIVE GATE STATUS**: PASS / FAIL
-- **Mode**: DEFERRED TEST RUN (first test execution)
-- Test results: [N]/[M] passing
-- Build status: PASS/FAIL
-- Acceptance criteria: [N]/[M] met (list any failures)
-- Regressions found: [list or none]
-- Any remaining issues (with severity)
-- Note: Tests were deferred from Phase 4 quality gates
-
-When `tests_enabled: false`:
-- **5a OBJECTIVE GATE STATUS**: PASS / FAIL
-- **Mode**: ACCEPTANCE-ONLY
-- Build status: PASS/FAIL
-- Acceptance criteria: [N]/[M] met (list any failures with evidence)
-- Regressions found: [list or none] (via code review)
-- Any remaining issues (with severity)
+- Remaining issues (with severity)
 ```
 
 **Decision Point after 5a**:
-- 5a PASS + UX/DX required → Proceed to 5b
-- 5a PASS + No UX/DX required → Proceed to Phase 6
-- 5a FAIL → Create fix tasks, return to Phase 4
+- PASS + UX/DX required → Proceed to 5b
+- PASS + no UX/DX required → Proceed to Phase 6
+- FAIL → Create fix tasks, return to Phase 4 (fix dispatches carry `test_scope: targeted`); re-verification is ONE full 5a re-run, within the iteration cap
 
-> Note: Decision logic is identical regardless of `tests_enabled` or `tests_deferred`. The gate always produces PASS/FAIL; only the evidence model differs. When `tests_deferred: true`, Phase 5a uses the full test+acceptance model (same as `tests_enabled: true, tests_deferred: false`).
+### 5b. Comprehensive Subjective Check (if required)
 
-### 5b. Comprehensive Subjective Check (IF REQUIRED)
-
-**WHEN TO INVOKE**: If ANY task in the feature had `requires_ux_dx_review: true`
-
-This aggregates all UX/DX review requirements from individual tasks into a single feature-level review.
+**WHEN TO INVOKE**: If any task in the feature had `requires_ux_dx_review: true`. This aggregates the per-task UX/DX review requirements into a single feature-level review.
 
 **DELEGATE TO**: @ux-dx-quality
 
@@ -98,33 +75,54 @@ This aggregates all UX/DX review requirements from individual tasks into a singl
 
 **MASTER PLAN**: `.corvus/tasks/[feature]/MASTER_PLAN.md`
 
+**CONTEXT FILE**: `.corvus/tasks/[feature]/CONTEXT.md` (discovery context — read when present; may be absent on legacy plans)
+
 **TASKS REQUIRING UX/DX REVIEW**:
 - Task NN: [name] - [focus area: UI/API/docs/architecture]
-- Task NN: [name] - [focus area]
 
 **SCOPE**: All user-facing and developer-facing changes in this feature
 
 **MUST DO**:
-- Assess overall user experience quality
-- Assess overall developer experience quality
-- Assess documentation quality and completeness
-- Assess architectural coherence across all changes
+- Assess user experience, developer experience, documentation quality, and architectural coherence
 - Verify consistency of patterns across the feature
+- Apply the exact 5b verdict semantics below and support the verdict with scored evidence
+- Treat any discovered unmet immutable acceptance criterion, security failure, or critical usability failure as a blocking issue regardless of numeric score
 
 **MUST NOT DO**:
 - Re-check objective criteria (already passed in 5a)
 - Fix issues directly
+- Substitute a binary failure label for the three-valued 5b status
 
-**REPORT BACK**:
-- **5b SUBJECTIVE GATE STATUS**: PASS / FAIL
-- Overall UX assessment
-- Overall DX assessment
-- Documentation assessment
-- Architecture assessment
-- Strengths identified
-- Issues requiring fixes (if FAIL)
+**REPORT BACK (exact contract)**:
+
+Emit `5b SUBJECTIVE GATE STATUS` exactly once with one allowed bare-token value,
+then use the canonical @ux-dx-quality report schema:
+
+- **5b SUBJECTIVE GATE STATUS**: <one allowed value>
+- **Scored Evidence**: score, status, and concrete evidence for every required UX, DX, documentation, and architecture dimension; mark an out-of-scope dimension N/A with a reason
+- **Top 3 Strengths**: evidence-backed strengths
+- **Blocking Issues**: issue, evidence, and required fix, or `None`
+- **Non-Blocking Recommendations**: recommendation, evidence, and expected benefit, or `None`
+- **Detailed Assessments**: the applicable mode-specific assessments
 ```
 
+The only accepted 5b values and meanings are:
+
+- `PASS`: all required dimensions meet the pass threshold.
+- `NEEDS_IMPROVEMENT`: recommendations are non-blocking; there is no unmet immutable acceptance criterion, security failure, or critical usability failure.
+- `CRITICAL_ISSUES`: blocking subjective issues require fixes.
+
 **Decision Point after 5b**:
-- 5b PASS → Proceed to Phase 6
-- 5b FAIL → Create fix tasks, return to Phase 4 (fixes must pass 5a again)
+- `PASS` → Proceed to Phase 6.
+- `NEEDS_IMPROVEMENT` → Record the non-blocking recommendations as inputs to
+  Phase 6's final output and feature-level learnings, then proceed to Phase 6.
+  If any recommendation exposes an unmet immutable acceptance criterion, reject
+  the non-blocking classification and use the `CRITICAL_ISSUES` fix path.
+- `CRITICAL_ISSUES` → Create tasks scoped to the reported Blocking Issues,
+  return to Phase 4 for implementation, then rerun both 5a and 5b.
+- Missing or unknown status → Fail closed as a blocking producer/consumer
+  contract error. Do not proceed to Phase 6; re-invoke 5b for a conforming
+  result and escalate if the contract remains invalid.
+
+Phase 5 records recommendations but does not perform success extraction; Phase
+6 alone owns `SUCCESS_EXTRACTION`.

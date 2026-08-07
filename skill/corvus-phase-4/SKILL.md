@@ -5,21 +5,11 @@ description: Implementation loop - per-phase execution with quality gates
 
 ## Phase 4: IMPLEMENTATION LOOP (Per-Phase)
 
-**Goal**: Execute each phase in the master plan with phase-level quality validation.
+**Goal**: Execute each phase of the master plan through three milestones — 4a implement, 4b validate, 4c update plan — with quality validation at the phase level.
 
-<critical_rule id="no_task_file_reading" priority="9999">
-  DO NOT READ TASK FILES YOURSELF
-  
-  Get task list from MASTER_PLAN.md, then delegate to code-implementer with file paths.
-  Code-implementer reads the task files - you just pass paths.
-  
-  WRONG: "Let me read the task files to understand..." → Read .corvus/tasks/feature/01-foo.md
-  CORRECT: "Delegating task 01 to code-implementer" → task(prompt: "TASK FILE: .corvus/tasks/feature/01-foo.md")
-  
-  This saves your context for coordination.
-</critical_rule>
+Get the task list from MASTER_PLAN.md and delegate with task-file paths; code-implementer reads the task files. This keeps your context for coordination instead of duplicating reads.
 
-Phase 4 operates at the **phase level**, not per-task. Tasks within a phase are implemented together (parallel where possible), with quality validation happening once per phase.
+Phase 4 operates at the **phase level**, not per-task: tasks within a phase are implemented together (parallel where possible) and validated once per phase.
 
 ### Per-Phase Flow
 
@@ -27,7 +17,7 @@ Phase 4 operates at the **phase level**, not per-task. Tasks within a phase are 
 4a: code-implementer (ALL tasks in phase, parallel where possible)
          │
          ▼
-4b: code-quality (MANDATORY)
+4b: code-quality (mandatory; risk-triaged when acceptance-only)
     ├── tests_enabled: true, tests_deferred: false  → tests + acceptance criteria
     ├── tests_enabled: true, tests_deferred: true   → acceptance criteria only (tests deferred to Phase 5)
     └── tests_enabled: false                        → acceptance criteria only (no tests)
@@ -36,80 +26,196 @@ Phase 4 operates at the **phase level**, not per-task. Tasks within a phase are 
   PASS      FAIL
     │         │
     │         ▼
-    │    task-planner LEARNING (FAILURE_ANALYSIS with task attribution)
-    │         │
-    │         ▼
-    │    code-implementer (fix ONLY failing tasks)
-    │         │
-    │         └──► Loop back to 4b (full phase revalidation)
+    │    Iteration 1: code-implementer direct fix (4b failure report, targeted)
+    │    Iteration ≥2: task-planner LEARNING (FAILURE_ANALYSIS) → code-implementer fix
+    │         │    (fix ONLY failing tasks)
+    │         └──► Loop back to 4b (re-run the original 4b dispatch scope)
     │
     ▼
-4c: Update master plan → Next Phase (or Phase 5 if all complete)
-    (Corvus updates plan directly - no subagent needed)
+4c: task-planner PROGRESS_UPDATE → verify planning-file diff
+    └── Next Phase (or Phase 5 if all implementation phases complete)
 ```
 
-### KEY RULES
+### Operating Rules
 
-<validation_rules priority="absolute">
-  <rule id="phase_level_operations">
-    **Phase-level operations**: Implementation, validation, and learning happen 
-    per-phase, not per-task. This reduces overhead and enables parallel execution.
-  </rule>
-  
-  <rule id="parallel_where_possible">
-    **Parallel where possible**: Tasks with no inter-dependencies execute in 
-    parallel within a phase. Check task file `Parallel With` metadata.
-  </rule>
-  
-  <rule id="failure_analysis_before_fix">
-    **FAILURE_ANALYSIS before fixing**: When 4b fails, ALWAYS invoke task-planner
-    LEARNING (FAILURE_ANALYSIS) before attempting fixes. Never fix blindly.
-  </rule>
-  
-  <rule id="direct_plan_update">
-    **Direct plan update on success**: When 4b passes, Corvus updates
-    MASTER_PLAN.md directly (mark tasks complete, update progress). No subagent
-    needed for success path - saves tokens and latency.
-  </rule>
-  
-  <rule id="failure_attribution">
-    **Failure attribution**: Quality gate must identify which specific task(s) 
-    caused failure. Fix only failing tasks, not entire phase.
-  </rule>
-  
-  <rule id="full_phase_revalidation">
-    **Full phase revalidation**: After any fix, revalidate entire phase (4b).
-    This ensures fixes don't break other tasks.
-  </rule>
-  
-  <rule id="max_iterations">
-    **Max 3 iterations per phase**: Track iterations through the loop. After 
-    3 iterations, escalate to user. Do not loop infinitely.
-  </rule>
-  
-  <rule id="plan_updates_at_boundaries">
-    **Plan updates at boundaries**: MASTER_PLAN.md only updated at phase 
-    completion (4c), not after each task.
-  </rule>
-</validation_rules>
+<operating_rules>
+  - **Iteration-aware fix loop** (canonical statement of this rule — orchestrators
+    and task-planner point here): on a phase's first 4b FAIL (Iteration 1), dispatch
+    code-implementer directly with the gate's failure report and task attribution,
+    `test_scope: targeted` — no task-planner round-trip. The 4b report already
+    attributes failures to tasks; a first fix needs that report, not a second analysis.
+    Direct fix means applying the Defect-Fix Protocol without FAILURE_ANALYSIS ceremony; it never means symptom-patching.
+    From iteration ≥2, invoke task-planner LEARNING (FAILURE_ANALYSIS) first, then
+    dispatch the fix (also `test_scope: targeted`) — a repeated failure signals a root
+    cause the report alone did not surface.
+  - **Fix only failing tasks**: the gate report attributes every failure to specific
+    task(s); leave passing tasks untouched.
+  - **Revalidate the phase after any fix** (loop to 4b) — code-quality re-runs the same
+    scope as the original 4b dispatch: phase-targeted in the general case, never widening
+    to the full suite; the Lightweight non-deferred final gate
+    revalidates at its dispatched full scope (its sanctioned re-run).
+    This confirms fixes did not break sibling tasks.
+  - **Parallelize disjoint workstreams**: workstreams whose file sets are pairwise
+    disjoint (check the master plan's Workstreams section and `Depends On` metadata)
+    run concurrently; a shared file forces sequential order.
+  - **Update MASTER_PLAN.md at phase boundaries** (4c), not after each task or
+    event. After a phase-wide 4b PASS, batch every accumulated status and the
+    pointer to gate evidence into one task-planner `PROGRESS_UPDATE`. Corvus never
+    edits the plan directly.
+  - **Track finding origin**: for every gate or review finding, record whether it
+    originates in the requested functional change, pre-existing code, or apparatus
+    added by a prior remediation iteration (including guards, tripwires, decoys,
+    and test scaffolding). Carry this lineage through every failure report.
+  - **Remediation stop rule across review rounds**: Track EXTERNAL review rounds
+    (including PR reviews) separately from Phase 4b fix iterations. When N=2
+    consecutive external review rounds produce findings in the same defect class,
+    or in code/apparatus introduced by prior rounds, stop before dispatching another
+    symptom fix. The default flips to root-cause analysis: ask “what single decision
+    point underlies these findings?”, trace that point, then choose revert or
+    simplification before any further fix. The existing within-phase signal remains:
+    two consecutive fix iterations finding prior-remediation apparatus trigger the
+    same revert/simplify evaluation. A disclosed symptom-site patch feeds this
+    same-class tracking and can trigger the stop rule; disclosure does not reset
+    lineage. Review boundaries never reset either lineage.
+  - **Deviation → production-gap escalation**: When a child's disclosed deviation states or implies that the root fix lies outside the authorized manifest (`production would need to change`), the orchestrator must either widen the manifest through a new or amended task or record an explicit deferral with rationale; it must never accept a workaround that encodes the production gap as intended behavior—test assertions pinning defective output are the canonical forbidden form.
+  - **Prose-only remediation validation**: An external-review remediation batch
+    uses the lightweight path only after diff file-type and hunk inspection prove
+    every changed line is comments, documentation, or Markdown. The gate checks
+    prose claims against source and runs build/typecheck only when documentation
+    examples compile; it does not run the full suite. ANY code line in the diff
+    disqualifies this path and restores the batch's normal validation scope.
+  - **Max 3 fix iterations per phase**: at the cap, stop and escalate to the user with
+    what passed, what still fails, and open questions — even if the phase is incomplete.
+  - **Fix-attempt accounting**: code-implementer's in-task 2-attempt fix rule
+    (Delegated Mode) does not consume the 4b 3-iteration cap — the cap counts only
+    4b FAIL → fix → 4b loops. Only a failure at the gate that carries final validation (Phase 5a — or a Lightweight non-deferred plan's final 4b gate) justifies a full-suite re-run.
+  - **Risk-triaged 4b** (canonical statement — orchestrators point here): the 4b
+    dispatch may be skipped ONLY when ALL hold: the gate mode is acceptance-only
+    (tests deferred or disabled), the phase executed as a single workstream, every
+    per-task report section is PASS with zero deviations, and no task touched
+    `prompt-contracts.test.ts` or a mirrored-pair file (parity and pin surfaces
+    always get independent verification). When skipped, the orchestrator performs
+    LIGHTWEIGHT VERIFICATION from the per-task reports it already holds, and the
+    4c PROGRESS_UPDATE records `4b: PASS (lightweight — skip conditions met: [list])`.
+    NEVER skip: multi-workstream phases, any deviation or BLOCKED task, fix-loop
+    re-entries (F3 always returns to a real 4b dispatch), or enabled non-deferred
+    mode — there 4b runs its dispatched test scope unconditionally.
+</operating_rules>
 
 ---
 
-### 4a. Implementation - One Task Per Code-Implementer
+### Phase 4 File, Test, and Validation Ownership
 
-<critical_rule id="one_task_one_implementer" priority="9999">
-  ONE TASK = ONE CODE-IMPLEMENTER (ALWAYS)
-  
-  NEVER have a single code-implementer handle multiple tasks.
-  Each task file gets its own dedicated code-implementer invocation.
-  
-  - Parallel tasks → Multiple task() calls in ONE message (each for ONE task)
-  - Sequential tasks → One task() call, wait for completion, then next task() call
-</critical_rule>
+Resolve `tests_enabled` and `tests_deferred` from MASTER_PLAN.md before dispatch.
+Classify each row by its explicit task type and enforce its `Files to Change`
+manifest as a write allowlist.
 
-### Single Task Delegation Template
+| Mode / task type | Writable files and test authoring | Test execution in Phase 4 |
+|------------------|-----------------------------------|---------------------------|
+| `tests_enabled: true`, implementation task | Product files explicitly listed. Do not author tests unless an obsolete test edit is explicitly in this task's approved manifest. | Only commands explicitly authorized by the active task/workflow. |
+| Explicit preselected `tests_enabled: true`, phase test task, `tests_deferred: false` | Existing/new test files explicitly listed; author tests and make no production changes. | Runs only the test files this task authored/modified (test_scope: targeted); 4b owns the single phase-targeted gate run. This plumbing mode is not offered by the user-facing test question. |
+| `tests_enabled: true`, phase test task, `tests_deferred: true` | Existing/new test files explicitly listed; author tests and make no production changes. | Never execute tests in 4a or 4b. Phase 5 performs the first test run. |
+| `tests_enabled: false` | Product files only. No phase test task or test-file edit exists. | Never execute tests. |
 
-Use this template for EACH task. Every code-implementer invocation handles exactly ONE task:
+The approved task's validation section is an execution allowlist and may be
+narrower than generic agent defaults. A static-only task runs only those static
+checks; do not substitute typecheck, build, lint, or test commands it defers or
+prohibits. In no-test mode, treat a phase test task as a planning error and return
+it for correction rather than dispatching it.
+
+Test-scope edge cases (full semantics: corvus-phase-2 skill, Test Scope section):
+a phase with no test task → 4b runs acceptance checks only (`test_scope: none`);
+deferred mode → 4a/4b dispatches carry `test_scope: none`, and deferred authoring
+tasks may verify their own authored files immediately before the 5a dispatch,
+without consuming the single-full-run budget; disabled mode → every dispatch
+carries `test_scope: none`.
+
+When a full-suite gate covers cross-package changes, only a cache-defeating run
+(for example Turbo with `--force`) is fresh full-suite evidence. A cached replay
+must be labeled `CACHED REPLAY` and cannot be presented as the gate's fresh run.
+
+---
+
+### Dispatch Premise Provenance
+
+Every factual premise the orchestrator writes into a dispatch must carry inline
+provenance: the command or `file:line` from which it was read during THIS
+session. This includes versions, SHAs, pins, statements that the current,
+outgoing, or previous value is X, counts, and paths asserted to exist. A premise
+that cannot be cited must be handed to the child as a question to verify, not a
+fact to execute. This extends the merge-base rule below to every premise class.
+
+When a task or dispatch involves a derived constant, state the governing
+property (for example, `each per-field max must boot` or `reject the multiplicative max`)
+and require the implementer to derive and verify the
+constant against existing constraints. Pin a literal only when it is an
+external requirement, with provenance. Cite facts; do not manufacture constants.
+
+Before any 4a, 4b, or fix dispatch that reasons about "current", "previous",
+"outgoing", or "baseline" repository state, compute `git merge-base HEAD
+<default-branch>` and include the resulting full SHA in the dispatch. State
+explicitly that branch HEAD is NOT the baseline. Every comparison must use the
+provided merge-base SHA; comparison against the wrong ref is a known failure
+class.
+
+Classify premises as mechanical or analytical in every implementation/fix
+dispatch. Mechanical premises (regex behavior, file:line, literal presence) are
+always checked cheaply in-session. Analytical premises (reachability, mutual
+exclusivity, “not exploitable because …”) that gate a security-relevant decision
+or will be committed as documentation require a call-path trace or failing-test
+demonstration first. Never dispatch such a premise as established solely because
+a reviewer or orchestrator reasoned it.
+
+### Build-Pipeline Child Transport Retry
+
+This rule applies to every build-pipeline dispatch to `task-planner`, `code-implementer`, `code-quality`, `plan-reviewer`, `ux-dx-quality`, `requirements-analyst`, `code-explorer`, and `researcher`. An empty report, a report truncated at the critical point, or a schema-invalid report is a child-transport failure; a final message is schema-invalid whenever any section required by its dispatch's `REPORT BACK` contract is missing. Never accept or improvise missing sections. A well-formed failure report is a real result and immediately follows the step's existing failure handling.
+
+For a child-transport failure, first attempt one session resume of the same child and request only its final report. If the resumed report is still empty, critically truncated, or schema-invalid, re-dispatch with byte-identical task inputs: at most once in interactive Corvus and at most twice in Corvus Auto. Validate each returned report before proceeding. After the mode's bound is consumed, apply the step's existing failure handling, including a gate's FAIL path, 5b fail-closed handling, or the applicable phase halt. These are transport replacements, not new workflow decisions.
+
+Two carve-outs are mandatory:
+
+1. **Mutation-aware implementer recovery** — because `code-implementer` may already have mutated the workspace before its report was lost, never re-dispatch it blindly. First verify workspace state with read-only Git status and the task's expected-file manifest, then brief the resumed or re-dispatched implementer on exactly what already exists. Preserve the original task inputs byte-for-byte; the state briefing is recovery metadata and cannot broaden scope, repeat completed mutations, or change the file/validation contract. If workspace state cannot be established, do not re-dispatch; apply the existing failure path.
+2. **Judgment-budget preservation** — transport retries never extend judgment budgets. A recovered or re-dispatched call replaces the flaked dispatch in the count; it is not additional to the Phase 3.5 two-REJECT budget or the Phase 4b three-fix-iteration budget.
+
+After any report claims file writes, verify every claimed artifact on disk with
+`ls`/`read` before proceeding; never use glob for hidden `.corvus/` paths because
+it does not traverse hidden directories. A claims-writes-but-nothing-on-disk
+report is a transport failure and enters the resume-for-report retry ladder.
+
+**Cancelled-dispatch contract**: whenever a dispatch is cancelled or aborted,
+record `working tree may contain partial edits from task <ID>` in orchestrator
+state. Before the next dispatch touching any overlapping file, inspect Git status
+and the expected artifacts, then include an explicit `AUDIT INHERITED STATE`
+instruction naming the cancelled task and requiring preservation/reconciliation
+of partial edits. This extends mutation-aware recovery to cancellations even when
+no transport retry occurs.
+
+Production evidence: ≥7 empty or critically truncated child reports occurred in one production week, and each required improvised recovery; this rule makes that recovery deterministic.
+
+### 4a. Implementation — One Workstream Per Code-Implementer
+
+One workstream (1-5 related tasks from the master plan's `### Workstreams` section) = one code-implementer invocation. The Task tool runs multiple `task()` calls from a single message concurrently ("use a single message with multiple tool uses" to parallelize), so:
+
+Long workstreams amplify transport-loss blast radius: a lost dispatch re-runs
+the whole workstream. Prefer the smaller end of the 1-5 range when tasks are
+independent and sizeable.
+
+- **Parallel** (workstreams with pairwise-disjoint file sets, per the plan's justification column): multiple `task()` calls in ONE message — each for exactly one workstream
+- **Sequential** (dependent workstreams, shared file modifications, output feeding forward): one `task()` call per message; wait for completion between each
+
+A single-task workstream uses the Single-Task Delegation Template below; a multi-task workstream uses the Workstream Delegation Template after the Worked Example.
+
+**Dispatch economy**: invariants, immutable requirements, environment details,
+and stable premises live in the feature's `CONTEXT.md`; dispatches reference
+that file by path plus section and carry only task-specific deltas: task-file
+paths, specific premises with provenance, and the report contract. Premise
+provenance may cite a `CONTEXT.md` entry as its source. Premise discipline
+demonstrably prevents errors; duplication of stable context across dispatches
+is the cost to remove, not the discipline.
+
+**Success criteria for 4a**: every task in the phase dispatched exactly once through its workstream's code-implementer, every dispatch reported back with per-task validation results, every required report section passed schema validation, and every claimed write was verified on disk with `ls`/`read`.
+
+#### Single-Task Delegation Template
 
 ```markdown
 **TASK**: Implement task [NN] - [Task Name]
@@ -117,195 +223,146 @@ Use this template for EACH task. Every code-implementer invocation handles exact
 **TASK FILE**: `.corvus/tasks/[feature]/[NN-task-name].md`
 ⚠️ READ THIS FILE FIRST - It contains detailed steps, examples, and acceptance criteria.
 
+**CONTEXT FILE**: `.corvus/tasks/[feature]/CONTEXT.md` — sections: User Requirements (Immutable), Project Environment, Stable Premises and Invariants (read when present; may be absent on legacy or Hard-apparatus-budget plans)
+
 **DELEGATED MODE**: Pre-approved via master plan. Do NOT ask for approval.
+
+**TASK TYPE**: implementation | phase-test
+**TEST MODE**: `tests_enabled: [true|false], tests_deferred: [true|false]`
+**TEST SCOPE**: `test_scope: [targeted|none]` — targeted = only tests scoped to this task (its own new/modified test files); none when `tests_deferred: true` or `tests_enabled: false`. Full semantics: corvus-phase-2 skill, Test Scope section.
+**AUTHORIZED FILE MANIFEST**: Exact `Files to Change` entries from the task file
+**AUTHORIZED VALIDATION**: Exact commands permitted by the task and active workflow
+**MERGE BASE SHA**: [full SHA from `git merge-base HEAD <default-branch>` when baseline reasoning applies; otherwise NOT APPLICABLE]
+**PREMISE PROVENANCE**: [cite the session-read command or `file:line` inline beside every dispatch-authored fact; hand uncited premises to the child as verification questions]
+**PREMISE CLASS**: [mechanical premises with direct probe evidence; analytical security/documentation premises with call-path trace or failing-test demonstration]
+**AUDIT INHERITED STATE**: [NONE | cancelled/aborted task ID, overlapping files, observed partial state, and explicit reconcile-before-edit instruction]
 
 **MUST DO**:
 - Read `.corvus/tasks/[feature]/[NN-task-name].md` completely before starting
 - Follow the Implementation Steps exactly
 - Use code examples from the task file as patterns
-- Validate after changes (type check, lint, tests)
+- Modify only the authorized file manifest for this task type
+- Run only authorized validation commands; task-specific restrictions override generic defaults
 - Verify against Acceptance Criteria
 
 **MUST NOT DO**:
 - Implement from this summary alone
 - Deviate from task file without documenting why
-- Skip validation
+- Add a validation command not authorized by the task/workflow
+- Author or execute tests outside the resolved ownership row above
+- Run the full test suite; test_scope: targeted is the ceiling for implementer dispatches
 - Implement OTHER tasks (you are only responsible for task [NN])
 
 **REPORT BACK**:
 - Task ID: [NN]
 - Files changed (with summaries)
-- Validation results
+- Authorized validation commands and actual results
+- Commands not run because they were deferred, disabled, or prohibited
 - Any issues and how resolved
 - Any deviations (with reasoning)
 ```
 
-### Parallel vs Sequential Execution
+#### Worked Example: Mixed Parallel + Sequential
 
-**When to parallelize** (multiple task() calls in ONE message):
-- Tasks with `Parallel With` metadata indicating no dependencies
-- Independent tasks within the same phase
-- Tasks that don't share file modifications
-
-**When to execute sequentially** (one task() call, wait, then next):
-- Tasks with explicit dependencies (`Depends On` metadata)
-- Tasks that modify the same files
-- Tasks where output of one feeds into another
-
-### Example A: Parallel Tasks (No Dependencies)
-
-Tasks 03, 04, 05, 06 have no dependencies on each other. Invoke ALL in ONE message:
+Tasks 03 and 04 are independent; task 05 depends on both:
 
 ```javascript
-// ONE message with FOUR task() calls = 4 parallel code-implementers
-// Each code-implementer handles exactly ONE task
-
+// Message 1: two parallel code-implementers (one per task)
 task(
-  subagent_type: "code-implementer", 
-  description: "Task 03: Setup types", 
-  prompt: `**TASK**: Implement task 03 - Setup types
-**TASK FILE**: \`.corvus/tasks/feature-x/03-setup-types.md\`
-⚠️ READ THIS FILE FIRST...
-[rest of single task template for task 03]`
-)
-
-task(
-  subagent_type: "code-implementer", 
-  description: "Task 04: Add config", 
-  prompt: `**TASK**: Implement task 04 - Add config
-**TASK FILE**: \`.corvus/tasks/feature-x/04-add-config.md\`
-⚠️ READ THIS FILE FIRST...
-[rest of single task template for task 04]`
-)
-
-task(
-  subagent_type: "code-implementer", 
-  description: "Task 05: Create utils", 
-  prompt: `**TASK**: Implement task 05 - Create utils
-**TASK FILE**: \`.corvus/tasks/feature-x/05-create-utils.md\`
-⚠️ READ THIS FILE FIRST...
-[rest of single task template for task 05]`
-)
-
-task(
-  subagent_type: "code-implementer", 
-  description: "Task 06: Base module", 
-  prompt: `**TASK**: Implement task 06 - Base module
-**TASK FILE**: \`.corvus/tasks/feature-x/06-base-module.md\`
-⚠️ READ THIS FILE FIRST...
-[rest of single task template for task 06]`
-)
-```
-
-### Example B: Sequential Tasks (With Dependencies)
-
-Task 08 depends on 07, task 09 depends on 08. Execute ONE at a time:
-
-```javascript
-// Message 1: Invoke code-implementer for task 07 ONLY
-task(
-  subagent_type: "code-implementer", 
-  description: "Task 07: Core logic", 
-  prompt: `**TASK**: Implement task 07 - Core logic
-**TASK FILE**: \`.corvus/tasks/feature-x/07-core-logic.md\`
-⚠️ READ THIS FILE FIRST...
-[rest of single task template for task 07]`
-)
-
-// ⏳ WAIT for task 07 to complete before proceeding...
-
-// Message 2: Invoke code-implementer for task 08 ONLY
-task(
-  subagent_type: "code-implementer", 
-  description: "Task 08: API endpoint", 
-  prompt: `**TASK**: Implement task 08 - API endpoint
-**TASK FILE**: \`.corvus/tasks/feature-x/08-api-endpoint.md\`
-⚠️ READ THIS FILE FIRST...
-[rest of single task template for task 08]`
-)
-
-// ⏳ WAIT for task 08 to complete before proceeding...
-
-// Message 3: Invoke code-implementer for task 09 ONLY
-task(
-  subagent_type: "code-implementer", 
-  description: "Task 09: Integration", 
-  prompt: `**TASK**: Implement task 09 - Integration
-**TASK FILE**: \`.corvus/tasks/feature-x/09-integration.md\`
-⚠️ READ THIS FILE FIRST...
-[rest of single task template for task 09]`
-)
-```
-
-### Example C: Mixed (Parallel Then Sequential)
-
-Tasks 03, 04 can run in parallel. Task 05 depends on BOTH 03 and 04:
-
-```javascript
-// Message 1: Two parallel code-implementers (one per task)
-task(
-  subagent_type: "code-implementer", 
-  description: "Task 03: Types", 
+  subagent_type: "code-implementer",
+  description: "Task 03: Types",
   prompt: `**TASK**: Implement task 03 - Types
 **TASK FILE**: \`.corvus/tasks/feature-x/03-types.md\`
-⚠️ READ THIS FILE FIRST...
-[rest of single task template for task 03]`
+[rest of single-task template for task 03]`
 )
 
 task(
-  subagent_type: "code-implementer", 
-  description: "Task 04: Config", 
+  subagent_type: "code-implementer",
+  description: "Task 04: Config",
   prompt: `**TASK**: Implement task 04 - Config
 **TASK FILE**: \`.corvus/tasks/feature-x/04-config.md\`
-⚠️ READ THIS FILE FIRST...
-[rest of single task template for task 04]`
+[rest of single-task template for task 04]`
 )
 
-// ⏳ WAIT for BOTH task 03 AND task 04 to complete...
+// WAIT for BOTH task 03 AND task 04 to complete...
 
-// Message 2: Sequential task that depends on 03 and 04
+// Message 2: sequential task that depends on 03 and 04
 task(
-  subagent_type: "code-implementer", 
-  description: "Task 05: Combined module", 
+  subagent_type: "code-implementer",
+  description: "Task 05: Combined module",
   prompt: `**TASK**: Implement task 05 - Combined module
 **TASK FILE**: \`.corvus/tasks/feature-x/05-combined-module.md\`
-⚠️ READ THIS FILE FIRST...
-[rest of single task template for task 05]`
+[rest of single-task template for task 05]`
 )
 ```
 
-### Key Principle
+#### Workstream Delegation Template
 
-The Task tool documentation states: "Launch multiple agents concurrently whenever possible, 
-to maximize performance; to do that, use a single message with multiple tool uses"
+For a workstream of 2-5 tasks. Single-task workstreams use the Single-Task Delegation Template above.
 
-This means:
-- **Parallel**: Multiple `task()` calls in ONE message → concurrent execution
-- **Sequential**: One `task()` call per message → wait between each
+```markdown
+**TASK**: Implement workstream [WS-id] — tasks [NN, NN, NN]
 
-But ALWAYS: **One task file = One code-implementer invocation**
+**WORKSTREAM**: WS-[id] from `.corvus/tasks/[feature]/MASTER_PLAN.md` (Workstreams section)
+
+**TASK FILES** (execute in dependency order):
+- `.corvus/tasks/[feature]/[NN-task-name].md`
+- `.corvus/tasks/[feature]/[NN-task-name].md`
+⚠️ READ ALL TASK FILES FIRST — each is the atomic spec for its task.
+
+**CONTEXT FILE**: `.corvus/tasks/[feature]/CONTEXT.md` — sections: User Requirements (Immutable), Project Environment, Stable Premises and Invariants (read when present; may be absent on legacy or Hard-apparatus-budget plans)
+
+**DELEGATED MODE**: Pre-approved via master plan. Do NOT ask for approval.
+
+**TEST MODE**: `tests_enabled: [true|false], tests_deferred: [true|false]`
+**TEST SCOPE**: `test_scope: [targeted|none]` — applies per member task: targeted = only tests scoped to that task (its own new/modified test files); none when `tests_deferred: true` or `tests_enabled: false`. Full semantics: corvus-phase-2 skill, Test Scope section.
+**AUTHORIZED FILE MANIFEST**: per task — the exact `Files to Change` entries from each task file
+**AUTHORIZED VALIDATION**: per task — exactly the commands each task and the active workflow permit
+**MERGE BASE SHA**: [full SHA from `git merge-base HEAD <default-branch>` when baseline reasoning applies; otherwise NOT APPLICABLE]
+**PREMISE PROVENANCE**: [cite the session-read command or `file:line` inline beside every dispatch-authored fact; hand uncited premises to the child as verification questions]
+**PREMISE CLASS**: [mechanical premises with direct probe evidence; analytical security/documentation premises with call-path trace or failing-test demonstration]
+**AUDIT INHERITED STATE**: [NONE | cancelled/aborted task ID, overlapping files, observed partial state, and explicit reconcile-before-edit instruction]
+
+**MUST DO**:
+- Read every listed task file completely before starting
+- Execute member tasks in dependency order; resolve each task's contract independently
+- Validate per task with only that task's allowlist; the 2-attempt fix rule scopes per task
+- On a member-task failure, continue tasks whose dependencies are unaffected and mark dependents BLOCKED
+
+**MUST NOT DO**:
+- Pool validation commands or file manifests across member tasks
+- Run the full test suite; test_scope: targeted is the ceiling
+- Implement tasks outside this workstream
+
+**REPORT BACK** (per-task sections keyed by Task ID):
+- Workstream summary: [N] PASS / [N] FAIL / [N] BLOCKED
+- Per task: Task ID, status (PASS/FAIL/BLOCKED), files changed, authorized validation commands and actual results, commands not run by policy, issues, deviations
+```
 
 ---
 
 ### Pre-4b: Phase Metadata Extraction
 
-<critical_rule priority="999">
-  BEFORE invoking code-quality (step 4b), you MUST:
-  
-  1. Identify all tasks in the current phase
-  2. Note which tasks have `requires_ux_dx_review: true` (for Phase 5)
-  3. Prepare the phase validation scope
-</critical_rule>
+Before invoking code-quality, collect from the phase's task files:
 
-**Metadata Extraction Format**:
+1. The task list for the current phase (IDs + file paths)
+2. Each task's `requires_ux_dx_review` flag — if ANY is true, Phase 5 includes UX/DX review
+3. Each task type, exact file manifest, and reported files changed in 4a — read from each dispatch's per-task report sections (workstream reports concatenate one section per member task)
+4. The resolved test flags and every authorized validation result or policy-based omission
+
 ```
 PHASE METADATA EXTRACTION - Phase [N]
 ─────────────────────────────────────
-Tasks in Phase: [NN, NN, NN, NN]
-Total Tasks: [count]
+Tasks in Phase: [NN, NN, NN] (total: [count])
+Test Mode: tests_enabled=[true/false], tests_deferred=[true/false]
+
+Task Ownership:
+- Task NN: type=[implementation/phase-test], manifest=[paths], changed=[paths]
+
+Validation Evidence:
+- Task NN: commands run=[commands/results], not run by policy=[commands/reason]
 
 UX/DX Review Flags:
-- Task NN: requires_ux_dx_review = [true/false]
 - Task NN: requires_ux_dx_review = [true/false]
 
 Phase 5 UX/DX Required: [YES if ANY task is true / NO if all false]
@@ -314,88 +371,80 @@ Phase 5 UX/DX Required: [YES if ANY task is true / NO if all false]
 
 ---
 
-### 4b. Objective Quality Gate - ENTIRE PHASE (MANDATORY)
+### 4b. Objective Quality Gate — Entire Phase (Mandatory)
 
-<quality_gate id="objective" priority="9999">
-  <rule>
-    MANDATORY OBJECTIVE QUALITY GATE: You CANNOT proceed until
-    code-quality returns PASS for the ENTIRE PHASE.
-    
-    When `tests_enabled: true` AND `tests_deferred: false`:
-    - Tests: PASS (for all affected code)
-    - Acceptance criteria: ALL tasks in phase PASS
-    
-    When `tests_enabled: true` AND `tests_deferred: true` (deferred mode):
-    - Acceptance criteria: ALL tasks in phase PASS (verified via file inspection, code review, command output)
-    - Tests are NOT run during Phase 4 — deferred to Phase 5 final validation
-    - This is functionally identical to acceptance-only mode for Phase 4 purposes
-    
-    When `tests_enabled: false` (acceptance-only mode):
-    - Acceptance criteria: ALL tasks in phase PASS (verified via file inspection, code review, command output)
-    - Tests are NOT run and NOT required
-    
-    NOTE: code-implementer already validated lint, type check, and build.
-    code-quality focuses on TESTS and acceptance criteria verification
-    (or acceptance criteria only when tests_enabled: false OR tests_deferred: true).
-    
-    If ANY check returns FAIL:
-    1. FIRST: Invoke task-planner LEARNING MODE (FAILURE_ANALYSIS)
-    2. THEN: Invoke code-implementer with fix instructions (ONLY failing tasks)
-    3. THEN: Loop back to 4b (full phase revalidation)
-    4. Repeat until PASS (max 3 iterations per phase)
-    5. If still failing after 3 iterations, escalate to user
-    
-    NEVER skip this gate. NEVER proceed with FAIL status.
-    NEVER fix without first analyzing the failure.
-    NEVER fix passing tasks - only fix failing tasks.
-  </rule>
-</quality_gate>
+**Pass condition**: code-quality returns QUALITY GATE STATUS: PASS for the ENTIRE phase. Proceed to 4c only on PASS; on FAIL, run the learning-first fix cycle below.
 
-**Template Selection for 4b**:
-- If `tests_enabled: true` AND `tests_deferred: false` (default): Use the standard delegation template below
-- If `tests_enabled: true` AND `tests_deferred: true` (deferred mode): Use the "Acceptance-Only Mode" delegation template (tests deferred to Phase 5)
-- If `tests_enabled: false`: Use the "Acceptance-Only Mode" delegation template
+What PASS requires per test mode follows the table below. The 4a reports are the
+source of truth for validation already performed; do not assume generic lint,
+typecheck, build, or test commands ran when an approved task narrowed them.
+
+| Test flags | PASS requires | Delegation template |
+|------------|---------------|---------------------|
+| `tests_enabled: true`, `tests_deferred: false` | Tests PASS + every task's acceptance criteria PASS | Standard |
+| `tests_enabled: true`, `tests_deferred: true` | Every task's acceptance criteria PASS (evidence: file inspection, code review, command output); tests deferred to Phase 5 | Acceptance-Only |
+| `tests_enabled: false` | Every task's acceptance criteria PASS (same evidence types); tests not run and not required | Acceptance-Only |
+
+If a configurable knob participates in an acceptance invariant, the 4b dispatch
+must re-derive that invariant at the knob's minimum, shipped default, and maximum.
+Defaults-only evidence is insufficient at the gate.
 
 **DELEGATE TO**: @code-quality
 
-#### 4b Delegation: Standard Mode (when `tests_enabled: true`)
+#### Pre-Dispatch Triage (Risk-Triaged 4b)
+
+Before selecting a template, evaluate the Risk-triaged 4b rule (Operating Rules).
+When ALL skip conditions hold, do not dispatch code-quality; perform LIGHTWEIGHT
+VERIFICATION instead:
+
+- [ ] Every task's authorized validation commands appear in its report with passing output
+- [ ] Every acceptance criterion is addressed in its task's report
+- [ ] Every file manifest stayed within the task's approved scope
+
+All boxes checked → treat 4b as PASS and record `4b: PASS (lightweight — skip
+conditions met: [list])` in the 4c PROGRESS_UPDATE's QUALITY GATE field. Any box
+unchecked → dispatch the real 4b (acceptance-only template). When any skip
+condition fails, dispatch the template the resolved flags select, as always.
+
+#### 4b Delegation: Standard Mode (explicit preselected `tests_enabled: true`, `tests_deferred: false`)
 
 ```markdown
 **TASK**: Validate Phase [N] implementation
 
-**PHASE TASKS**: 
+**PHASE TASKS**:
 - Task NN: [name] - `.corvus/tasks/[feature]/NN-task.md`
 - Task NN: [name] - `.corvus/tasks/[feature]/NN-task.md`
-- Task NN: [name] - `.corvus/tasks/[feature]/NN-task.md`
+
+**CONTEXT FILE**: `.corvus/tasks/[feature]/CONTEXT.md` — sections: User Requirements (Immutable), Project Environment, Stable Premises and Invariants (read when present; may be absent on legacy or Hard-apparatus-budget plans)
 
 **SCOPE**: All files created/modified in 4a for this phase
 
+**MERGE BASE SHA**: [full SHA from `git merge-base HEAD <default-branch>` when baseline reasoning applies; branch HEAD is NOT the baseline]
+
+**TEST SCOPE**: `test_scope: [targeted|none]` — targeted = union of test files created/modified by this phase's tasks (from their Tests sections); none when the phase has no test tasks (deferred and disabled dispatches use the acceptance-only template below). Exception: a Lightweight non-deferred plan's final 4b gate doubles as final validation and carries the plan's single full-suite run (semantics: corvus-phase-2 skill, Test Scope section).
+
 **PRIMARY JOB**: RUN TESTS
 
-Code-implementer already validated:
-- ✅ Lint passed
-- ✅ Type check passed  
-- ✅ Build succeeded
-
-Your job is to run the TESTS that code-implementer did not run.
+Code-implementer ran only the validations authorized by each task. Your gate owns
+the required phase test execution and acceptance verification in this mode.
 
 **CHECKS REQUIRED**:
-1. Run test suite (targeting tests for this phase's code)
+1. Run the phase-targeted test scope (union of this phase's task test files) — once
 2. Verify acceptance criteria from ALL task files (with evidence)
-3. Check for regressions (if existing tests exist)
+3. Check for regressions within the dispatched test_scope plus acceptance-criteria evidence — the full suite belongs to Phase 5a only
+4. For every configurable knob participating in a gated invariant, re-derive the invariant at min, default, and max
 
 **MUST DO**:
 - Identify test files for the scope
-- Run tests with appropriate test runner
+- Run tests with the appropriate test runner
 - Report actual test output (not just "PASS")
 - Verify each acceptance criterion with evidence (test name or observation)
 - Attribute any failures to specific task(s)
 
 **MUST NOT DO**:
-- Re-run lint (code-implementer did this)
-- Re-run type check (code-implementer did this)
-- Re-run build (unless tests require it)
-- Just read files and check boxes without running tests
+- Add unrelated lint/typecheck/build commands; run a prerequisite build only when the authorized test workflow requires it
+- Run the full test suite — that is the Phase 5a dispatch, not 4b (sole exception: the Lightweight final gate noted in TEST SCOPE above)
+- Check criteria boxes without running tests
 - Report failures without task attribution
 
 **IF NO TESTS EXIST**:
@@ -405,7 +454,7 @@ Your job is to run the TESTS that code-implementer did not run.
 
 **REPORT FORMAT**:
 ```
-**PHASE GATE STATUS**: PASS / FAIL
+**QUALITY GATE STATUS**: PASS / FAIL
 
 ### Test Results (PRIMARY)
 **Command**: {actual test command run}
@@ -427,32 +476,36 @@ Only tasks [NN] require fixes. Tasks [NN] should NOT be modified.
 ```
 ```
 
-#### 4b Delegation: Acceptance-Only Mode (when `tests_enabled: false` OR `tests_deferred: true`)
+#### 4b Delegation: Acceptance-Only Mode (`tests_enabled: false` OR `tests_deferred: true`)
 
 ```markdown
 **TASK**: Validate Phase [N] implementation (acceptance-only mode)
 
-**PHASE TASKS**: 
+**PHASE TASKS**:
 - Task NN: [name] - `.corvus/tasks/[feature]/NN-task.md`
 - Task NN: [name] - `.corvus/tasks/[feature]/NN-task.md`
+
+**CONTEXT FILE**: `.corvus/tasks/[feature]/CONTEXT.md` — sections: User Requirements (Immutable), Project Environment, Stable Premises and Invariants (read when present; may be absent on legacy or Hard-apparatus-budget plans)
 
 **SCOPE**: All files created/modified in 4a for this phase
 
+**MERGE BASE SHA**: [full SHA from `git merge-base HEAD <default-branch>` when baseline reasoning applies; branch HEAD is NOT the baseline]
+
 **MODE**: ACCEPTANCE-ONLY (`tests_enabled: false` OR `tests_deferred: true`)
+
+**TEST SCOPE**: `test_scope: none` — acceptance-only; no test execution.
 
 **PRIMARY JOB**: VERIFY ACCEPTANCE CRITERIA
 
-Code-implementer already validated:
-- ✅ Lint passed
-- ✅ Type check passed  
-- ✅ Build succeeded
-
-Your job is to verify acceptance criteria from task files WITHOUT running tests.
+Code-implementer ran only the validation commands authorized by each task. Verify
+acceptance criteria without running tests and do not treat a policy-prohibited
+generic command as missing evidence.
 
 **CHECKS REQUIRED**:
 1. Verify acceptance criteria from ALL task files (with evidence)
 2. Evidence must be concrete: file inspection, code review, or command output
 3. Check for regressions via code review (if existing code was modified)
+4. For every configurable knob participating in a gated invariant, re-derive the invariant at min, default, and max
 
 **MUST DO**:
 - Read all task files for the phase
@@ -461,15 +514,14 @@ Your job is to verify acceptance criteria from task files WITHOUT running tests.
 - Report PASS/FAIL with evidence type for each criterion
 
 **MUST NOT DO**:
-- Attempt to run tests
-- Report "NO TESTS FOUND" as a gap
-- Recommend test creation
-- Just read files and check boxes without evidence
+- Attempt to run tests, report "NO TESTS FOUND" as a gap, or recommend test creation
+- Substitute a generic typecheck, lint, or build command prohibited by the task/workflow
+- Check criteria boxes without evidence
 - Report failures without task attribution
 
 **REPORT FORMAT**:
 ```
-**PHASE GATE STATUS**: PASS / FAIL
+**QUALITY GATE STATUS**: PASS / FAIL
 **MODE**: ACCEPTANCE-ONLY
 
 ### Acceptance Criteria Verification (PRIMARY)
@@ -488,20 +540,71 @@ Only tasks [NN] require fixes. Tasks [NN] should NOT be modified.
 ```
 
 **GATE DECISION**:
-- If PHASE GATE STATUS = PASS → Proceed to 4c (update master plan)
-- If PHASE GATE STATUS = FAIL → Invoke failure learning, then fix failing tasks, then loop to 4b
+- If QUALITY GATE STATUS = PASS → Proceed to 4c (update master plan)
+- If QUALITY GATE STATUS = FAIL → Iteration-aware fix cycle (iteration 1: F1 → F3; iteration ≥2: F2 → F3)
 
 ---
 
-#### On FAIL: Learning-First Fix Cycle
+### On FAIL: Iteration-Aware Fix Cycle
 
-When the phase quality gate returns FAIL, follow this exact sequence:
+The canonical rule from Operating Rules applies: iteration 1 dispatches a direct fix from the gate's failure report (F1); iteration ≥2 runs FAILURE_ANALYSIS first, then the fix (F2); every iteration ends with revalidation at the original 4b dispatch scope (F3). A fix dispatch may target a subset of a workstream's tasks: scope it to the failing tasks — including tasks the gate reports as BLOCKED or unimplemented — as a single-task dispatch or a subset workstream carrying only those task files. Before every fix, classify each finding's origin; when the Remediation stop rule triggers, state the revert/simplify evaluation before choosing whether another fix dispatch is justified.
 
-**Step F1: Failure Analysis (MANDATORY before fixing)**
+#### Remediation Inheritance Rule
 
-**DELEGATE TO**: @task-planner
+Remediation output is new unreviewed content: every fix inherits the full consistency obligations of the work it touches—the same mirror sweeps, doc sweeps, prose-accuracy checks, and verification that applied to the original change apply to the fix, at the fix's blast radius.
 
-**MODE**: LEARNING (FAILURE_ANALYSIS)
+Production instance: a PLAN_FIX wrote a blanket “assertions preserved verbatim” claim that the next review rejected per occurrence.
+
+Production instance: a review-fix commit added a config invariant without sweeping the README that described those knobs, producing a next-round finding.
+
+**Step F1 (Iteration 1): Direct Fix — DELEGATE TO @code-implementer (failing tasks only)**
+
+No task-planner round-trip: the 4b report already attributes failures to tasks.
+
+```markdown
+**TASK**: Fix failing tasks from the 4b quality gate (iteration 1)
+
+**FAILING TASKS ONLY**:
+- Task NN: [failed criteria/tests from the gate report]
+
+**DO NOT MODIFY**: Tasks [NN, NN] - these passed validation
+
+**CONTEXT FILE**: `.corvus/tasks/[feature]/CONTEXT.md` — sections: User Requirements (Immutable), Project Environment, Stable Premises and Invariants (read when present; may be absent on legacy or Hard-apparatus-budget plans)
+
+**FAILURE REPORT**:
+[4b gate output with task attribution — treat each finding as a symptom report, including failing criteria, exact errors, and observed files per task]
+
+**FINDING ORIGINS**: [functional change | pre-existing code | prior-remediation apparatus, with iteration lineage]
+
+**MERGE BASE SHA**: [carry the original full SHA when baseline reasoning applies; branch HEAD is NOT the baseline]
+
+**TEST SCOPE**: `test_scope: targeted`
+
+**MUST DO**:
+- Address each attributed failure from the failure report
+- Apply the Defect-Fix Protocol; trace each reported symptom to its root-cause decision point or origin before editing
+- Reapply each failing task's type, test flags, file manifest, and validation allowlist
+- Modify ONLY files related to failing tasks, then run only authorized validation
+
+**MUST NOT DO**:
+- Modify files for passing tasks
+- Make unrelated changes
+- Run the full test suite
+
+**REPORT BACK**:
+- Changes made per failing task
+- Root-cause trace from each symptom report to the decision point or origin
+- Fix-placement classification and defect-class enumeration required by the Defect-Fix Protocol
+- Validation results
+- Ready for re-validation
+```
+
+The orchestrator treats an undisclosed symptom-site patch as a Defect-Fix
+Protocol contract violation and does not advance to F3. A disclosed symptom-site
+patch remains eligible for F3 but feeds the same-class tracking in the Remediation
+stop rule.
+
+**Step F2 (Iteration ≥2): Failure Analysis, Then Fix — DELEGATE TO @task-planner, then @code-implementer**
 
 ```markdown
 **TASK**: Analyze phase quality gate failure
@@ -514,21 +617,26 @@ When the phase quality gate returns FAIL, follow this exact sequence:
 
 **PHASE**: [phase number]
 
+**ITERATION**: [N ≥ 2] of 3
+
 **FAILURE DETAILS**:
 - Failing task(s): [list with task IDs]
 - What failed: [specific test/build/criteria per task]
 - Error messages: [exact errors]
 - Files involved: [list per task]
+- Previous fix attempts: [what each prior iteration changed]
+- Finding origins: [classify each finding and identify prior-remediation apparatus]
+- Apparatus evaluation: [keep | revert | simplify, with rationale; mandatory when the Remediation stop rule triggers]
 
 **QUESTIONS TO ANSWER**:
 1. What is the root cause of each failure?
-2. Are the task definitions correct, or do they need updating?
-3. Was there missing context that caused the failure?
-4. What should the fix approach be for each failing task?
+2. Why did the previous fix not work?
+3. Are the task definitions correct, or do they need updating?
+4. Was there missing context that caused the failure?
+5. What should the fix approach be for each failing task?
 
 **MUST DO**:
 - Analyze the failure root cause per failing task
-- Determine if task files need updating
 - Update task files if definitions were wrong
 - Provide clear fix instructions for code-implementer
 - Scope fixes to ONLY failing tasks
@@ -536,72 +644,101 @@ When the phase quality gate returns FAIL, follow this exact sequence:
 **REPORT BACK**:
 - Root cause analysis per failing task
 - Task file updates made (if any)
-- Recommended fix approach per task
 - Specific fix instructions for code-implementer
 - Confirmation that passing tasks should NOT be modified
 ```
 
-**Step F2: Fix Implementation (ONLY Failing Tasks)**
-
-**DELEGATE TO**: @code-implementer
+Then dispatch the fix to @code-implementer:
 
 ```markdown
 **TASK**: Fix implementation based on failure analysis
 
 **FAILING TASKS ONLY**:
 - Task NN: [fix instructions]
-- Task NN: [fix instructions]
 
-**DO NOT MODIFY**: Tasks [NN, NN, NN] - these passed validation
+**DO NOT MODIFY**: Tasks [NN, NN] - these passed validation
+
+**CONTEXT FILE**: `.corvus/tasks/[feature]/CONTEXT.md` — sections: User Requirements (Immutable), Project Environment, Stable Premises and Invariants (read when present; may be absent on legacy or Hard-apparatus-budget plans)
 
 **FAILURE ANALYSIS**:
-[Include root cause and recommended fix approach from F1]
+[Root cause and recommended fix approach from the analysis]
+
+**FINDING ORIGINS AND APPARATUS EVALUATION**:
+[Origin lineage and the explicit keep/revert/simplify decision]
+
+**MERGE BASE SHA**: [carry the original full SHA when baseline reasoning applies; branch HEAD is NOT the baseline]
 
 **SPECIFIC FIXES REQUIRED**:
-[Exact changes needed per failing task based on F1 analysis]
+[Exact changes needed per failing task based on the analysis]
+
+**TEST SCOPE**: `test_scope: targeted`
 
 **MUST DO**:
 - Follow the fix approach from failure analysis
-- Address the root cause, not just symptoms
+- Apply the Defect-Fix Protocol and address the root cause, not just symptoms
 - Ensure fix aligns with updated task definition (if changed)
-- ONLY modify files related to failing tasks
+- Reapply each failing task's type, test flags, file manifest, and validation allowlist
+- Modify ONLY files related to failing tasks, then run only authorized validation
 
 **MUST NOT DO**:
 - Modify files for passing tasks
 - Make unrelated changes
-- Skip validation
 
 **REPORT BACK**:
 - Changes made per failing task
-- How root cause was addressed
+- Root-cause trace, fix-placement classification, and defect-class enumeration required by the Defect-Fix Protocol
 - Ready for re-validation
 ```
 
-**Step F3: Loop Back to 4b**
-
-After fix, ALWAYS loop back to 4b (code-quality) for full phase revalidation.
-This ensures fixes don't break other tasks in the phase.
-
-**ITERATION TRACKING**:
-- Track iterations through the loop per phase
-- Max 3 iterations per phase
-- If still failing after 3 iterations, escalate to user
+**Step F3: Loop to 4b** — code-quality re-runs the same scope as the original 4b dispatch (per Operating Rules): phase-targeted in the general case, never widening to the full suite; the Lightweight non-deferred final gate revalidates at its dispatched full scope (its sanctioned re-run). Track iterations; the 3-iteration cap with user escalation applies. Fix-loop re-entries are exempt from the Risk-triaged 4b skip: F3 always returns to a real 4b dispatch, never to lightweight verification.
 
 ---
 
 ### 4c. Update Master Plan
 
-After the phase quality gate passes, update the master plan directly (no subagent needed).
+After a phase-wide 4b `PASS`, delegate the state transition to @task-planner.
+Corvus is the caller and verifier, never the plan writer.
 
-**Actions** (Corvus does this directly):
-1. **Mark ALL phase tasks as complete**: `[ ]` → `[x]`
-2. **Update progress count** at bottom of document
-3. **Update phase status**: `[ ]` → `[x]`
-4. **Check for next phase** (respecting phase order)
-5. **If more phases remain**, loop back to 4a with next phase (reset fix_iterations = 0)
-6. **If all phases complete**, proceed to Phase 5 (Final Validation)
+```markdown
+**TASK**: Record the passed Phase [exact ID and name]
+**MODE**: PROGRESS_UPDATE
+**FEATURE DIRECTORY**: `.corvus/tasks/[feature]/`
+**STATUS UPDATES**:
+- `Phase [N]`: `[x]`
+- `[exact-task-id]`: `[x]`
+**GATE OUTCOME**: `4b: PASS — evidence: [stable pointer to command output/report section; do not copy the evidence]`
+```
 
-**Why no subagent?**: SUCCESS_EXTRACTION adds overhead without immediate value. 
-Learnings are extracted once at Phase 6 for the entire feature instead.
+Send one batched dispatch per phase boundary with every accumulated task/phase
+status and one pointer to gate evidence. PROGRESS_UPDATE never copies evidence,
+adds literal counts to prose, or uses superlatives. On a triage skip, point to the
+per-task report sections proving the skip conditions rather than restating their
+contents. Do not dispatch bookkeeping once per event or edit MASTER_PLAN.md
+directly. Do not invoke success extraction here; Phase 6 alone owns feature-wide
+learning.
+
+When task-planner returns:
+
+1. Require the one-line success confirmation defined by task-planner's
+   `PROGRESS_UPDATE` mode.
+2. Verify the returned diff is confined to the feature's MASTER_PLAN.md and only
+   status markers, Progress counts, and the gate-outcome log changed.
+3. Verify no task file, CONTEXT.md, objective, scope, file manifest, dependency,
+   estimate, or acceptance criterion changed and no `[x]` regressed.
+4. Only after these checks pass, continue: more implementation phases loop to 4a
+   with fix iterations reset; otherwise proceed to Phase 5.
+
+If task-planner rejects the request, fails to update, or returns an unauthorized
+or inconsistent diff, block the transition and report the failure. Do not edit
+MASTER_PLAN.md directly, repair the result silently, or advance to another phase.
+
+### Self-Check Before Leaving a Phase
+
+- [ ] Every task ran through exactly one workstream dispatch (one workstream = one code-implementer; per-task report sections present for every member task)
+- [ ] code-quality reported QUALITY GATE STATUS: PASS for the entire phase, or a triage skip recorded `4b: PASS (lightweight — skip conditions met: [list])` after lightweight verification
+- [ ] Every fix iteration followed the iteration rule (iteration 1: direct fix from the 4b report; iteration ≥2: FAILURE_ANALYSIS first) and re-ran the original 4b dispatch scope
+- [ ] task-planner accepted `PROGRESS_UPDATE`
+- [ ] Returned diff is confined to MASTER_PLAN.md status markers, Progress counts, and the gate-outcome log
+- [ ] One batched update recorded every phase-boundary status and the gate evidence line
 
 **Exit Criteria**: All phases complete, proceed to Phase 5.
