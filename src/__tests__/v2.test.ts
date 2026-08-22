@@ -11,9 +11,10 @@ import { loadAgents } from "../load-agents"
 import plugin from "../v2"
 import {
   registerAgents,
+  registerCommands,
   registerSkills,
   type DirectSkillDraft,
-} from "../v2"
+} from "../v2/register"
 import {
   convertAgent,
   convertCommand,
@@ -37,7 +38,8 @@ function createAgentDraft(
     default: () => {},
     update: (id, update) => {
       if (id === failAgent) throw new Error("synthetic registration failure")
-      const agent: AgentV2Info = {
+      // Like the real runtime, update() mutates an existing entry in place.
+      const agent: AgentV2Info = agents.get(id) ?? {
         id,
         request: { headers: {}, body: {} },
         mode: "all",
@@ -59,7 +61,8 @@ function createCommandDraft(commands: Map<string, CommandV2Info>): CommandDraft 
     list: () => [...commands.values()],
     get: (name) => commands.get(name),
     update: (name, update) => {
-      const command: CommandV2Info = { name, template: "" }
+      // Like the real runtime, update() mutates an existing entry in place.
+      const command: CommandV2Info = commands.get(name) ?? { name, template: "" }
       update(command)
       commands.set(name, command)
     },
@@ -198,6 +201,36 @@ describe("V2 conversion", () => {
       template: "Review $ARGUMENTS",
     })
   })
+
+  test("rejects an agent mode outside the V2 union", () => {
+    expect(() => convertAgent("reviewer", { mode: "sometimes" as never })).toThrow(
+      'Invalid mode for agent reviewer: "sometimes"',
+    )
+  })
+
+  test("rejects a non-finite agent temperature", () => {
+    expect(() => convertAgent("reviewer", { temperature: Number.NaN })).toThrow(
+      "Invalid temperature for agent reviewer",
+    )
+    expect(() => convertAgent("reviewer", { temperature: "hot" as never })).toThrow(
+      'Invalid temperature for agent reviewer: "hot"',
+    )
+  })
+
+  test("rejects a command without a string template", () => {
+    expect(() => convertCommand("review", {} as never)).toThrow(
+      "Invalid template for command review",
+    )
+    expect(() => convertCommand("review", { template: 42 as never })).toThrow(
+      "Invalid template for command review: 42",
+    )
+  })
+
+  test("rejects a non-boolean command subtask", () => {
+    expect(() => convertCommand("review", { template: "t", subtask: "yes" as never })).toThrow(
+      'Invalid subtask for command review: "yes"',
+    )
+  })
 })
 
 describe("V2 plugin", () => {
@@ -216,7 +249,7 @@ describe("V2 plugin", () => {
     await plugin.setup(context)
     await plugin.setup(context)
 
-    expect(agents.size).toBe(15)
+    expect(agents.size).toBe(16)
     expect(commands.size).toBe(4)
     // Re-registering the plugin keeps the typed source list idempotent.
     expect(skills).toHaveLength(1)
@@ -296,6 +329,53 @@ describe("V2 plugin", () => {
       loadAgents(resolve(root, "agent")),
     )
     expect(agents.has("code-explorer")).toBe(false)
-    expect(agents.size).toBe(14)
+    expect(agents.size).toBe(15)
+  })
+
+  test("re-registering an agent clears optional fields the new config omits", () => {
+    const agents = new Map<string, AgentV2Info>([
+      ["reviewer", {
+        id: "reviewer",
+        request: { headers: {}, body: {} },
+        mode: "all",
+        hidden: false,
+        permissions: [],
+        model: { providerID: "anthropic", id: "stale-model" },
+        steps: 5,
+        description: "stale description",
+        color: "#abcdef",
+      }],
+    ])
+
+    registerAgents(createAgentDraft(agents), { reviewer: { prompt: "Fresh prompt" } })
+
+    const agent = agents.get("reviewer")!
+    expect(agent.system).toBe("Fresh prompt")
+    expect("model" in agent).toBe(false)
+    expect("steps" in agent).toBe(false)
+    expect("description" in agent).toBe(false)
+    expect("color" in agent).toBe(false)
+  })
+
+  test("re-registering a command clears optional fields the new config omits", () => {
+    const commands = new Map<string, CommandV2Info>([
+      ["review", {
+        name: "review",
+        template: "stale template",
+        description: "stale description",
+        agent: "stale-agent",
+        model: { providerID: "anthropic", id: "stale-model" },
+        subtask: true,
+      }],
+    ])
+
+    registerCommands(createCommandDraft(commands), { review: { template: "Fresh $ARGUMENTS" } })
+
+    const command = commands.get("review")!
+    expect(command.template).toBe("Fresh $ARGUMENTS")
+    expect("description" in command).toBe(false)
+    expect("agent" in command).toBe(false)
+    expect("model" in command).toBe(false)
+    expect("subtask" in command).toBe(false)
   })
 })

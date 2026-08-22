@@ -73,7 +73,21 @@ export function parseModelRef(value: string): ModelRef {
   }
 }
 
+const AGENT_MODES = ["subagent", "primary", "all"] as const
+
 export function convertAgent(id: string, agent: LegacyAgentConfig): AgentV2Info {
+  // Legacy configs arrive from unchecked YAML, so validate at this seam.
+  if (agent.mode !== undefined && !AGENT_MODES.includes(agent.mode)) {
+    throw new Error(
+      `Invalid mode for agent ${id}: ${JSON.stringify(agent.mode)} (expected "subagent", "primary", or "all")`,
+    )
+  }
+  if (agent.temperature !== undefined && (typeof agent.temperature !== "number" || !Number.isFinite(agent.temperature))) {
+    throw new Error(
+      `Invalid temperature for agent ${id}: ${JSON.stringify(agent.temperature)} (expected a finite number)`,
+    )
+  }
+
   // OpenCode 2's current runtime requires request.settings even though the
   // published SDK type has not caught up yet. Keep it on a separately inferred
   // object so TypeScript permits the forward-compatible field.
@@ -83,19 +97,34 @@ export function convertAgent(id: string, agent: LegacyAgentConfig): AgentV2Info 
     body: agent.temperature === undefined ? {} : { temperature: agent.temperature },
   }
 
+  // Conditional spreads: absent legacy fields must not become explicit
+  // `undefined` keys, or they would survive the stale-field clearing that
+  // registerAgents performs before re-assignment.
   return {
     id,
     request,
-    system: agent.prompt,
-    description: agent.description,
+    ...(agent.prompt !== undefined ? { system: agent.prompt } : {}),
+    ...(agent.description !== undefined ? { description: agent.description } : {}),
     mode: agent.mode ?? "all",
     hidden: false,
-    color: agent.color,
+    ...(agent.color !== undefined ? { color: agent.color } : {}),
     permissions: convertPermissions(agent.permission),
   }
 }
 
 export function convertCommand(name: string, command: LegacyCommandConfig): CommandV2Info {
+  // Legacy configs arrive from unchecked YAML, so validate at this seam.
+  if (typeof command.template !== "string") {
+    throw new Error(
+      `Invalid template for command ${name}: ${JSON.stringify(command.template)} (expected a string)`,
+    )
+  }
+  if (command.subtask !== undefined && typeof command.subtask !== "boolean") {
+    throw new Error(
+      `Invalid subtask for command ${name}: ${JSON.stringify(command.subtask)} (expected a boolean)`,
+    )
+  }
+
   return {
     name,
     template: command.template,

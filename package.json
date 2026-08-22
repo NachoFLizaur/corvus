@@ -50,7 +50,7 @@
   },
   "homepage": "https://github.com/NachoFLizaur/corvus",
   "peerDependencies": {
-    "@opencode-ai/plugin": "*"
+    "@opencode-ai/plugin": ">=1.18.21"
   },
   "devDependencies": {
     "@opencode-ai/plugin": "1.18.21",
