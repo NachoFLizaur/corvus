@@ -1,9 +1,22 @@
 import { describe, expect, test, beforeAll } from "bun:test"
-import { existsSync, readFileSync } from "node:fs"
+import { existsSync, readFileSync, rmSync } from "node:fs"
 import { resolve } from "node:path"
 
 const ROOT = resolve(import.meta.dir, "../..")
 const DIST = resolve(ROOT, "dist")
+
+beforeAll(() => {
+  rmSync(DIST, { recursive: true, force: true })
+  const result = Bun.spawnSync(["bun", "run", "build"], {
+    cwd: ROOT,
+    stdout: "pipe",
+    stderr: "pipe",
+  })
+  if (result.exitCode !== 0) {
+    const output = `${result.stdout.toString()}\n${result.stderr.toString()}`.trim()
+    throw new Error(`Build failed before artifact verification:\n${output}`)
+  }
+})
 
 describe("build output", () => {
   test("dist/index.js exists", () => {
@@ -12,6 +25,11 @@ describe("build output", () => {
 
   test("dist/index.d.ts exists", () => {
     expect(existsSync(resolve(DIST, "index.d.ts"))).toBe(true)
+  })
+
+  test("V2 JavaScript and declarations exist", () => {
+    expect(existsSync(resolve(DIST, "v2/index.js"))).toBe(true)
+    expect(existsSync(resolve(DIST, "v2/index.d.ts"))).toBe(true)
   })
 })
 
@@ -65,6 +83,14 @@ describe("built plugin", () => {
   })
 })
 
+describe("built V2 plugin", () => {
+  test("loads the object plugin contract", async () => {
+    const mod = await import(resolve(DIST, "v2/index.js"))
+    expect(mod.default.id).toBe("corvus-ai")
+    expect(typeof mod.default.setup).toBe("function")
+  })
+})
+
 describe("package.json", () => {
   const pkg = JSON.parse(readFileSync(resolve(ROOT, "package.json"), "utf-8"))
 
@@ -73,5 +99,10 @@ describe("package.json", () => {
     expect(pkg.files).toContain("agent")
     expect(pkg.files).toContain("command")
     expect(pkg.files).toContain("skill")
+  })
+
+  test("exports a separate V2 entrypoint without replacing V1", () => {
+    expect(pkg.exports["."].import).toBe("./dist/index.js")
+    expect(pkg.exports["./v2"].import).toBe("./dist/v2/index.js")
   })
 })

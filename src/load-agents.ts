@@ -22,20 +22,24 @@ interface AgentConfig {
   [key: string]: unknown
 }
 
+export type ResourceLoadErrorHandler = (file: string, error: Error) => void
+
 /**
  * Load all agent markdown files from the given directory.
  * Returns a Record<string, AgentConfig> keyed by agent name (filename without .md).
  */
-export function loadAgents(agentDir: string): Record<string, AgentConfig> {
+export function loadAgents(
+  agentDir: string,
+  onError?: ResourceLoadErrorHandler,
+): Record<string, AgentConfig> {
   const agents: Record<string, AgentConfig> = {}
 
   const files = readdirSync(agentDir).filter((f) => f.endsWith(".md"))
 
   for (const file of files) {
     const filePath = resolve(agentDir, file)
-    const content = readFileSync(filePath, "utf-8")
-
     try {
+      const content = readFileSync(filePath, "utf-8")
       const { frontmatter, body } = parseFrontmatter<AgentFrontmatter>(content)
 
       const name = basename(file, ".md")
@@ -50,7 +54,9 @@ export function loadAgents(agentDir: string): Record<string, AgentConfig> {
 
       agents[name] = config
     } catch (e) {
-      throw new Error(`Failed to parse ${file}: ${(e as Error).message}`)
+      const error = new Error(`Failed to load ${file}: ${(e as Error).message}`)
+      if (!onError) throw error
+      onError(file, error)
     }
   }
 
