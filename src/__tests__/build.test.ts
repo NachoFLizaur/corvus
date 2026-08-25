@@ -88,6 +88,17 @@ describe("built V2 plugin", () => {
     const mod = await import(resolve(DIST, "v2/index.js"))
     expect(mod.default.id).toBe("corvus-ai")
     expect(typeof mod.default.setup).toBe("function")
+    expect(typeof mod.default.server).toBe("function")
+  })
+
+  test("universal server contract loads legacy agents from the package root", async () => {
+    const mod = await import(resolve(DIST, "v2/index.js"))
+    const config = { agent: {}, command: {}, skills: { paths: [] } } as any
+    const hooks = await mod.default.server({})
+    await hooks.config(config)
+
+    expect(Object.keys(config.agent)).toHaveLength(16)
+    expect(config.agent.corvus).toBeDefined()
   })
 })
 

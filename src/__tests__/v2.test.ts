@@ -13,6 +13,8 @@ import {
   registerAgents,
   registerCommands,
   registerSkills,
+  type ExecutableCommandDefinition,
+  type ExecutableCommandDraft,
   type DirectSkillDraft,
 } from "../v2/register"
 import {
@@ -245,6 +247,7 @@ describe("V2 plugin", () => {
 
     expect(plugin.id).toBe("corvus-ai")
     expect(typeof plugin.setup).toBe("function")
+    expect(typeof plugin.server).toBe("function")
     const context = createPluginContext({ agents, commands, skillDraft })
     await plugin.setup(context)
     await plugin.setup(context)
@@ -377,5 +380,39 @@ describe("V2 plugin", () => {
     expect("agent" in command).toBe(false)
     expect("model" in command).toBe(false)
     expect("subtask" in command).toBe(false)
+  })
+
+  test("registers and dispatches commands with the current add-only draft", async () => {
+    const commands = new Map<string, ExecutableCommandDefinition>()
+    const draft: ExecutableCommandDraft = {
+      add: (command) => commands.set(command.name, command),
+    }
+    const prompts: Array<Record<string, unknown>> = []
+
+    registerCommands(
+      draft,
+      {
+        readme: {
+          template: "Update $ARGUMENTS and mention $ARGUMENTS twice",
+          description: "Update documentation",
+        },
+      },
+      async (input) => {
+        prompts.push(input)
+      },
+    )
+
+    expect(commands.get("readme")?.description).toBe("Update documentation")
+    await commands.get("readme")?.execute({
+      sessionID: "ses_test",
+      prompt: { text: "docs/README.md", files: [] },
+      delivery: "steer",
+    })
+    expect(prompts).toEqual([{
+      sessionID: "ses_test",
+      text: "Update docs/README.md and mention docs/README.md twice",
+      files: [],
+      delivery: "steer",
+    }])
   })
 })

@@ -13,12 +13,43 @@ export interface DirectSkillDraft {
   remove(id: string): void
 }
 
+export interface ExecutableCommandInvocation {
+  sessionID: string
+  prompt: { text: string } & Record<string, unknown>
+  delivery: "steer" | "queue"
+}
+
+export interface ExecutableCommandDefinition {
+  name: string
+  description?: string
+  execute(input: ExecutableCommandInvocation): Promise<void>
+}
+
+/** OpenCode V2 beta-18155+ command transform contract. */
+export interface ExecutableCommandDraft {
+  add(command: ExecutableCommandDefinition): void
+}
+
+export type CommandDispatcher = (
+  input: Record<string, unknown> & {
+    sessionID: string
+    text: string
+    delivery: "steer" | "queue"
+  },
+) => Promise<void>
+
 function isDirectSkillDraft(draft: SkillDraft | DirectSkillDraft): draft is DirectSkillDraft {
   return (
     "add" in draft && typeof draft.add === "function" &&
     "update" in draft && typeof draft.update === "function" &&
     "remove" in draft && typeof draft.remove === "function"
   )
+}
+
+function isExecutableCommandDraft(
+  draft: CommandDraft | ExecutableCommandDraft,
+): draft is ExecutableCommandDraft {
+  return "add" in draft && typeof draft.add === "function"
 }
 
 export function warnResource(kind: string, id: string, error: unknown): void {
@@ -96,12 +127,34 @@ export function registerAgents(
 }
 
 export function registerCommands(
-  draft: CommandDraft,
+  draft: CommandDraft | ExecutableCommandDraft,
   commands: Record<string, LegacyCommandConfig>,
+  dispatch?: CommandDispatcher,
 ): void {
   for (const [name, legacy] of Object.entries(commands)) {
     try {
       const converted = convertCommand(name, legacy)
+
+      if (isExecutableCommandDraft(draft)) {
+        if (!dispatch) {
+          throw new Error("this OpenCode build exposes command.add but no session prompt dispatcher")
+        }
+        if (converted.agent !== undefined || converted.model !== undefined || converted.subtask !== undefined) {
+          throw new Error(
+            "the current executable command API cannot represent legacy agent, model, or subtask metadata",
+          )
+        }
+        draft.add({
+          name: converted.name,
+          ...(converted.description === undefined ? {} : { description: converted.description }),
+          execute: async ({ sessionID, prompt, delivery }) => {
+            const text = converted.template.replaceAll("$ARGUMENTS", prompt.text)
+            await dispatch({ ...prompt, sessionID, text, delivery })
+          },
+        })
+        continue
+      }
+
       draft.update(name, (command) => {
         // draft.update mutates an existing entry, so clear the optional
         // fields convertCommand may omit before assigning the fresh config.
