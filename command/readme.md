@@ -36,9 +36,7 @@ Get the most recent commit that modified the README:
 
 ## Step 3: Get Commits Since Last README Update
 
-Using the commit hash from Step 2, get all commits that happened after it:
-
-!`git log <LAST_README_COMMIT>..HEAD --oneline --no-merges`
+Using the commit hash from Step 2, run `git log <LAST_README_COMMIT>..HEAD --oneline --no-merges` yourself, with `<LAST_README_COMMIT>` replaced by that hash.
 
 If there are no commits since the last README update, inform the user that the README is already up to date.
 
@@ -62,9 +60,7 @@ For each commit since the last README update, determine if it's documentation-re
 - CI/CD changes
 - Code style/formatting
 
-Get detailed info on relevant commits:
-
-!`git show --stat <COMMIT_HASH> --format="%s%n%n%b"`
+Get detailed info on relevant commits: for each one, run `git show --stat <COMMIT_HASH> --format="%s%n%n%b"` yourself, with `<COMMIT_HASH>` replaced by that commit's hash.
 
 ## Step 5: Read Current README
 

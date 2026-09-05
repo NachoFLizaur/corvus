@@ -86,7 +86,7 @@ Standard conventional commit with a brief body explaining what and why.
 2. **Scope**: Optional, lowercase, describes the section (e.g., `auth`, `api`, `ui`)
 3. **Description**: Imperative mood ("add" not "added"), no period, max 50 chars
 4. **Body**: Wrap at 72 chars, explain WHAT and WHY (not how)
-5. **Breaking changes**: Add `!` after type/scope: `feat(api)!: remove deprecated endpoint`
+5. **Breaking changes**: Add an exclamation mark, !, after the type/scope: `feat(api)!: remove deprecated endpoint`
 6. **Footer**: Reference issues: `Fixes #123` or `Closes #456`
 
 **Examples:**
@@ -227,7 +227,7 @@ Can be combined with mode flags:
 - Never stage files; this command operates only on the user's already staged set
 - Never commit secrets (tokens, passwords, API keys); if the staged diff contains any, stop and warn the user
 - If the diff is too large/complex, ask clarifying questions
-- For breaking changes, include `!` and explain in the body
+- For breaking changes, include the exclamation-mark marker after the type/scope and explain them in the body
 - Keep scope consistent with existing commit history when possible
 - For `--short`: still reject meaningless messages like "fix bug"
 - For `--long`: encourage when the diff touches 5+ files or includes breaking changes

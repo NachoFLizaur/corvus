@@ -22,6 +22,8 @@ Structured planning. Delegated execution. Quality gates at every boundary.
 - [Installation](#installation)
   - [Plugin Install (Recommended)](#plugin-install-recommended)
   - [Manual Install](#manual-install)
+  - [OpenCode v2](#opencode-v2)
+  - [Configuration Precedence](#configuration-precedence)
   - [Customizing Models](#customizing-models)
 - [What's Included](#whats-included)
   - [Agents (16)](#agents-16)
@@ -83,7 +85,7 @@ npx corvus-ai
 npx corvus-ai --global
 ```
 
-This adds `corvus-ai@latest` to your OpenCode plugin config. All agents, commands, and skills are loaded automatically. Corvus contributes defaults; your existing agent and command configuration is merged last and remains authoritative.
+This adds `corvus-ai@latest` to your OpenCode plugin config. All agents, commands, and skills are loaded automatically. Corvus contributes defaults only, and your own settings stay authoritative on both hosts — on OpenCode v1 Corvus merges your agent and command configuration last, and on OpenCode v2 host ordering guarantees it, so Corvus performs no merge at all. See [Configuration Precedence](#configuration-precedence) for the per-host details and [OpenCode v2](#opencode-v2) for v2 installs.
 
 ### Manual Install
 
@@ -108,19 +110,94 @@ cp -r skill/ ~/.config/opencode/skill/
 
 Manual installs expose agent frontmatter directly to OpenCode, so the native singular `permission` field is required. Corvus's plugin loader still accepts legacy `permissions` metadata when `permission` is absent, but that read-compatibility path is not the canonical format and should not be used for new or manually installed agents.
 
+These instructions target OpenCode v1's config layout. On OpenCode v2, install the plugin instead — `npx corvus-ai@beta --v2`, or a `plugins` array entry (see [OpenCode v2](#opencode-v2)) — so the same agents, commands, and skills are registered from the package. The `@beta` tag is required while v2 support ships on the `beta` dist-tag, because `latest` has no `--v2` flag; drop it once v2 reaches `latest`.
+
+### OpenCode v2
+
+Corvus ships one package with two entry points: `dist/index.js` for OpenCode v1 (1.18.x) and `dist/server.js` for OpenCode v2, which the v2 host resolves through the `corvus-ai/server` subpath. Both register the same 16 agents, 4 commands, 18 skills, and the default `web-research` MCP server.
+
+Install with the CLI, which writes the plural `plugins` key into `$XDG_CONFIG_HOME/opencode/opencode.json` (default `~/.config/opencode`):
+
+```bash
+npx corvus-ai@beta --v2
+```
+
+The `@beta` tag is required while v2 support ships on the `beta` dist-tag: `latest` is the v1-only release and rejects `--v2` with `Unknown option: --v2`. Drop `@beta` once v2 reaches `latest`.
+
+Or add the entry by hand:
+
+```json
+{
+  "plugins": ["corvus-ai@beta"]
+}
+```
+
+An existing v1 `plugin` entry is never rewritten for you: keep the singular key for a v1 host and the plural key for v2.
+
+#### Config Key Renames
+
+v2 renamed the configuration keys Corvus interacts with. When you move a machine to v2, rename them in your own config too:
+
+| v1 | v2 | Notes |
+|----|----|-------|
+| `plugin: []` | `plugins: []` | The host still auto-migrates the singular key |
+| `agent: {}` | `agents: {}` | Same record shape, renamed key |
+| `command: {}` | `commands: {}` | Same record shape, renamed key |
+| `skills.paths: []` | `skills: []` | A flat array of skill directories |
+| `mcp.<name>` | `mcp.servers.<name>` | Server records moved one level down |
+| `permission: {}` | `permissions: []` | Per-agent rules became an ordered list |
+
+#### Agent Overrides Under v2
+
+Agent fields were renamed with the rest of the v2 schema. Under `agents.<name>`:
+
+| v1 field | v2 field | Notes |
+|----------|----------|-------|
+| `prompt` | `system` | The instruction body |
+| `temperature` | `request.body.temperature` | `request.body` also carries other provider body parameters |
+| `permission: {action: effect}` | `permissions: [{action, resource, effect}]` | Ordered rules; the LAST matching rule wins |
+| `maxSteps` | `steps` | |
+| `disable` | `disabled` | |
+| `model` | `model` | Unchanged — still `"provider/model"` |
+
+Permission action names moved to the v2 tool names: `bash` → `shell`, `task` → `subagent`, and both `write` and `patch` → `edit`. Rules you write are appended after Corvus's, and because the last matching rule wins, yours decide — with the single exception described under [Protected Agents Under v2](#protected-agents-under-v2). Six actions in Corvus's own corpus have no v2 tool (`list`, `todowrite`, `todoread`, `codesearch`, `lsp`, `doom_loop`); their rules are translated unchanged and are harmless, because `action` is a free-form string.
+
+#### Skill Name Collisions
+
+Corvus registers skills as records keyed by id, so three packaged ids that lack the `corvus-` prefix can collide with a skill of your own: `deep-research`, `frontend-design`, and `web-search`. Your definition wins by host ordering — user skills load after package plugins — and no configuration is needed. Corvus keeps the plain names rather than renaming them, so a collision replaces the packaged skill instead of shadowing it under a second name.
+
+#### Protected Agents Under v2
+
+`pr-code-reviewer`, `security-reviewer`, and `pr-comment-writer` analyze untrusted PR content, so their read-only capability limit is a security boundary rather than a default:
+
+- **Permission boundary — fully enforced.** Corvus registers a `permission.hook("evaluate")` that re-applies the authored rules at request time from its own packaged files. The hook can only tighten: the host resolves its own rules first and Corvus never writes `allow`, so a denial cannot be widened by any configuration. Denials name the boundary — for example, `corvus: pr-code-reviewer is mechanically read-only; edit is denied by the plugin's security boundary.` (illustrative wording; the message itself lives with the code).
+- **Prompt immutability — demoted to a presence-only guarantee.** v2 has no configuration hook and no agent field that stays out of reach afterwards, so Corvus can no longer guarantee that a protected agent runs its authored prompt unchanged. A `session.hook("context")` re-appends the authored body when no system part carries it, which restores an absent prompt but cannot remove or override instructions supplied elsewhere. A protected agent can therefore run with extra or contradictory instructions — but never with capabilities Corvus did not authorize, because the capability limit above is what makes "mechanically read-only" true.
+
+`src/v2/enforce-protected.ts` is the owning location for the rationale, host-source citations, and fail directions; this section summarizes it rather than restating it.
+
 ### Configuration Precedence
 
-Corvus registration follows these rules:
+Your configuration wins on both hosts, by different mechanisms.
+
+**OpenCode v1** — Corvus is handed the resolved config in a plugin hook and merges yours over its defaults:
 
 - **Agents and commands are user-last**: Corvus defaults are loaded first, then the pre-existing user record is recursively merged over them. Nested user values win; user arrays, scalars, and `null` replace defaults; user-only and unknown native fields remain available. An `undefined` user value is treated as absent.
 - **MCP collisions are preserved exactly**: if the user configuration already has its own `mcp["web-research"]` property, Corvus does not merge, replace, or mutate that value. Only when the property is absent does Corvus add the local default with `command: ["npx", "-y", "web-research-mcp@0.1.0"]`.
 - **Skill registration is idempotent**: the resolved absolute Corvus skill directory is appended to `skills.paths` only when that exact path is not already present. Existing entries and their order are preserved.
 
-These rules apply to the OpenCode configuration passed to the plugin hook. A repository-local `.opencode/opencode.jsonc` is user-local state, not a Corvus package input or a source of plugin defaults.
+**OpenCode v2** — there is no configuration hook. Corvus contributes records through registration transforms, and the host applies your agent, command, and skill configuration afterwards:
+
+- **Agents and commands are user-last by host ordering**: Corvus upserts each agent (assigning only the fields its prompt files declare) and registers each command as a function. Your `agents` and `commands` entries are applied after package plugins, so every field you set wins and your permission rules are appended after Corvus's, where last-match-wins makes them decisive. Corvus runs no merge of its own — see [Protected Agents Under v2](#protected-agents-under-v2) for the one boundary that is re-applied at request time.
+- **Skills are keyed records**: a skill of yours sharing an id replaces the packaged one, again by host ordering.
+- **MCP collisions are preserved exactly**: the `web-research` default is added only when `mcp.servers["web-research"]` is absent. A present entry is left exactly as it is, even when it is disabled or points elsewhere.
+
+These rules apply to the OpenCode configuration Corvus is given by the host. A repository-local `.opencode/opencode.jsonc` is user-local state, not a Corvus package input or a source of plugin defaults.
 
 ### Customizing Models
 
-Corvus agents work with whichever model you've set up as default in opencode, but you can assign specific models per agent in your OpenCode config if you wish to:
+Corvus agents work with whichever model you've set up as default in opencode, but you can assign specific models per agent in your OpenCode config if you wish to.
+
+On OpenCode v1:
 
 ```json
 {
@@ -139,7 +216,26 @@ Corvus agents work with whichever model you've set up as default in opencode, bu
 }
 ```
 
-Any agent field (`model`, `temperature`, `permission`, etc.) can be overridden this way. Your config is the user-last layer, while omitted Corvus defaults remain available.
+The same overrides on OpenCode v2, with the plural keys:
+
+```json
+{
+  "plugins": ["corvus-ai@beta"],
+  "agents": {
+    "corvus": {
+      "model": "anthropic/claude-opus-4"
+    },
+    "code-implementer": {
+      "model": "anthropic/claude-sonnet-4"
+    },
+    "code-explorer": {
+      "model": "anthropic/claude-haiku-4"
+    }
+  }
+}
+```
+
+Any agent field can be overridden this way — `model`, `permission`/`permissions`, `temperature` (`request.body.temperature` on v2), and so on. Your config is the last layer to be applied, while omitted Corvus defaults remain available. The v1 and v2 field names differ: see [Agent Overrides Under v2](#agent-overrides-under-v2).
 
 ---
 
@@ -420,13 +516,13 @@ bun test
 
 - Treat `.opencode/opencode.jsonc` in a checkout as developer-local OpenCode state. Do not overwrite, copy into the package, commit, or use it as an implicit product input when developing Corvus.
 - Product inputs are the checked-in `agent/`, `command/`, and `skill/` prompts plus the plugin source. Manual-install experiments should copy or link only those prompt directories after inspecting the destination.
-- Keep local OpenCode configuration changes explicit and separate from source changes. The plugin's user-last merge means local hardening does not need to be copied into Corvus defaults.
+- Keep local OpenCode configuration changes explicit and separate from source changes. Your configuration is applied last on both hosts, so local hardening does not need to be copied into Corvus defaults.
 
 ---
 
 ## Troubleshooting
 
-**Plugin not loading** — Verify your OpenCode config (`~/.config/opencode/config.json` or `.opencode/config.json`) has `"corvus-ai": true` under `plugins`.
+**Plugin not loading** — Check the plugin entry in your OpenCode config (`~/.config/opencode/opencode.json`, or a project-local `.opencode/opencode.json`). Both hosts expect an ARRAY of package specifiers rather than a boolean map: v1 reads `"plugin": ["corvus-ai"]` and v2 reads `"plugins": ["corvus-ai@beta"]`.
 
 **Agents not appearing** — Make sure `bun install` or `npm install` completed successfully. The package must be present in `node_modules` with its `agent/`, `command/`, and `skill/` directories.
 

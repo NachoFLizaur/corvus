@@ -5,6 +5,106 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.9.0-beta.0 — 2026-09-05
+
+First release with OpenCode v2 support. Corvus loads on OpenCode v2 (`opencode2`
+v0.0.0-beta-19086) and OpenCode v1 (1.18.x) from the same package, registering
+the same 16 agents, 4 commands, 18 skills, and the default `web-research` MCP
+server on both hosts.
+
+### Added
+
+- Second entry point for OpenCode v2: `dist/server.js` exports the object shape
+  v2 requires (`{ id, setup }`), because v2 rejects v1's default async function
+  with `Expected object at ["default"]`. The v2 host resolves it through the
+  `corvus-ai/server` subpath, and a root `server.js` shim re-exports it for
+  local-directory plugin entries, which ignore `exports` entirely. `dist/index.js`
+  remains the v1 entry with unchanged behavior.
+- Registration through v2 transforms. v2 has no `config` hook, so agents,
+  commands, skills, and the MCP server are contributed via
+  `ctx.agent`/`command`/`skill`/`mcp`.`transform`. Registration is
+  all-or-nothing: if any registrar fails, the ones that already ran are unwound
+  in reverse order and the host reports a failed load rather than a partially
+  registered corpus. Every transform is idempotent, because the host replays them
+  on config reload.
+- Commands are registered as functions, which is what v2 accepts in place of v1's
+  template strings. Corvus ports the host's own template bridge: the optional
+  `agent`/`model` switch, `$ARGUMENTS` and `$N` substitution, and `` !`cmd` ``
+  shell interpolation, then a session prompt that preserves the attachments,
+  mentions, and metadata of the invocation.
+- Translation of the packaged corpus to the v2 schema: `prompt` → `system`,
+  `temperature` → `request.body.temperature`, and the `permission` map or scalar
+  → an ordered `permissions[]` rule list, including the tool renames `bash` →
+  `shell`, `task` → `subagent`, and `write`/`patch` → `edit`. Permission rules
+  are appended rather than assigned, so the host's own baseline allows survive.
+- Installer support for v2: `npx corvus-ai@beta --v2` writes the plural `plugins`
+  key into `$XDG_CONFIG_HOME/opencode/opencode.json` (default
+  `~/.config/opencode`). An existing singular v1 `plugin` key is never rewritten
+  for you. The `@beta` tag is required while v2 ships on the `beta` dist-tag,
+  because `latest` predates `--v2` and rejects it; drop `@beta` once v2 reaches
+  `latest`.
+- `OpenCode v2` README section covering the v2 install, the config key renames
+  (`plugin`→`plugins`, `agent`→`agents`, `command`→`commands`,
+  `skills.paths`→`skills`, `mcp.<name>`→`mcp.servers.<name>`,
+  `permission`→`permissions`), the renamed agent-override fields, skill-name
+  collisions, and the protected-agent guarantees.
+- `scripts/smoke-v2.sh`, a hermetic harness that gates the built plugin against
+  the real `opencode2` binary. It runs under isolated XDG directories on a
+  verified-free service port, and `--full` asserts that the whole packaged corpus
+  reached the host — all 16 agents, 4 commands, 18 skills, and the
+  `web-research` MCP server. A `--tarball` mode packs and installs the package
+  into an isolated project to exercise the `corvus-ai/server` subpath resolution
+  that local-directory entries bypass.
+
+### Changed
+
+- Protected agents (`pr-code-reviewer`, `security-reviewer`,
+  `pr-comment-writer`) are enforced on v2 by a `permission.hook("evaluate")` that
+  re-applies the authored rules at request time from Corvus's own packaged files.
+  The hook can only tighten, never widen: Corvus never writes `allow`, so no
+  configuration can loosen a denial on the agents that ingest untrusted PR
+  content.
+- Corvus performs no configuration merge on the v2 path. v1's user-wins deep
+  merge is unnecessary there because host ordering already applies your agent,
+  command, and skill configuration after package plugins.
+- `command/summary.md` no longer carries `mode` and `temperature`, which are not
+  command fields on either host and were silently dropped at load; the
+  prompt-corpus contract test now keeps them out of `command/*.md`.
+- The four non-executable `` !`…` `` sites in `command/readme.md` and
+  `command/git-commit.md` were rewritten so shell interpolation no longer trips
+  over placeholder-bearing and prose occurrences.
+
+### Known Limitations
+
+- Prompt immutability is demoted to a presence-only guarantee on v2. v2 has no
+  configuration hook and no agent field that stays out of reach after
+  registration, so a protected agent can run with extra or contradictory
+  instructions. A `session.hook("context")` re-appends the authored body when no
+  system part carries it, which restores an absent prompt but cannot remove or
+  override instructions supplied elsewhere. The capability limit above is
+  unaffected, and it is what makes "mechanically read-only" true. v1 keeps the
+  full deep-replace guarantee.
+- `dist/server.d.ts` carries a type-only `import type { Plugin } from
+  "@opencode-ai/plugin-v2"`, and that specifier is an alias local to this
+  repository's devDependencies. TypeScript consumers who import types from
+  `corvus-ai/server` therefore cannot resolve it. Runtime is unaffected —
+  `dist/server.js` contains zero `@opencode-ai` imports, deliberately, so that
+  the beta v2 SDK never becomes a runtime dependency of v1 hosts.
+- Six permission actions in Corvus's corpus have no v2 tool (`list`,
+  `todowrite`, `todoread`, `codesearch`, `lsp`, `doom_loop`). Their rules are
+  translated unchanged and are harmless, because `action` is a free-form string.
+- Three packaged skill ids lack the `corvus-` prefix and can collide with your
+  own (`deep-research`, `frontend-design`, `web-search`). Your definition wins by
+  host ordering, and no configuration is needed.
+- On OpenCode v2, a malformed `agent/*.md` frontmatter aborts the whole Corvus
+  load (fail-closed) rather than skipping the one bad file, because the parse step
+  lives in the loader shared with v1. Per-file isolation applies to translation
+  and validation failures only.
+- Pre-existing v1 installer behavior: `npx corvus-ai --migrate --dry-run` writes
+  the plugin entry when there are no manual files to remove, instead of only
+  previewing it. It is unchanged for v1, which is frozen, and fixed on the `--v2`
+  path.
+
 ## 0.8.0 — 2026-09-04
 
 Stable release of the `0.8.0-beta.0` … `0.8.0-beta.22` line. Inventory is now

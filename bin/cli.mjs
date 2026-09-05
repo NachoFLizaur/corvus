@@ -1,12 +1,13 @@
 #!/usr/bin/env node
 
 // Corvus AI — Plugin Installer for OpenCode
-// Usage: npx corvus-ai [--global] [--force] [--uninstall] [--migrate] [--dry-run] [--help]
+// Usage: npx corvus-ai [--v2] [--global] [--force] [--uninstall] [--migrate] [--dry-run] [--help]
 
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import readline from 'node:readline/promises';
+import { fileURLToPath } from 'node:url';
 
 // ---------------------------------------------------------------------------
 // Color helpers (disabled when stdout is not a terminal)
@@ -29,6 +30,23 @@ const err = (msg) => process.stderr.write(`${RED}[error]${RESET} ${msg}\n`);
 // Constants
 // ---------------------------------------------------------------------------
 const PLUGIN_ENTRY = 'corvus-ai@latest';
+
+// OpenCode v2 resolves each entry of the plural "plugins" array as its own npm
+// specifier, so the v2 entry is pinned to the version of the package running this
+// installer (`npx corvus-ai@beta --v2` pins the beta). A floating tag could resolve
+// to a release without v2 support.
+const OWN_VERSION = readOwnVersion();
+const V2_PLUGIN_ENTRY = OWN_VERSION ? `corvus-ai@${OWN_VERSION}` : PLUGIN_ENTRY;
+
+function readOwnVersion() {
+  try {
+    const pkgPath = fileURLToPath(new URL('../package.json', import.meta.url));
+    const version = JSON.parse(fs.readFileSync(pkgPath, 'utf8')).version;
+    return typeof version === 'string' && version.length > 0 ? version : null;
+  } catch {
+    return null;
+  }
+}
 
 const CORVUS_AGENTS = [
   'corvus.md',
@@ -68,6 +86,9 @@ let force = false;
 let uninstallMode = false;
 let migrate = false;
 let dryRun = false;
+let v2Flag = false;
+// Resolved once in main(): true when the OpenCode v2 config layout is the target.
+let v2Mode = false;
 
 const args = process.argv.slice(2);
 
@@ -75,6 +96,9 @@ for (const arg of args) {
   switch (arg) {
     case '--global':
       globalInstall = true;
+      break;
+    case '--v2':
+      v2Flag = true;
       break;
     case '--force':
       force = true;
@@ -116,7 +140,13 @@ ${BOLD}Usage:${RESET} npx corvus-ai [options]
 
 ${BOLD}Options:${RESET}
   ${BOLD}(no flags)${RESET}     Add corvus-ai to the plugin array in .opencode/opencode.json
+  ${BOLD}--v2${RESET}           Install for OpenCode v2: add corvus-ai to the "plugins" array in
+                 $XDG_CONFIG_HOME/opencode/opencode.json (default ~/.config/opencode).
+                 Offered automatically when only an "opencode2" binary is on your PATH.
+                 Run it as "npx corvus-ai@beta --v2" while v2 ships on the "beta"
+                 dist-tag; "latest" has no --v2 flag. Drop "@beta" once v2 is latest.
   ${BOLD}--global${RESET}       Target ~/.config/opencode/opencode.json instead of local
+                 (implied by --v2, which always targets the global v2 config)
   ${BOLD}--uninstall${RESET}    Remove corvus-ai from all discovered config files and clean up cached packages
   ${BOLD}--migrate${RESET}      Remove manual corvus files from ~/.config/opencode/ and add plugin
   ${BOLD}--force${RESET}        Skip confirmation prompts
@@ -124,11 +154,13 @@ ${BOLD}Options:${RESET}
   ${BOLD}--help, -h${RESET}     Show this help message
 
 ${BOLD}Examples:${RESET}
-  npx corvus-ai                  Install plugin locally
-  npx corvus-ai --global         Install plugin globally
-  npx corvus-ai --migrate        Migrate from manual files to plugin
-  npx corvus-ai --uninstall      Remove plugin entry
-  npx corvus-ai --dry-run        Preview what would change
+  npx corvus-ai                       Install plugin locally
+  npx corvus-ai --global              Install plugin globally
+  npx corvus-ai@beta --v2             Install plugin for OpenCode v2
+  npx corvus-ai@beta --v2 --uninstall Remove plugin from the v2 config
+  npx corvus-ai --migrate             Migrate from manual files to plugin
+  npx corvus-ai --uninstall           Remove plugin entry
+  npx corvus-ai --dry-run             Preview what would change
 `);
 }
 
@@ -140,8 +172,11 @@ ${BOLD}Examples:${RESET}
  * Determine the target config path.
  * Checks for existing files in OpenCode's discovery order,
  * and creates opencode.jsonc in .opencode/ (local) or ~/.config/opencode/ (global).
+ * In v2 mode the target is always the XDG-resolved global v2 config.
  */
 function getTargetPath() {
+  if (v2Mode) return getV2TargetPath();
+
   if (globalInstall) {
     const dir = path.join(os.homedir(), '.config', 'opencode');
     // Check existing files in OpenCode's load order
@@ -168,12 +203,272 @@ function getTargetPath() {
   return path.join(cwd, '.opencode', 'opencode.jsonc');
 }
 
+// ---------------------------------------------------------------------------
+// OpenCode v2 helpers
+// ---------------------------------------------------------------------------
+
+/** Config files OpenCode v2 reads (the legacy `config.json` name is v1-only). */
+const V2_CONFIG_FILES = ['opencode.jsonc', 'opencode.json'];
+
+/** True when the config dir comes from an explicit XDG_CONFIG_HOME (the `oc2` alias case). */
+function hasCustomXdgConfigHome() {
+  const xdg = process.env.XDG_CONFIG_HOME;
+  return typeof xdg === 'string' && xdg.trim().length > 0;
+}
+
 /**
- * Find all config files containing corvus-ai by walking up from cwd,
- * mirroring OpenCode's findUp discovery logic.
+ * The global config directory OpenCode v2 reads: $XDG_CONFIG_HOME/opencode,
+ * falling back to ~/.config/opencode when XDG_CONFIG_HOME is unset or empty.
+ */
+function getV2ConfigDir() {
+  const base = hasCustomXdgConfigHome()
+    ? process.env.XDG_CONFIG_HOME.trim()
+    : path.join(os.homedir(), '.config');
+  return path.join(base, 'opencode');
+}
+
+/** The cache dir OpenCode v2 installs plugin packages under: $XDG_CACHE_HOME or ~/.cache. */
+function getXdgCacheHome() {
+  const xdg = process.env.XDG_CACHE_HOME;
+  return typeof xdg === 'string' && xdg.trim().length > 0
+    ? xdg.trim()
+    : path.join(os.homedir(), '.cache');
+}
+
+/** Existing v2 config file in load order, else the file to create (opencode.json). */
+function getV2TargetPath() {
+  const dir = getV2ConfigDir();
+  for (const file of V2_CONFIG_FILES) {
+    const p = path.join(dir, file);
+    if (fs.existsSync(p)) return p;
+  }
+  return path.join(dir, 'opencode.json');
+}
+
+/** True when `name` resolves to an executable file on PATH. */
+function isOnPath(name) {
+  const candidates =
+    process.platform === 'win32' ? [`${name}.exe`, `${name}.cmd`, `${name}.bat`, name] : [name];
+  for (const dir of (process.env.PATH || '').split(path.delimiter)) {
+    if (!dir) continue;
+    for (const candidate of candidates) {
+      const p = path.join(dir, candidate);
+      try {
+        if (!fs.statSync(p).isFile()) continue;
+        if (process.platform === 'win32') return true;
+        fs.accessSync(p, fs.constants.X_OK);
+        return true;
+      } catch {}
+    }
+  }
+  return false;
+}
+
+/** Confirmation defaulting to yes; auto-accepts when non-interactive or --force. */
+async function confirmDefaultYes(message) {
+  if (force || !process.stdin.isTTY) return true;
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  const answer = await rl.question(`  ${message} [Y/n] `);
+  rl.close();
+  return !/^n(o)?$/i.test(answer.trim());
+}
+
+/**
+ * Decide whether to use the v2 config layout.
+ * `--v2` is explicit. Without it, only an unambiguous host (opencode2 present and no
+ * v1 opencode) offers v2 — when both hosts exist the v1 path stays the default so a
+ * bare `npx corvus-ai` never writes to a config the user did not ask for.
+ */
+async function resolveV2Mode() {
+  if (v2Flag) return true;
+  if (!isOnPath('opencode2')) return false;
+
+  process.stdout.write('\n');
+  if (isOnPath('opencode')) {
+    info('Detected both "opencode" (v1) and "opencode2" (v2) on your PATH.');
+    info('Using the v1 config layout (singular "plugin" key).');
+    info('For OpenCode v2 instead, re-run with: npx corvus-ai@beta --v2');
+    info('"@beta" is required while v2 ships on the beta dist-tag ("latest" has no --v2).');
+    return false;
+  }
+
+  info('Detected "opencode2" (v2) on your PATH and no v1 "opencode" binary.');
+  info(`v2 config: ${getV2TargetPath()}`);
+  if (await confirmDefaultYes('Install for OpenCode v2?')) return true;
+
+  info('Continuing with the OpenCode v1 config layout (singular "plugin" key).');
+  return false;
+}
+
+/** Render a `"plugins": [...]` key using the same shape the v1 writer produces. */
+function renderPluginsArray(entries) {
+  if (entries.length === 0) return '"plugins": []';
+  const formatted = entries.map((e) => JSON.stringify(e)).join(',\n    ');
+  return `"plugins": [\n    ${formatted}\n  ]`;
+}
+
+const PLUGINS_ARRAY_REGEX = /"plugins"\s*:\s*\[[\s\S]*?\]/;
+
+/** The v2 `plugins` array, or [] when the key is absent. */
+function readPluginsArray(data, filePath) {
+  if (data.plugins === undefined) return [];
+  if (!Array.isArray(data.plugins)) {
+    err(`"plugins" in ${filePath} is not an array.`);
+    err('OpenCode v2 expects "plugins": ["corvus-ai@1.2.3"]. Fix the key manually, then re-run.');
+    process.exit(1);
+  }
+  return data.plugins;
+}
+
+/**
+ * Replace every corvus entry with a single pinned entry, in place.
+ * Appends when no corvus entry exists. Other entries keep their order.
+ */
+function withSingleCorvusEntry(entries, entry) {
+  const result = [];
+  let replaced = false;
+  for (const e of entries) {
+    if (!isCorvusEntry(e)) {
+      result.push(e);
+      continue;
+    }
+    if (!replaced) {
+      result.push(entry);
+      replaced = true;
+    }
+  }
+  if (!replaced) result.push(entry);
+  return result;
+}
+
+/**
+ * Write text only if it still parses as JSON(C). The comment-preserving edits below
+ * are textual, so a hand-formatted config could defeat them — refuse rather than
+ * corrupt the user's file.
+ */
+function writeV2Text(filePath, text, manualHint) {
+  try {
+    JSON.parse(stripJsonComments(text));
+  } catch (e) {
+    err(`Refusing to edit ${filePath}: the change would produce invalid JSON (${e.message}).`);
+    err(manualHint);
+    process.exit(1);
+  }
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, text);
+}
+
+/**
+ * Write the v2 `plugins` array, preserving comments, unknown keys, and any singular
+ * v1 `plugin` key (this path never reads or writes `data.plugin`).
+ */
+function writePluginsArray(filePath, raw, data, entries) {
+  const manualHint = `Add ${JSON.stringify(V2_PLUGIN_ENTRY)} to the "plugins" array in ${filePath} manually.`;
+
+  // New file — write clean JSON
+  if (raw === null) {
+    writeNewConfig(filePath, { plugins: entries });
+    return;
+  }
+
+  // Existing "plugins" array — rebuild it
+  if (PLUGINS_ARRAY_REGEX.test(raw)) {
+    writeV2Text(
+      filePath,
+      raw.replace(PLUGINS_ARRAY_REGEX, () => renderPluginsArray(entries)),
+      manualHint
+    );
+    return;
+  }
+
+  // No "plugins" key — insert after the opening brace (no trailing comma when the
+  // object has no other keys, which would be invalid JSON)
+  const rendered = renderPluginsArray(entries);
+  const hasOtherKeys = Object.keys(data).length > 0;
+  writeV2Text(
+    filePath,
+    raw.replace(/\{/, () => (hasOtherKeys ? `{\n  ${rendered},` : `{\n  ${rendered}\n`)),
+    manualHint
+  );
+}
+
+/**
+ * Remove corvus entries from the v2 `plugins` array, dropping the key entirely when
+ * nothing else remains. Never touches a singular v1 `plugin` key.
+ */
+function removeFromPluginsArray(filePath, raw, remaining) {
+  const manualHint = `Remove the corvus-ai entry from the "plugins" array in ${filePath} manually.`;
+
+  if (remaining.length > 0) {
+    writeV2Text(
+      filePath,
+      raw.replace(PLUGINS_ARRAY_REGEX, () => renderPluginsArray(remaining)),
+      manualHint
+    );
+    return;
+  }
+
+  // Drop the whole key, taking the neighbouring comma with it
+  const keyRegex = /(,?)\s*"plugins"\s*:\s*\[[\s\S]*?\](\s*,)?/;
+  const withoutKey = raw.replace(keyRegex, (_m, lead, trail) => (trail ? lead : ''));
+  try {
+    JSON.parse(stripJsonComments(withoutKey));
+    fs.writeFileSync(filePath, withoutKey);
+    return;
+  } catch {
+    // Formatting defeated the key removal — leave a valid empty array instead
+    writeV2Text(filePath, raw.replace(PLUGINS_ARRAY_REGEX, () => '"plugins": []'), manualHint);
+  }
+}
+
+/** What a v2 write would do to the `plugins` array of an already-read config. */
+function planV2Entry(data, filePath) {
+  const existing = readPluginsArray(data, filePath);
+  const corvus = existing.filter(isCorvusEntry);
+  return {
+    existing,
+    corvus,
+    upToDate: corvus.length === 1 && corvus[0] === V2_PLUGIN_ENTRY,
+  };
+}
+
+/** Preview line for a planned v2 write (dry runs). */
+function infoV2Plan(plan, filePath) {
+  if (plan.upToDate) {
+    info(`Plugin "${V2_PLUGIN_ENTRY}" is already in the plugins array of ${filePath}`);
+  } else if (plan.corvus.length > 0) {
+    info(
+      `Would replace ${plan.corvus.map((e) => `"${e}"`).join(', ')} with "${V2_PLUGIN_ENTRY}" in the plugins array of ${filePath}`
+    );
+  } else {
+    info(`Would add "${V2_PLUGIN_ENTRY}" to the plugins array of ${filePath}`);
+  }
+}
+
+/**
+ * Report a singular v1 `plugin` key without ever modifying it (requirement: the
+ * installer must not migrate it). OpenCode v2 concatenates the legacy key onto
+ * `plugins` (core/src/config/normalize.ts), so a corvus entry in both keys lands
+ * twice in the resolved plugin list.
+ */
+function noteV1PluginKey(data, filePath, hint) {
+  if (!('plugin' in data)) return;
+  const entries = Array.isArray(data.plugin) ? data.plugin : [];
+  const idx = findPluginEntry(entries);
+  warn(`${filePath} also has a v1 "plugin" key — left untouched.`);
+  info('OpenCode v2 merges the legacy "plugin" key into "plugins" on load.');
+  if (idx !== -1) {
+    warn(`It lists "${entries[idx]}", which v2 folds into its resolved "plugins" list as well.`);
+    info(`${hint} The installer never edits the "plugin" key.`);
+  }
+}
+
+/**
+ * Find all config files whose `key` array contains corvus-ai by walking up from cwd,
+ * mirroring OpenCode's findUp discovery logic, then checking the global config dir.
  * Returns array of file paths.
  */
-function findAllConfigsWithCorvus() {
+function findConfigsWithCorvus(key, globalDir, globalFiles) {
   const found = [];
   let current = process.cwd();
 
@@ -183,7 +478,7 @@ function findAllConfigsWithCorvus() {
       const p = path.join(current, file);
       if (fs.existsSync(p)) {
         const { data } = readConfig(p);
-        if (findPluginEntry(data.plugin) !== -1) found.push(p);
+        if (findPluginEntry(data[key]) !== -1) found.push(p);
       }
     }
     // Check .opencode/ directory at this level
@@ -191,7 +486,7 @@ function findAllConfigsWithCorvus() {
       const p = path.join(current, '.opencode', file);
       if (fs.existsSync(p)) {
         const { data } = readConfig(p);
-        if (findPluginEntry(data.plugin) !== -1) found.push(p);
+        if (findPluginEntry(data[key]) !== -1) found.push(p);
       }
     }
 
@@ -201,17 +496,30 @@ function findAllConfigsWithCorvus() {
   }
 
   // Also check global config
-  const globalDir = path.join(os.homedir(), '.config', 'opencode');
-  for (const file of ['opencode.jsonc', 'opencode.json', 'config.json']) {
+  for (const file of globalFiles) {
     const p = path.join(globalDir, file);
     if (fs.existsSync(p)) {
       const { data } = readConfig(p);
-      if (findPluginEntry(data.plugin) !== -1) found.push(p);
+      if (findPluginEntry(data[key]) !== -1) found.push(p);
     }
   }
 
   // Deduplicate (in case global dir was already visited during walk-up)
   return [...new Set(found)];
+}
+
+/** v1 discovery: the singular `plugin` key, including the legacy `config.json` name. */
+function findAllConfigsWithCorvus() {
+  return findConfigsWithCorvus('plugin', path.join(os.homedir(), '.config', 'opencode'), [
+    'opencode.jsonc',
+    'opencode.json',
+    'config.json',
+  ]);
+}
+
+/** v2 discovery: the plural `plugins` key, rooted at the XDG-resolved config dir. */
+function findAllConfigsWithCorvusV2(key = 'plugins') {
+  return findConfigsWithCorvus(key, getV2ConfigDir(), V2_CONFIG_FILES);
 }
 
 /**
@@ -345,14 +653,20 @@ function removePluginEntry(filePath, raw, plugins) {
 }
 
 /**
+ * Check if a plugin array entry is corvus-ai.
+ * Matches "corvus-ai" or "corvus-ai@x.y.z".
+ */
+function isCorvusEntry(entry) {
+  return typeof entry === 'string' && (entry === 'corvus-ai' || entry.startsWith('corvus-ai@'));
+}
+
+/**
  * Check if the plugin array contains a corvus-ai entry.
  * Matches "corvus-ai" or "corvus-ai@x.y.z".
  */
 function findPluginEntry(plugins) {
   if (!Array.isArray(plugins)) return -1;
-  return plugins.findIndex(
-    (p) => typeof p === 'string' && (p === 'corvus-ai' || p.startsWith('corvus-ai@'))
-  );
+  return plugins.findIndex(isCorvusEntry);
 }
 
 /**
@@ -426,6 +740,8 @@ async function confirm(message) {
 // Install flow
 // ---------------------------------------------------------------------------
 async function install() {
+  if (v2Mode) return installV2();
+
   const targetPath = getTargetPath();
   const targetLabel = globalInstall ? 'global' : 'local';
 
@@ -469,16 +785,112 @@ async function install() {
 }
 
 // ---------------------------------------------------------------------------
+// Install flow (OpenCode v2)
+// ---------------------------------------------------------------------------
+
+/** Header shared by the v2 flows: target file and where the config dir came from. */
+function printV2Header(title, targetPath) {
+  process.stdout.write(`\n${BOLD}  Corvus AI ${DIM}— ${title} (OpenCode v2)${RESET}\n`);
+  process.stdout.write(`  Target: ${BOLD}${targetPath}${RESET} ${DIM}(global v2)${RESET}\n`);
+  if (hasCustomXdgConfigHome()) {
+    process.stdout.write(
+      `  Config dir from ${BOLD}$XDG_CONFIG_HOME${RESET}=${BOLD}${process.env.XDG_CONFIG_HOME.trim()}${RESET}\n`
+    );
+  }
+  process.stdout.write('\n');
+}
+
+/** Closing tip for users whose v2 host runs with a custom config dir (e.g. an `oc2` alias). */
+function printV2XdgTip() {
+  if (hasCustomXdgConfigHome()) return;
+  process.stdout.write(
+    `\n${DIM}  Launching v2 with a custom config dir (e.g. an "oc2" alias)? Target it with:${RESET}\n`
+  );
+  process.stdout.write(
+    `    ${BOLD}XDG_CONFIG_HOME="$HOME/.config/opencode2" npx corvus-ai@beta --v2${RESET}\n`
+  );
+}
+
+async function installV2() {
+  const targetPath = getTargetPath();
+  printV2Header('Plugin Installer', targetPath);
+
+  const { data, raw, existed } = readConfig(targetPath);
+  const existing = readPluginsArray(data, targetPath);
+  const corvus = existing.filter(isCorvusEntry);
+
+  // Status: report the plural key, plus the singular v1 key when both are present
+  if (existing.length > 0) {
+    info(`Current "plugins": ${existing.map((e) => JSON.stringify(e)).join(', ')}`);
+  }
+  noteV1PluginKey(data, targetPath, 'Remove it once you no longer run OpenCode v1.');
+
+  // Already pinned to this exact version, and no duplicate corvus entries
+  if (corvus.length === 1 && corvus[0] === V2_PLUGIN_ENTRY) {
+    ok(`"${V2_PLUGIN_ENTRY}" is already in the plugins array.`);
+    info('Nothing to do.');
+    process.stdout.write('\n');
+    process.exit(0);
+  }
+
+  // Show what will happen
+  if (!existed) {
+    info(`File does not exist. Will create: ${targetPath}`);
+  }
+  if (corvus.length === 0) {
+    info(`Will add "${V2_PLUGIN_ENTRY}" to the plugins array.`);
+  } else {
+    info(
+      `Will replace ${corvus.map((e) => `"${e}"`).join(', ')} with "${V2_PLUGIN_ENTRY}" in the plugins array.`
+    );
+  }
+
+  if (dryRun) {
+    process.stdout.write('\n');
+    info('Dry run complete. No files were changed.');
+    process.stdout.write('\n');
+    process.exit(0);
+  }
+
+  const entries = withSingleCorvusEntry(existing, V2_PLUGIN_ENTRY);
+  writePluginsArray(targetPath, raw, data, entries);
+
+  process.stdout.write('\n');
+  process.stdout.write(`${GREEN}${BOLD}  Plugin installed for OpenCode v2!${RESET}\n\n`);
+  process.stdout.write(`  Config: ${BOLD}${targetPath}${RESET}\n`);
+  if (corvus.length === 0) {
+    process.stdout.write(
+      `  Added:  ${BOLD}"${V2_PLUGIN_ENTRY}"${RESET} to the ${BOLD}"plugins"${RESET} array\n`
+    );
+  } else {
+    process.stdout.write(
+      `  Updated: ${corvus.map((e) => `"${e}"`).join(', ')} → ${BOLD}"${V2_PLUGIN_ENTRY}"${RESET} in the ${BOLD}"plugins"${RESET} array\n`
+    );
+  }
+  process.stdout.write(`\n${BOLD}  Next steps:${RESET}\n`);
+  process.stdout.write(`  1. Restart ${BOLD}opencode2${RESET} to load the plugin.\n`);
+  process.stdout.write(`  2. Corvus agents, commands, and skills are now available.\n`);
+  process.stdout.write(`  3. Start with ${BOLD}@corvus${RESET} for multi-agent orchestration.\n`);
+  printV2XdgTip();
+  process.stdout.write(`\n  Docs: https://github.com/NachoFLizaur/corvus\n\n`);
+}
+
+// ---------------------------------------------------------------------------
 // Uninstall flow
 // ---------------------------------------------------------------------------
 async function uninstall() {
-  process.stdout.write(`\n${BOLD}  Corvus AI ${DIM}— Plugin Uninstaller${RESET}\n\n`);
+  const label = v2Mode ? 'Plugin Uninstaller (OpenCode v2)' : 'Plugin Uninstaller';
+  process.stdout.write(`\n${BOLD}  Corvus AI ${DIM}— ${label}${RESET}\n\n`);
 
   // Find all config files that reference corvus-ai
-  const configFiles = findAllConfigsWithCorvus();
+  const configFiles = v2Mode ? findAllConfigsWithCorvusV2() : findAllConfigsWithCorvus();
 
   if (configFiles.length === 0) {
-    warn('corvus-ai was not found in any OpenCode config file.');
+    warn(
+      v2Mode
+        ? 'corvus-ai was not found in any OpenCode v2 "plugins" array.'
+        : 'corvus-ai was not found in any OpenCode config file.'
+    );
     info('Searched project configs (walking up from cwd), .opencode/ directories, and global config.');
     process.stdout.write('\n');
   } else {
@@ -490,9 +902,9 @@ async function uninstall() {
   }
 
   // Preview cleanup targets
-  const cacheDir = path.join(os.homedir(), '.cache', 'opencode');
+  const cacheDir = v2Mode ? path.join(getXdgCacheHome(), 'opencode') : path.join(os.homedir(), '.cache', 'opencode');
   const localDir = path.join(process.cwd(), '.opencode');
-  const globalDir = path.join(os.homedir(), '.config', 'opencode');
+  const globalDir = v2Mode ? getV2ConfigDir() : path.join(os.homedir(), '.config', 'opencode');
   const cleanupDirs = [cacheDir, localDir, globalDir];
 
   if (dryRun) {
@@ -538,12 +950,37 @@ async function uninstall() {
     // Remove config entries
     for (const filePath of configFiles) {
       const { data, raw } = readConfig(filePath);
+
+      if (v2Mode) {
+        // v2: only corvus entries in the plural "plugins" array; the singular v1
+        // "plugin" key is reported but never modified.
+        const existing = readPluginsArray(data, filePath);
+        const removed = existing.filter(isCorvusEntry);
+        if (removed.length === 0) continue;
+        const remaining = existing.filter((e) => !isCorvusEntry(e));
+        removeFromPluginsArray(filePath, raw, remaining);
+        ok(`Removed ${removed.map((e) => `"${e}"`).join(', ')} from ${filePath}`);
+        noteV1PluginKey(data, filePath, 'Remove it from "plugin" yourself to fully drop corvus.');
+        continue;
+      }
+
       const idx = findPluginEntry(data.plugin);
       if (idx === -1) continue;
       const entry = data.plugin[idx];
       const remaining = data.plugin.filter((_, i) => i !== idx);
       removePluginEntry(filePath, raw, remaining);
       ok(`Removed "${entry}" from ${filePath}`);
+    }
+  }
+
+  // v2: point out corvus entries left in a singular "plugin" key we never edit
+  if (v2Mode) {
+    const v1Leftovers = findAllConfigsWithCorvusV2('plugin').filter(
+      (f) => !configFiles.includes(f)
+    );
+    for (const filePath of v1Leftovers) {
+      warn(`corvus-ai is still listed under the v1 "plugin" key in ${filePath}.`);
+      info('The installer never edits that key — remove the entry manually if you want it gone.');
     }
   }
 
@@ -584,10 +1021,12 @@ async function uninstall() {
 // ---------------------------------------------------------------------------
 async function migrateFlow() {
   const targetPath = getTargetPath();
-  const targetLabel = globalInstall ? 'global' : 'local';
-  const configDir = path.join(os.homedir(), '.config', 'opencode');
+  const targetLabel = v2Mode ? 'global v2' : globalInstall ? 'global' : 'local';
+  // In v2 mode a manual install lives under the XDG-resolved v2 config dir
+  const configDir = v2Mode ? getV2ConfigDir() : path.join(os.homedir(), '.config', 'opencode');
+  const configDirLabel = v2Mode ? configDir : '~/.config/opencode/';
 
-  process.stdout.write(`\n${BOLD}  Corvus AI ${DIM}— Migration Tool${RESET}\n`);
+  process.stdout.write(`\n${BOLD}  Corvus AI ${DIM}— Migration Tool${v2Mode ? ' (OpenCode v2)' : ''}${RESET}\n`);
   process.stdout.write(`  Plugin target: ${BOLD}${targetPath}${RESET} ${DIM}(${targetLabel})${RESET}\n`);
   process.stdout.write(`  Cleanup target: ${BOLD}${configDir}${RESET}\n\n`);
 
@@ -628,7 +1067,7 @@ async function migrateFlow() {
   const totalItems = filesToRemove.length + dirsToRemove.length;
 
   if (totalItems === 0) {
-    info('No manual corvus files found in ~/.config/opencode/');
+    info(`No manual corvus files found in ${configDirLabel}`);
     info('Proceeding with plugin installation...');
     process.stdout.write('\n');
   } else {
@@ -650,7 +1089,10 @@ async function migrateFlow() {
     if (dryRun) {
       // Also show what the install step would do
       const { data } = readConfig(targetPath);
-      if (Array.isArray(data.plugin) && findPluginEntry(data.plugin) !== -1) {
+      if (v2Mode) {
+        infoV2Plan(planV2Entry(data, targetPath), targetPath);
+        noteV1PluginKey(data, targetPath, 'Remove it once you no longer run OpenCode v1.');
+      } else if (Array.isArray(data.plugin) && findPluginEntry(data.plugin) !== -1) {
         info(`Plugin "corvus-ai" is already in ${targetPath}`);
       } else {
         info(`Would add "${PLUGIN_ENTRY}" to ${targetPath}`);
@@ -703,7 +1145,33 @@ async function migrateFlow() {
 
   const { data, raw, existed } = readConfig(targetPath);
 
-  if (Array.isArray(data.plugin) && findPluginEntry(data.plugin) !== -1) {
+  if (v2Mode) {
+    const plan = planV2Entry(data, targetPath);
+    noteV1PluginKey(data, targetPath, 'Remove it once you no longer run OpenCode v1.');
+
+    // Only reachable in a dry run when there was nothing to remove above; the v2 path
+    // must not write in that case (the v1 path keeps its existing behavior here).
+    if (dryRun) {
+      infoV2Plan(plan, targetPath);
+      process.stdout.write('\n');
+      info('Dry run complete. No files were changed.');
+      process.stdout.write('\n');
+      process.exit(0);
+    }
+
+    if (plan.upToDate) {
+      ok(`"${V2_PLUGIN_ENTRY}" is already in the plugins array.`);
+    } else {
+      writePluginsArray(targetPath, raw, data, withSingleCorvusEntry(plan.existing, V2_PLUGIN_ENTRY));
+      if (plan.corvus.length > 0) {
+        ok(
+          `Replaced ${plan.corvus.map((e) => `"${e}"`).join(', ')} with "${V2_PLUGIN_ENTRY}" in ${targetPath}`
+        );
+      } else {
+        ok(`Added "${V2_PLUGIN_ENTRY}" to the plugins array in ${targetPath}`);
+      }
+    }
+  } else if (Array.isArray(data.plugin) && findPluginEntry(data.plugin) !== -1) {
     ok(`corvus-ai is already in the plugin array.`);
   } else {
     addPluginEntry(targetPath, raw, PLUGIN_ENTRY);
@@ -717,14 +1185,28 @@ async function migrateFlow() {
   }
   process.stdout.write(`  Plugin config:        ${BOLD}${targetPath}${RESET}\n`);
   process.stdout.write(`\n${BOLD}  Next steps:${RESET}\n`);
-  process.stdout.write(`  1. Restart ${BOLD}opencode${RESET} to pick up the plugin.\n`);
+  process.stdout.write(`  1. Restart ${BOLD}${v2Mode ? 'opencode2' : 'opencode'}${RESET} to pick up the plugin.\n`);
   process.stdout.write(`  2. All corvus agents, commands, and skills are now loaded via the plugin.\n`);
+  if (v2Mode) printV2XdgTip();
   process.stdout.write(`\n  Docs: https://github.com/NachoFLizaur/corvus\n\n`);
 }
 
 // ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
+v2Mode = await resolveV2Mode();
+
+if (v2Mode) {
+  if (globalInstall) {
+    info('--v2 always targets the global v2 config, so --global is implied (no-op).');
+  }
+  if (!OWN_VERSION) {
+    warn(
+      `Could not read this package's version; using "${V2_PLUGIN_ENTRY}". Pin an explicit version in "plugins" if v2 support is missing.`
+    );
+  }
+}
+
 if (uninstallMode) {
   await uninstall();
 } else if (migrate) {

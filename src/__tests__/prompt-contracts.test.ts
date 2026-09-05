@@ -647,13 +647,15 @@ describe("prompt contracts: commands + repo-wide sweeps", () => {
     })
 
     // Documentation row (§C5.4) — `summary command unmapped fields` is
-    // intentionally NOT tested here: command/summary.md HAS `mode: command` /
-    // `temperature: 0.3` in its frontmatter at baseline (lines 3-4, frozen
-    // byte-identical by Task 19). The §C5.4 invariant is about loader OUTPUT —
-    // the loaded CommandConfig exposes neither property — and is already
-    // pinned by load-commands.test.ts ("ignores non-standard frontmatter
-    // fields"). A file-content assertion would either contradict baseline
-    // bytes or duplicate that loader-level coverage; neither is written.
+    // intentionally NOT tested here. At the Task 19 baseline command/summary.md
+    // HAD `mode: command` / `temperature: 0.3` on lines 3-4; task 14 of
+    // corvus-opencode-v2 REMOVED both lines, so its frontmatter is now
+    // description-only and frontmatter-contract.test.ts ("carries only
+    // description, agent or model — never mode or temperature") owns the
+    // file-content guard. The §C5.4 invariant is about loader OUTPUT — the
+    // loaded CommandConfig exposes neither property — and is already pinned by
+    // load-commands.test.ts ("ignores non-standard frontmatter fields"), so
+    // duplicating that loader-level coverage is still not written here.
   })
 
   describe("repo-wide sweeps (Tasks 20-22)", () => {

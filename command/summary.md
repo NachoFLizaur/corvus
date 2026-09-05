@@ -1,7 +1,5 @@
 ---
 description: Generate a comprehensive session summary for context transfer to a new session
-mode: command
-temperature: 0.3
 ---
 
 # Session Summary Command

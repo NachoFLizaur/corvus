@@ -1,6 +1,6 @@
-import { resolve } from "node:path"
 import { existsSync } from "node:fs"
 import type { Plugin } from "@opencode-ai/plugin"
+import { agentDir, commandDir, skillDir } from "./paths"
 import { loadAgents } from "./load-agents"
 import { loadCommands } from "./load-commands"
 
@@ -89,14 +89,9 @@ const enforceProtectedAgents = (
  * into OpenCode's configuration via the config hook.
  */
 const plugin: Plugin = async (_input) => {
-  // Package root is one level up from src/ (dev) or dist/ (built)
-  const root = resolve(import.meta.dir, "..")
-  const skillDir = resolve(root, "skill")
-
   return {
     config: async (config) => {
       // Load and register agents
-      const agentDir = resolve(root, "agent")
       if (existsSync(agentDir)) {
         const agents = loadAgents(agentDir)
         const existingAgents = config.agent
@@ -111,7 +106,6 @@ const plugin: Plugin = async (_input) => {
       }
 
       // Load and register commands
-      const commandDir = resolve(root, "command")
       if (existsSync(commandDir)) {
         const commands = loadCommands(commandDir)
         const existingCommands = config.command
