@@ -1,6 +1,7 @@
 import { readdirSync, readFileSync } from "node:fs"
 import { resolve, basename } from "node:path"
 import { parseFrontmatter } from "./parse-frontmatter"
+import type { ResourceLoadErrorHandler } from "./load-agents"
 
 interface CommandFrontmatter {
   description?: string
@@ -24,16 +25,18 @@ interface CommandConfig {
  * The markdown body is wrapped in <command-instruction> tags to form the template,
  * matching OpenCode's expected command format.
  */
-export function loadCommands(commandDir: string): Record<string, CommandConfig> {
+export function loadCommands(
+  commandDir: string,
+  onError?: ResourceLoadErrorHandler,
+): Record<string, CommandConfig> {
   const commands: Record<string, CommandConfig> = {}
 
   const files = readdirSync(commandDir).filter((f) => f.endsWith(".md"))
 
   for (const file of files) {
     const filePath = resolve(commandDir, file)
-    const content = readFileSync(filePath, "utf-8")
-
     try {
+      const content = readFileSync(filePath, "utf-8")
       const { frontmatter, body } =
         parseFrontmatter<CommandFrontmatter>(content)
 
@@ -51,7 +54,9 @@ export function loadCommands(commandDir: string): Record<string, CommandConfig> 
 
       commands[name] = config
     } catch (e) {
-      throw new Error(`Failed to parse ${file}: ${(e as Error).message}`)
+      const error = new Error(`Failed to load ${file}: ${(e as Error).message}`)
+      if (!onError) throw error
+      onError(file, error)
     }
   }
 

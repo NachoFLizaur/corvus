@@ -5,6 +5,11 @@ export interface ParsedFile<T = Record<string, unknown>> {
   body: string
 }
 
+export interface ParseFrontmatterOptions {
+  /** Preserve body whitespace exactly. Default: false (trim body). */
+  preserveBodyWhitespace?: boolean
+}
+
 const FRONTMATTER_RE = /^---\r?\n([\s\S]*?)\r?\n?---\r?\n?([\s\S]*)$/
 
 /**
@@ -17,6 +22,7 @@ const FRONTMATTER_RE = /^---\r?\n([\s\S]*?)\r?\n?---\r?\n?([\s\S]*)$/
  */
 export function parseFrontmatter<T = Record<string, unknown>>(
   content: string,
+  options: ParseFrontmatterOptions = {},
 ): ParsedFile<T> {
   const match = content.match(FRONTMATTER_RE)
   if (!match) {
@@ -30,6 +36,6 @@ export function parseFrontmatter<T = Record<string, unknown>>(
 
   return {
     frontmatter: frontmatter ?? ({} as T),
-    body: body.trim(),
+    body: options.preserveBodyWhitespace ? body : body.trim(),
   }
 }

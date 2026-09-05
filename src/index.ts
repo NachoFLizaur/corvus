@@ -88,9 +88,7 @@ const enforceProtectedAgents = (
  * Registers agents, commands, and skills from the corvus package
  * into OpenCode's configuration via the config hook.
  */
-const plugin: Plugin = async (_input) => {
-  // Package root is one level up from src/ (dev) or dist/ (built)
-  const root = resolve(import.meta.dir, "..")
+export const createLegacyPlugin = (root: string): Plugin => async (_input) => {
   const skillDir = resolve(root, "skill")
 
   return {
@@ -150,5 +148,8 @@ const plugin: Plugin = async (_input) => {
     },
   }
 }
+
+// Package root is one level up from src/ (dev) or dist/ (built).
+const plugin = createLegacyPlugin(resolve(import.meta.dir, ".."))
 
 export default plugin

@@ -85,6 +85,28 @@ npx corvus-ai --global
 
 This adds `corvus-ai@latest` to your OpenCode plugin config. All agents, commands, and skills are loaded automatically. Corvus contributes defaults; your existing agent and command configuration is merged last and remains authoritative.
 
+### OpenCode 2 (beta)
+
+OpenCode 2 replaces the V1 plugin API, so a V1-only plugin registers nothing there. Corvus ships a dual-runtime entrypoint at `dist/v2` that works in both runtimes from a single config entry:
+
+- **OpenCode 2** calls its `setup()` and registers the agents, commands, and skills through `ctx.agent`, `ctx.command`, and `ctx.skill` transforms (legacy `permission`, `model` + `variant`, `prompt`, `subtask`, and `mode` fields are converted to the V2 shapes in memory; the Markdown files are unchanged).
+- **OpenCode 1** loads the same module through its `server` export, so one configured path serves both `opencode` and `opencode2`.
+
+Point the `plugins` array at the built `dist/v2` **directory** from a local clone (OpenCode 2 requires a directory, not a file, for local plugin paths):
+
+```bash
+git clone https://github.com/NachoFLizaur/corvus.git && cd corvus
+bun install && bun run build
+```
+
+```json
+{
+  "plugins": ["/absolute/path/to/corvus/dist/v2"]
+}
+```
+
+`~/.config/opencode/opencode.json` is read by both runtimes; the V1 `plugin` key keeps working in OpenCode 2 and accepts the same path.
+
 ### Manual Install
 
 Clone the repo and symlink the three product directories into your OpenCode config. Use this form only when the destination directories do not already exist; otherwise inspect and merge individual entries so existing configuration is not replaced.

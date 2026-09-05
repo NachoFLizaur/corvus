@@ -13,6 +13,10 @@
     ".": {
       "import": "./dist/index.js",
       "types": "./dist/index.d.ts"
+    },
+    "./v2": {
+      "import": "./dist/v2/index.js",
+      "types": "./dist/v2/index.d.ts"
     }
   },
   "files": [
@@ -26,7 +30,7 @@
     "README.md"
   ],
   "scripts": {
-    "build": "bun build src/index.ts --outdir dist --target node && bun x tsc --emitDeclarationOnly --outDir dist",
+    "build": "bun build src/index.ts src/v2/index.ts --outdir dist --target node && bun x tsc --emitDeclarationOnly --outDir dist",
     "typecheck": "bun x tsc --noEmit",
     "test": "bun test",
     "prepublishOnly": "bun run build"
@@ -46,10 +50,10 @@
   },
   "homepage": "https://github.com/NachoFLizaur/corvus",
   "peerDependencies": {
-    "@opencode-ai/plugin": "*"
+    "@opencode-ai/plugin": ">=1.18.21"
   },
   "devDependencies": {
-    "@opencode-ai/plugin": "1.18.3",
+    "@opencode-ai/plugin": "1.18.21",
     "@types/bun": "latest",
     "@types/js-yaml": "^4.0.9",
     "typescript": "^5.0.0"
