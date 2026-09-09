@@ -16,6 +16,8 @@ The user provided: `$ARGUMENTS`
 
 Analyze the staged git diff, generate an appropriate commit message based on the mode, and execute the commit.
 
+Follow Steps 1-6 in order. The git command sequence is exact (low-freedom) — commits are hard to undo cleanly, so do not improvise around it.
+
 ## Step 1: Check Staged Changes
 
 First, verify there are staged changes:
@@ -59,22 +61,10 @@ A clear, descriptive one-line commit. No conventional commit format required, no
 Fix sidebar and page header/footer alignment with collapse toggle
 ```
 ```
-Move Astra sessions sidebar into main resizable layout
-```
-```
-Refactor Streamlit frontend to React with OIDC authentication
-```
-```
-Implement Google search with Playwright headless browser
-```
-```
 Add dark mode toggle to settings page
 ```
 
-**Bad examples:**
-- `Fix bug` ❌
-- `Update code` ❌
-- `Changes` ❌
+**Avoid vague messages** (`Fix bug`, `Update code`, `Changes`) — they tell the reader nothing.
 
 ---
 
@@ -118,13 +108,6 @@ accounts. Added database-level unique constraint and wrapped
 operations in a transaction.
 
 Fixes #456
-```
-
-```
-refactor(db): extract connection pooling to dedicated module
-
-Connection pool config was duplicated across 4 service files with
-inconsistent settings. Centralized into src/db/pool.ts.
 ```
 
 ---
@@ -207,39 +190,44 @@ Show the user:
 1. Summary of changes (files modified, insertions/deletions)
 2. The proposed commit message (full message, not truncated)
 3. For default/long modes: **Verify the body answers**: Why was this change needed?
-4. Ask for confirmation or edits
+4. Any requested `--amend` or `--no-verify` behavior, called out separately
+5. Ask for explicit confirmation of the exact message and operation
 
-If you cannot explain WHY the change was made from the diff alone (and mode requires a body), ASK the user for context before generating the message.
+If you cannot explain why the change was made from the diff alone (and the mode requires a body), ask the user for context before generating the message.
+
+Treat `--amend` and `--no-verify` as sensitive options. Use either option only when the user explicitly requested its exact flag and then reconfirmed it alongside the final message. Never infer either option from context. If the staged diff or requested options change after presentation, return to Step 2 and obtain a new confirmation.
 
 ## Step 5: Execute Commit
 
-Once confirmed, run:
+Only after confirmation, make one normal tool call with the exact confirmed message as stdin and a fixed argument vector:
 
-!`git commit -m "<type>(<scope>): <description>" -m "<body>"`
+```text
+argv  = ["git", "commit", "--file=-"]
+stdin = exact_confirmed_message
+```
 
-Or for simple commits without body:
+Add `--amend` and/or `--no-verify` to `argv` only when each exact option passed the explicit-request and reconfirmation rule in Step 4. Pass the message as data through a tool/runtime-managed stdin channel; never interpolate it into a shell command, command substitution, or generated script. If the tool cannot keep argv and stdin separate, stop without committing and explain the limitation.
 
-!`git commit -m "<type>(<scope>): <description>"`
+Commit only the user's already staged set. Do not call `git add`, modify the index, or include unstaged/untracked files.
 
 ## Step 6: Confirm Success
 
-Show the commit result:
-
-!`git log -1 --oneline`
+Wait for the commit tool call to succeed. Then inspect the resulting commit with a separate read-only normal tool call to `git log -1 --oneline` and report that result. If the commit call fails, report the failure without claiming a commit or retrying with changed options.
 
 ## Additional Options
 
 Can be combined with mode flags:
-- `--amend` - Amend the previous commit instead
-- `--no-verify` - Skip pre-commit hooks
+- `--amend` - Amend the previous commit only after explicit request and reconfirmation
+- `--no-verify` - Skip pre-commit hooks only after explicit request and reconfirmation
 - Any other text is treated as context to help generate a better message
 
 ## Important
 
-- NEVER commit without user confirmation of the message
+- NEVER commit without user confirmation of the message — commits are hard to undo cleanly
+- Never stage files; this command operates only on the user's already staged set
+- Never commit secrets (tokens, passwords, API keys); if the staged diff contains any, stop and warn the user
 - If the diff is too large/complex, ask clarifying questions
-- For breaking changes, ALWAYS include `!` and explain in body
+- For breaking changes, include `!` and explain in the body
 - Keep scope consistent with existing commit history when possible
-- For `--short`: Still reject meaningless messages like "fix bug"
-- For `--long`: Encourage when diff touches 5+ files or includes breaking changes
-
+- For `--short`: still reject meaningless messages like "fix bug"
+- For `--long`: encourage when the diff touches 5+ files or includes breaking changes

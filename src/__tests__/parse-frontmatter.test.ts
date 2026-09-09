@@ -15,7 +15,7 @@ describe("parseFrontmatter", () => {
     })
   })
 
-  test("parses nested YAML objects", () => {
+  test("preserves legacy plural permission YAML as supplied", () => {
     const input = [
       "---",
       "permissions:",
@@ -96,7 +96,8 @@ describe("parseFrontmatter", () => {
 
     expect(result.frontmatter).toHaveProperty("description")
     expect(result.frontmatter).toHaveProperty("mode")
-    expect(result.frontmatter).toHaveProperty("permissions")
+    expect(result.frontmatter).toHaveProperty("permission")
+    expect(result.frontmatter).not.toHaveProperty("permissions")
     expect(result.body).toBeTruthy()
   })
 

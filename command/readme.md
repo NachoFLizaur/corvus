@@ -106,9 +106,9 @@ Present a summary:
 
 ## Important
 
-- NEVER delete existing README content unless it's clearly outdated/wrong
+- Preserve existing README content; remove it only when clearly outdated or wrong
 - Match the existing README's style and formatting
-- If unsure whether a change is documentation-relevant, err on the side of including it
-- For breaking changes, ensure they are prominently documented
+- Include changes whose documentation relevance is uncertain — missing docs cost readers more than extra detail
+- Document breaking changes prominently
 - If the README has a changelog section, add entries there too
-- Always preserve the original structure - add to existing sections rather than reorganizing
+- Preserve the original structure — add to existing sections rather than reorganizing

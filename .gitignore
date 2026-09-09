@@ -22,6 +22,9 @@ tasks
 .claude
 .kiro
 
+# Local dev harness (opencode.jsonc, package.json, bun.lock — not shipped)
+.opencode/
+
 # Build output
 dist/
 *.tgz

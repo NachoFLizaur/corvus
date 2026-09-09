@@ -6,8 +6,10 @@ interface AgentFrontmatter {
   description?: string
   mode?: "primary" | "subagent" | "all"
   temperature?: number
+  permission?: Record<string, unknown>
   permissions?: Record<string, unknown>
   color?: string
+  [key: string]: unknown
 }
 
 interface AgentConfig {
@@ -38,23 +40,13 @@ export function loadAgents(agentDir: string): Record<string, AgentConfig> {
 
       const name = basename(file, ".md")
 
-      const config: AgentConfig = {}
+      const { permissions, ...nativeFrontmatter } = frontmatter
+      const config: AgentConfig = { ...nativeFrontmatter }
 
-      if (frontmatter.description !== undefined)
-        config.description = frontmatter.description
-      if (frontmatter.mode !== undefined)
-        config.mode = frontmatter.mode
-      if (frontmatter.temperature !== undefined)
-        config.temperature = frontmatter.temperature
-      // Note: frontmatter uses "permissions" (plural), config uses "permission" (singular)
-      if (frontmatter.permissions !== undefined)
-        config.permission = frontmatter.permissions
-      if (frontmatter.color !== undefined)
-        config.color = frontmatter.color
+      if (!("permission" in frontmatter) && permissions !== undefined)
+        config.permission = permissions
 
-      if (body) {
-        config.prompt = body
-      }
+      config.prompt = body
 
       agents[name] = config
     } catch (e) {

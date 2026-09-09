@@ -47,14 +47,10 @@ web-research_multi_search({
   queries: [
     "primary question exact terms",
     "alternative framing of question",
-    "aspect 1 specific query",
-    "aspect 2 specific query",
-    "comparison dimension 1",
-    "comparison dimension 2",
+    "aspect-specific query (one per key dimension)",
     "known problems or limitations",
     "recent developments 2025 2026",
-    "real-world experience production",
-    "expert opinion or analysis"
+    "real-world experience production"
   ],
   results_per_query: 8  // higher for deep research
 })
@@ -69,15 +65,14 @@ web-research_multi_search({
 
 ### Phase 3: Deep Page Fetching
 
-Fetch ALL promising URLs from search results (not just top 2-3):
+Fetch all promising URLs from search results, not just the top few:
 
 ```javascript
 web-research_fetch_pages({
   urls: [
-    // Fetch all unique, relevant URLs from search results
+    // All unique, relevant URLs from search results
     // Typically 8-15 pages for deep research
-    "url1", "url2", "url3", "url4", "url5",
-    "url6", "url7", "url8", "url9", "url10"
+    "url1", "url2", "url3", /* ... */ "url10"
   ],
   max_chars: 15000,  // full content for deep analysis
   timeout: 30
@@ -85,7 +80,7 @@ web-research_fetch_pages({
 ```
 
 **Page selection rules**:
-- Fetch ALL unique URLs that appear relevant (don't pre-filter aggressively)
+- Fetch all unique URLs that appear relevant — aggressive pre-filtering loses coverage
 - Prioritize: official docs > technical blogs > Stack Overflow > forums
 - Include contrasting viewpoints intentionally
 - Aim for 10+ unique sources
@@ -166,7 +161,7 @@ Produce a comprehensive research report following this structure:
 
 ## Quality Checklist
 
-**Every deep research report MUST meet ALL of these criteria before delivery:**
+Every deep research report meets all of these criteria before delivery:
 
 - [ ] **10+ unique sources** consulted and cited
 - [ ] **500+ words** in the synthesis (excluding code blocks and tables)
