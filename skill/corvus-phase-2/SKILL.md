@@ -8,7 +8,7 @@ description: Planning (Phase 2), mandatory High Accuracy Plan Review (Phase 3.5)
 ## Phase 2: Planning
 
 Turn clear requirements and completed discovery into one adaptive plan. The schema and
-effort policy live in [Plan Format](../../agent/task-planner.md#plan-format); this skill
+effort policy live in task-planner's Plan Format; this skill
 owns dispatch templates, test-execution timing, the review loop, and the approval handoff.
 
 ### Tests
@@ -31,7 +31,7 @@ phase for the selected policy. Neither depth nor autonomous approval disables th
    Done when planning inputs are clear and grounded in the repository.
 2. Dispatch task-planner with the following payload. Decision-record handling belongs to
    its Decision Records section and the user's repository `docs/decisions/` convention.
-   Persist discovery using its [Discovery Companion](../../agent/task-planner.md#discovery-companion) schema.
+   Persist discovery using its Discovery Companion schema.
 
 ```markdown
 **TASK**: Create one adaptive plan and persist its discovery companion for <feature and intended outcome>.

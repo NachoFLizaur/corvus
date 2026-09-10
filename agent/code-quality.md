@@ -86,8 +86,8 @@ For acceptance-only work, use file/line traces and authorized observations rathe
 reporting missing test execution as a gap. Objective manual verification remains unresolved
 until evidenced; subjective assessment belongs to `corvus-phase-5` §5b: Subjective Validation.
 
-Review prose accuracy and confined before/after diffs using
-[implementer preservation rules](code-implementer.md#evidence-and-preservation).
+Review prose accuracy with confined before/after diffs: exclude intentional changes and
+compare the non-target remainder byte-for-byte; read back final text; green checks alone do not establish prose accuracy.
 Re-derive configurable invariants at minimum, shipped default, and maximum values; use
 the supplied merge-base SHA for baseline comparisons. Trace unexpected behavior to its
 origin, distinguishing requested change, pre-existing defect, and prior-remediation apparatus.

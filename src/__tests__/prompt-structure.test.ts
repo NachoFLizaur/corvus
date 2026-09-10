@@ -72,6 +72,17 @@ const reviewChildren = ["pr-context-gatherer", "researcher", "pr-code-reviewer",
 const closed = (names: string[]) => ({ "*": "deny", ...Object.fromEntries(names.map(name => [name, "allow"])) })
 const writer = "agent/pr-comment-writer.md", r4 = "skill/corvus-review-r4/SKILL.md", r5 = "skill/corvus-review-r5/SKILL.md"
 const reviewOrchestrators = ["agent/corvus-review.md", "agent/corvus-review-auto.md"]
+const externalSkillReferences = [
+  "/cache/opencode/packages/corvus-ai@0.10.0-beta.1/node_modules/corvus-ai/skill/corvus-review-extras/schemas.md",
+  "/home/user/.cache/opencode/packages/corvus-ai@0.10.0-beta.2/node_modules/corvus-ai/skill/corvus-review-extras/config.md",
+  "C:\\Users\\user\\AppData\\Local\\opencode\\packages\\corvus-ai@0.10.0-beta.2\\node_modules\\corvus-ai\\skill\\corvus-review-extras\\state.md",
+  "/cache/opencode2/plugins/corvus-ai/skill/corvus-review-extras/schemas.md",
+  "/home/user/.cache/opencode/npm/corvus-ai/123/node_modules/corvus-ai/skill/corvus-review-extras/schemas.md",
+  "/home/user/.config/opencode/skill/corvus-review-extras/config.md",
+  "/home/user/.config/opencode/skills/corvus-review-extras/state.md",
+  "/custom/config/opencode/skills/corvus-review-extras/schemas.md",
+]
+const externalSkillResources = externalSkillReferences.flatMap(path => [path, `${posix.dirname(path.replaceAll("\\", "/"))}/*`])
 const artifactHash = "shasum -a 256 .corvus/reviews/*/post-request.json"
 const detachedCheckout = "gh pr checkout * --repo * --detach"
 const permissionPins: Record<string, Record<string, unknown>> = {
@@ -96,7 +107,7 @@ const readOnlyPins: Record<string, Record<string, unknown>> = {
     bash: closed(["ls *", "find *", "cat *", "head *", "tail *", "wc *", "grep *", "rg *", "tree *",
       "git log*", "git show*", "git diff*", "git blame*", "git ls-files*", "git shortlog*", "git rev-parse*",
       "git merge-base*", "git status*", "git grep*", "gh search *", "gh api --method GET *",
-      "gh pr list --state open --json number,title,headRefName,files --limit 20", "gh repo view *", "gh repo clone * /tmp/*"]),
+      "gh pr list --state open --json number,title,headRefName,files --limit 20", "gh repo view *"]),
   },
   "agent/pr-context-gatherer.md": {
     ...closed(["read", "glob", "grep"]), task: "deny", webfetch: "deny", question: "deny", edit: "deny", write: "deny",
@@ -174,6 +185,9 @@ function definitionMatches(body: string, d: Definition): { valid: boolean }[] {
  * Permission order is checked alongside the maps, using translated rules for Git denies and
  * artifact hashing. R5's dispatch keys and writer artifact guards are pinned before any skip;
  * a missing guard or body-bearing descriptor fails regardless of rollout flags.
+ * Skill-reference access uses parsed skill allows and the host-mirrored ordered evaluator
+ * over test-owned install paths, before any corpus mutation or rollout skip. Every consumer
+ * fails on a missing or ineffective external-directory allow; no flag disables this pin.
  */
 function validate(corpus: Corpus, c: Contract, final = false): string[] {
   const errors: string[] = [], check = (ok: boolean, code: string) => { if (!ok) errors.push(code) }
@@ -213,6 +227,11 @@ function validate(corpus: Corpus, c: Contract, final = false): string[] {
         check(fm.mode === (posix.basename(path).startsWith("corvus") ? "primary" : "subagent") && typeof fm.temperature === "number" && Number.isFinite(fm.temperature) && record(fm.permission), `frontmatter:${path}`)
         check(fm.color === undefined || typeof fm.color === "string" && /^#[\da-f]{6}$/i.test(fm.color), `frontmatter:${path}`)
         const permission = record(fm.permission) ? fm.permission : {}
+        if (permission.skill === "allow") {
+          const rules = toV2Permissions(permission)
+          check(rules.some(rule => rule.action === "external_directory" && rule.effect === "allow")
+            && externalSkillResources.every(resource => evaluateRules(rules, "external_directory", resource) === "allow"), `safety:${path}:skill-references`)
+        }
         for (const [key, policy] of Object.entries(permissionPins[path] ?? {})) check(equalPolicy(permission[key], policy), `safety:${path}`)
         if (path === writer) check(equalPolicy(permission, permissionPins[writer]) && Object.keys(permission)[0] === "*"
           && record(permission.bash) && Object.keys(permission.bash)[0] === "*", `safety:${path}`)
@@ -478,6 +497,56 @@ describe("prompt structure", () => {
   describe("safety", () => {
     const contract = structuredClone(budgets)
     for (const flag of Object.values(contract.enforcementClasses)) flag.enforced = false
+
+    test.each(reviewOrchestrators)("review orchestrators read external skill references: %s", path => {
+      const { frontmatter } = parseFrontmatter(readCorpus()[path])
+      const permission = frontmatter.permission as Record<string, unknown>
+      const { external_directory: _removed, ...beforePermission } = permission
+      const resource = externalSkillReferences[0]
+      const hostAllows = toV2Permissions({ external_directory: { [`${posix.dirname(resource)}/*`]: "allow" } })
+      const beforeRules = [...hostAllows, ...toV2Permissions(beforePermission)]
+      const rules = [...hostAllows, ...toV2Permissions(permission)]
+      for (const target of [resource, `${posix.dirname(resource)}/*`]) {
+        expect(evaluateRules(hostAllows, "external_directory", target)).toBe("allow")
+        expect(evaluateRules(beforeRules, "external_directory", target)).toBe("deny")
+        expect({ path, target, effect: evaluateRules(rules, "external_directory", target) })
+          .toEqual({ path, target, effect: "allow" })
+      }
+      for (const target of externalSkillResources) {
+        expect(evaluateRules(rules, "external_directory", target)).toBe("allow")
+        expect(evaluateRules(rules, "read", target)).toBe("allow")
+        expect(evaluateRules(rules, "edit", target)).toBe("deny")
+      }
+      expect(evaluateRules(rules, "shell", "git rev-parse HEAD")).toBe("allow")
+      expect(evaluateRules(rules, "shell", "git rev-parse HEAD --git-dir=/tmp/other")).toBe("deny")
+      for (const target of ["/etc/passwd", "/home/user/.ssh/id_ed25519", "/home/user/.config/opencode/opencode.json",
+        "/cache/opencode/packages-other/secret", "/cache/opencode2-other/secret", "/custom/config/opencode/agents/reviewer.md"]) {
+        expect(evaluateRules(rules, "external_directory", target)).toBe("deny")
+      }
+    })
+
+    test("every skill-enabled agent requires effective external-directory allows with rollout flags off", () => {
+      const corpus = readCorpus()
+      const skillAgents = Object.keys(corpus).filter(path => {
+        if (kindOf(path) !== "agent") return false
+        const { permission } = parseFrontmatter(corpus[path]).frontmatter
+        return record(permission) && permission.skill === "allow"
+      })
+      expect(skillAgents.sort()).toEqual([...orchestrators, ...reviewOrchestrators].sort())
+      for (const path of skillAgents) {
+        const code = `safety:${path}:skill-references`
+        expect(validate(corpus, contract)).not.toContain(code)
+        for (const mutation of ["remove", "deny", "wrong-path", "reorder"]) {
+          const changed = mutatePermission(corpus, path, p => {
+            if (mutation === "remove") delete p.external_directory
+            if (mutation === "deny") p.external_directory = "deny"
+            if (mutation === "wrong-path") p.external_directory = { "/unrelated/*": "allow" }
+            if (mutation === "reorder") { delete p["*"]; p["*"] = "deny" }
+          })
+          expect(validate(changed, contract)).toContain(code)
+        }
+      }
+    })
 
     test("artifact handoff guards reject retyped dispatches and fail-open writer procedures", () => {
       const corpus = readCorpus()

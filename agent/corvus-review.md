@@ -5,6 +5,11 @@ mode: primary
 temperature: 0.2
 permission:
   "*": "deny"
+  external_directory:
+    "*/opencode/packages/*": "allow"
+    "*/opencode/npm/*": "allow"
+    "*/opencode2/*": "allow"
+    "*/opencode/skill*/*": "allow"
   read: "allow"
   glob: "allow"
   grep: "allow"
@@ -28,6 +33,7 @@ permission:
     "*": "deny"
     'date -u +%Y-%m-%dT%H:%M:%SZ': "allow"
     'shasum -a 256 .corvus/reviews/*/post-request.json': "allow"
+    'git rev-parse HEAD': "allow"
     "gh repo view --json nameWithOwner --jq '.nameWithOwner'": "allow"
     'gh api user --jq .login': "allow"
     "gh pr view * --repo * --json number,url,title,body,author,baseRefName,baseRefOid,headRefName,headRefOid,labels,reviewRequests,isDraft,mergeable,state,mergedAt,additions,deletions,changedFiles,files,closingIssuesReferences,latestReviews,reviewDecision": "allow"

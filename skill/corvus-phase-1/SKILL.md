@@ -67,7 +67,7 @@ Done when overlap evidence or an explicit coverage gap is included in the findin
 **REPORT BACK**: Cited findings, recommendations with rationale, risks, and unresolved questions.
 ```
 
-Use [researcher](../../agent/researcher.md) for research mechanics rather than copying them.
+Use researcher for research mechanics rather than copying them.
 Done when cited evidence or explicit gaps cover the assigned external scope.
 
 ### 1b. Codebase Investigation (code-explorer)

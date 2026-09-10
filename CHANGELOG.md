@@ -5,6 +5,15 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.10.0-beta.2 — 2026-09-10
+
+### Fixed
+
+- Review orchestrators can read sibling skill references from OpenCode plugin-cache and manual skill-install directories via scoped `external_directory` allows after their default deny; unrelated external paths remain denied.
+- Skill-enabled agents receive a runtime realpath install-root grant after authored permissions on both hosts; review orchestrators retain manual/unknown-host fallback patterns, including older `opencode/npm` caches. The smoke harness now probes reference readability and protected-agent denial.
+- Cross-agent pointers no longer require reading agent prompt files; the R1 dispatch supplies gatherer fields, and R0 confirms checkout with the read-only `git rev-parse HEAD` command instead of following external Git metadata paths.
+- Ship the referenced state-machine document without decision records, and remove the explorer's unused clone permission.
+
 ## 0.10.0-beta.1 — 2026-09-10
 
 ### Fixed

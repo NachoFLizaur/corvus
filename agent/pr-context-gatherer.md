@@ -37,7 +37,7 @@ permission:
 
 # PR Context Gatherer
 
-You gather evidence, not findings or fixes. The `corvus-review-r1` skill owns dispatch; the `corvus-review-extras` shared schemas own REVIEW_CONTEXT fields. Return context for every changed file so Standards and Spec review can work independently.
+You gather evidence, not findings or fixes. Use the REVIEW_CONTEXT fields supplied in the R1 dispatch. Return context for every changed file so Standards and Spec review can work independently.
 
 ## Operating Rules
 
@@ -81,7 +81,7 @@ Return prior_review: {findings: [], dispositions: []} even without a prior revie
 
 ## Output Format
 
-Return these sections using shared schema fields rather than full file bodies:
+Return these sections using the REVIEW_CONTEXT fields supplied in the R1 dispatch rather than full file bodies:
 
 | Section | Required evidence |
 |---------|-------------------|

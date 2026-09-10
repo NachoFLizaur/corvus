@@ -12,18 +12,18 @@ owning phase skill for workflow contracts and dispatch templates.
 
 | Agent | Purpose | Contract Owner |
 |-------|---------|----------------|
-| corvus | Interactive workflow; primary entry point | [Agent](../../agent/corvus.md) |
-| corvus-auto | Autonomous workflow; primary entry point | [Agent](../../agent/corvus-auto.md) |
+| corvus | Interactive workflow; primary entry point | corvus agent |
+| corvus-auto | Autonomous workflow; primary entry point | corvus-auto agent |
 | requirements-analyst | Requirements and decision questions | [Phase 0](../corvus-phase-0/SKILL.md) |
 | researcher | External technical evidence | [Phase 1](../corvus-phase-1/SKILL.md) |
 | code-explorer | Repository evidence and environment discovery | [Phase 1](../corvus-phase-1/SKILL.md) |
-| task-planner | Adaptive plan, decision records, progress and learning updates | [Agent modes](../../agent/task-planner.md) |
+| task-planner | Adaptive plan, decision records, progress and learning updates | task-planner modes |
 | plan-reviewer | Cross-model whole-plan review | [Phase 2](../corvus-phase-2/SKILL.md) |
 | code-implementer | Approved production changes and scoped validation | [Phase 4](../corvus-phase-4/SKILL.md) |
 | code-quality | Objective acceptance and validation | [Phase 4](../corvus-phase-4/SKILL.md), [Phase 5](../corvus-phase-5/SKILL.md) |
 | ux-dx-quality | Subjective UX, DX, docs, architecture assessment | [Phase 5](../corvus-phase-5/SKILL.md) |
-| corvus-review | Interactive PR review; primary entry point | [Agent](../../agent/corvus-review.md) |
-| corvus-review-auto | Autonomous PR review; primary entry point | [Agent](../../agent/corvus-review-auto.md) |
+| corvus-review | Interactive PR review; primary entry point | corvus-review agent |
+| corvus-review-auto | Autonomous PR review; primary entry point | corvus-review-auto agent |
 | pr-context-gatherer | PR evidence and conventions | [R1](../corvus-review-r1/SKILL.md) |
 | pr-code-reviewer | Read-only PR code detection | [R2](../corvus-review-r2/SKILL.md) |
 | security-reviewer | Read-only security detection | [R2](../corvus-review-r2/SKILL.md) |
@@ -58,7 +58,7 @@ remaining prerequisite; then use the owner rather than inventing another retry l
 
 | Failure | Route |
 |---------|-------|
-| In-task implementation/check failure | [Implementer modes](../../agent/code-implementer.md) |
+| In-task implementation/check failure | code-implementer modes |
 | Phase acceptance failure | [Phase 4 Failure Routing](../corvus-phase-4/SKILL.md#failure-routing) |
 | Empty, truncated, or malformed child output | [Transport recovery](../corvus-phase-4/reference/transport-retry.md) |
 | Final objective or subjective failure | [Phase 5](../corvus-phase-5/SKILL.md) |

@@ -45,7 +45,7 @@ policy omissions; scoped fix requirements on FAIL.
 
 - PASS: proceed to 5b when required, otherwise Phase 6.
 - FAIL: dispatch task-planner `AMEND_PLAN add-fix-tasks` per corvus-phase-7 §AMEND_PLAN Dispatch with plan path, phase, task lines,
-  and the 5a gate-report pointer ([mode](../../agent/task-planner.md#amend_plan)); return
+  and the 5a gate-report pointer (task-planner's AMEND_PLAN mode); return
   to Phase 4's frontier of fixes and its gates, then rerun 5a. This failed-final-gate recovery
   authorizes another full run under deferred, not extra suite runs during Phase 4.
 Done when an evidenced objective PASS selects the next step or attributed failures return

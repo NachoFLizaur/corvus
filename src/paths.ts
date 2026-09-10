@@ -1,3 +1,4 @@
+import { realpathSync } from "node:fs"
 import { resolve } from "node:path"
 
 /**
@@ -10,7 +11,7 @@ import { resolve } from "node:path"
  * `import.meta.dirname` rather than the Bun-only variant, so the built
  * bundles also run under plain Node.
  */
-export const root = resolve(import.meta.dirname, "..")
+export const root = realpathSync(resolve(import.meta.dirname, ".."))
 
 export const agentDir = resolve(root, "agent")
 

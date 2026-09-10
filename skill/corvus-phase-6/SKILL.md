@@ -13,7 +13,7 @@ their completed source plan stays read-only, and feature-level extraction is not
 ## 6a: Success Extraction
 
 Have task-planner record final completion through its
-[PROGRESS_UPDATE mode](../../agent/task-planner.md#progress_update), supplying the final
+PROGRESS_UPDATE mode, supplying the final
 gate outcomes and evidence. Read back the completed PLAN.md and preserve its history.
 Done when required final outcomes and completion are recorded, or missing evidence holds closure.
 
@@ -30,10 +30,10 @@ Dispatch task-planner once for the entire feature:
 product-decision candidates requiring separate Decision Records handling.
 ```
 
-Use the planner's [SUCCESS_EXTRACTION mode](../../agent/task-planner.md#success_extraction):
+Use the planner's SUCCESS_EXTRACTION mode:
 `.corvus/tasks/learnings.md` holds Corvus-PROCESS learnings only. Product decision
 rationale belongs in the user's repository ADRs at `docs/decisions/`; route candidates
-separately to task-planner under its [three-condition gate](../../agent/task-planner.md#decision-records).
+separately to task-planner under its three-condition Decision Records gate.
 That planner procedure owns record creation; extraction itself writes only learnings.
 Done when qualifying process learnings are recorded once or explicitly absent, and product
 decision candidates have a separate disposition rather than leaking into the learnings file.

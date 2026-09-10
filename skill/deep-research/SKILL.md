@@ -5,7 +5,7 @@ description: Deep research methodology for complex technical questions requiring
 
 # Deep Research Methodology
 
-Use the [researcher Complexity Router](../../agent/researcher.md#complexity-router)
+Use the researcher Complexity Router
 to select this branch. It covers multi-source investigation, including technology
 evaluation and complex debugging.
 
@@ -22,9 +22,9 @@ evaluation and complex debugging.
    contrasting viewpoints. Prioritize official docs, technical blogs, Stack Overflow,
    then forums. Done when promising full pages have been read or access gaps recorded.
 4. **Synthesize** — apply Evidence Quality below and the researcher's
-   [Evidence Discipline](../../agent/researcher.md#evidence-discipline).
+   Evidence Discipline (owner pointer: `../../agent/researcher.md#evidence-discipline`; informational, no file read).
    Done when consensus, conflicts, and missing evidence are distinguished.
-5. **Report** — extend the researcher's [Output Format](../../agent/researcher.md#output-format),
+5. **Report** — extend the researcher's Output Format (owner pointer: `../../agent/researcher.md#output-format`; informational, no file read),
    starting with its TL;DR. Add Detailed Analysis by dimension, Conflicting Information
    with resolutions, and Research Gaps feeding `UNRESOLVED_SCOPE`.
    Done when the Quality Checklist is satisfied or each shortfall is explained.
@@ -57,7 +57,7 @@ the checklist is met; synthesize the available evidence and make remaining gaps 
 
 ## Fallback Behavior
 
-Follow the researcher's [Three-Tier Fallback Chain](../../agent/researcher.md#three-tier-fallback-chain).
+Follow the researcher's Three-Tier Fallback Chain (owner pointer: `../../agent/researcher.md#three-tier-fallback-chain`; informational, no file read).
 When tooling limits coverage, explain checklist shortfalls, including fewer sources,
 and mark the resulting gaps as unresolved. Done when the degraded report makes its
 incompleteness explicit.

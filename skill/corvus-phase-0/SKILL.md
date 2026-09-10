@@ -5,7 +5,7 @@ description: Requirements analysis phases (0a initial, 0b post-discovery)
 
 # Phase 0: Requirements
 
-Orchestrate [requirements-analyst](../../agent/requirements-analyst.md); its Analysis
+Orchestrate requirements-analyst; its Analysis
 Workflow owns grilling, statuses, immutable requirements, and effort proposals.
 
 ## Clarification Ownership
@@ -39,9 +39,9 @@ Done when findings return to their declared target with clarification round stat
 
 ## Spec-Completeness Bypass
 
-Apply corvus.md's [Phase 0: Clarification](../../agent/corvus.md#phase-0-clarification) bypass criteria before 0a; uncertainty takes
+Apply corvus's Phase 0: Clarification bypass criteria before 0a; uncertainty takes
 the normal analyst route. For a qualifying request, select the caller's depth proposal via
-[Plan Format](../../agent/task-planner.md#plan-format), preserving a supplied user choice,
+task-planner's Plan Format, preserving a supplied user choice,
 then run Phase 1 with `DIRECT_CALLER`. The bypass skips clarification, not discovery;
 return here for Depth and Tests Resolution. Preserve the supplied requirements and add
 `requirements-analyst: skipped (spec-complete)` to the

@@ -6,7 +6,7 @@ description: Implementation loop - per-phase execution with quality gates
 # Phase 4: Implementation
 
 Run 4a → 4b → 4c for each approved phase, at every depth. Read PLAN.md using
-[Plan Format](../../agent/task-planner.md#plan-format); test timing and authoring belong
+task-planner's Plan Format; test timing and authoring belong
 to [Phase 2 Tests](../corvus-phase-2/SKILL.md#tests). Material execution divergence stops
 work and returns to planning through that skill.
 
@@ -112,7 +112,7 @@ escalates the remaining failures to the user (corvus-auto halts and reports).
 ## 4c: Record One Phase Boundary
 
 After PASS, send one batched task-planner dispatch using its
-[PROGRESS_UPDATE mode](../../agent/task-planner.md#progress_update):
+PROGRESS_UPDATE mode:
 
 ```markdown
 **MODE**: PROGRESS_UPDATE

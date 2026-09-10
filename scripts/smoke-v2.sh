@@ -21,6 +21,8 @@
 #                        (`opencode2 api GET /api/{command,skill,mcp}`). Accepted
 #                        but INERT with --tarball: every one of those assertions
 #                        requires a host boot, which that mode forbids.
+#   --refs               evaluate sibling reference reads from registered agent
+#                        maps with the local host matcher (included in --full).
 #   --tarball            npm-specifier resolution EMULATION. Does NOT boot the
 #                        host: for an npm specifier the host runs ITS OWN
 #                        registry install and resolves the entry against that
@@ -81,6 +83,7 @@ readonly REPO_ROOT
 
 MODE="local"
 FULL=0
+REFS=0
 REGISTRY_SPEC=""
 WORK=""
 SERVICE_PORT=""
@@ -95,12 +98,13 @@ die() {
 
 usage() {
   cat <<'EOF'
-Usage: bash scripts/smoke-v2.sh [--full] [--tarball | --registry <spec>]
+Usage: bash scripts/smoke-v2.sh [--full] [--refs] [--tarball | --registry <spec>]
 
   (no flags)          local-directory load gate under a real opencode2 boot
   --full              also assert the whole packaged corpus is registered
-                      (agents, commands, skills, and the default MCP server;
+                      (agents, commands, skills, default MCP server, and refs;
                       accepted but INERT with --tarball)
+  --refs              probe sibling reference reads (also INERT with --tarball)
   --tarball           npm-specifier resolution emulation (no host boot)
   --registry <spec>   POST-PUBLISH ONLY real-host load of an npm specifier
   -h, --help          show this help
@@ -121,6 +125,11 @@ parse_args() {
     case "$1" in
       --full)
         FULL=1
+        REFS=1
+        shift
+        ;;
+      --refs)
+        REFS=1
         shift
         ;;
       --tarball)
@@ -337,6 +346,7 @@ run_boot_mode() {
     assert_full_skill_corpus
     assert_full_mcp_registration
   fi
+  if ((REFS)); then assert_reference_readability; fi
 
   section "result"
   log "PASS: plugin '$PLUGIN_ID' loaded from '$entry' under opencode2 (mode: $MODE, full: $FULL)"
@@ -534,6 +544,22 @@ assert_full_mcp_registration() {
   assert_api_corpus "MCP servers" /api/mcp "$MCP_SERVER_NAME"
 }
 
+assert_reference_readability() {
+  section "--refs: sibling reference readability (local matcher, host-registered maps)"
+  local installed_root="$REPO_ROOT"
+  if [[ "$MODE" == "registry" ]]; then
+    local entrypoints entrypoint
+    entrypoints="$(find_loading_lines "$REGISTRY_SPEC" |
+      sed -E 's/.*entrypoint="?([^" ]+)"?.*/\1/' | sed -E 's/\?.*$//' | sort -u)"
+    [[ -n "$entrypoints" && "$entrypoints" != *$'\n'* ]] || die "ambiguous installed root for refs probe"
+    entrypoint="$entrypoints"
+    [[ "$entrypoint" == */node_modules/"$PACKAGE_NAME"/dist/server.js ]] || die "unrecognized refs entrypoint"
+    installed_root="${entrypoint%/dist/server.js}"
+  fi
+  run_capped "$CAP_SECS" bun run "$REPO_ROOT/scripts/probe-refs.ts" "$WORK/debug-agents.json" "$installed_root" ||
+    die "reference-readability probe failed"
+}
+
 # --tarball: emulate the host's npm-specifier entry resolution without booting
 # it. Pack → isolated install → identity → Bun.resolveSync subpaths → module
 # shape. Any mismatch exits non-zero.
@@ -545,6 +571,8 @@ run_tarball_mode() {
   make_workspace
   if ((FULL)); then
     log "note: --full is INERT with --tarball (its only behavior needs a host boot, which this mode forbids)"
+  elif ((REFS)); then
+    log "note: --refs is INERT with --tarball (requires host-registered agent maps)"
   fi
 
   local pack_dir="$XDG_CACHE_HOME/smoke-tarball"

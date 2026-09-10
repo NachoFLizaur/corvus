@@ -33,7 +33,6 @@ permission:
     "gh api --method GET *": "allow"
     "gh pr list --state open --json number,title,headRefName,files --limit 20": "allow"
     "gh repo view *": "allow"
-    "gh repo clone * /tmp/*": "allow"
 ---
 
 # Code Explorer

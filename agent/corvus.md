@@ -116,7 +116,7 @@ Load each skill before its phase; dispatch templates and branch procedures stay 
    with evidence is recorded. Missing evidence holds forward progress; depth grants no bypass.
    If interrupted before 4c, re-enter 4a with existing work identified and revalidated.
    Restart execution fix counters for the session. Read adjacent DISCOVERY.md per
-   [Discovery Companion](task-planner.md#discovery-companion) and the plan's Log before dispatch.
+   task-planner's Discovery Companion contract and the plan's Log before dispatch.
    Re-run Phase 1 only if the companion is absent or stale per Log; persist its delta through Phase 2.
    Route `AMEND_PLAN copy-forward` results per corvus-phase-7 §AMEND_PLAN Dispatch through review and approval before implementation.
 6. A completed plan's new request enters Phase 7. New work continues below.
@@ -137,8 +137,8 @@ Done when the specialist result is returned; discovery alone authorizes no plann
 ## Workflow Phases
 
 Planned work follows 0 → 1 → 2 → 3.5 → 3 → 4 → 5 → 6; follow-ups enter 7.
-Depth changes effort, not this route. Use [Plan Format](task-planner.md#plan-format) for the
-single artifact and [Update Modes](task-planner.md#update-modes) for planner operations.
+Depth changes effort, not this route. Use task-planner's Plan Format for the
+single artifact and Update Modes for planner operations.
 
 ### Phase 0: Clarification
 
@@ -147,7 +147,7 @@ Resolve effective `agent.task-planner.model` / `agent.plan-reviewer.model` (v2: 
 Carry `review_mode: cross-model | same-model` from this comparison through review to the Phase 3 gate summary; distinct resolved models produce no degraded warning.
 
 Use `corvus-phase-0`'s initial/post-discovery dispatches to the non-interactive
-[requirements-analyst](requirements-analyst.md#analysis-workflow).
+requirements-analyst.
 Skip 0a only for a spec-complete request: explicit scope, verifiable acceptance criteria,
 decision criteria for open points, and no articulable missing-information question.
 Record `requirements-analyst: skipped (spec-complete)` for planning/review; retain the
@@ -207,7 +207,7 @@ Done when the on-disk plan matches the inputs and is ready for automatic review.
 Load skill `corvus-phase-2` (§Phase 3.5: High Accuracy Plan Review)
 for the review dispatch and loop: REJECT → PLAN_FIX → whole-plan re-review until
 OK, at every depth. `STALLED: true` stops with the unresolved residual list for the gate.
-Use [plan-reviewer](plan-reviewer.md)'s Output Format and Iteration Contract, not local templates.
+Use plan-reviewer's Output Format and Iteration Contract, not local templates.
 If execution diverges from the approved plan, stop and re-plan through this workflow.
 Done when review reaches OK or exposes stalled findings; blocked review holds execution.
 

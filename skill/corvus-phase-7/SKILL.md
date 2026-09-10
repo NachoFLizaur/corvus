@@ -67,7 +67,7 @@ Done when the continuation is approved, implemented, and validated, or a named b
 
 ## AMEND_PLAN Dispatch
 
-Use task-planner's [AMEND_PLAN input and preservation contract](../../agent/task-planner.md#amend_plan); for add-fix-tasks, identify the phase in Payload.
+Use task-planner's AMEND_PLAN input and preservation contract; for add-fix-tasks, identify the phase in Payload.
 ```markdown
 **TASK**: Amend the plan for <requested continuation or fixes>.
 **MODE**: AMEND_PLAN

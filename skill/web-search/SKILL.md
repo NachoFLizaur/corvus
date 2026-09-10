@@ -5,7 +5,7 @@ description: Quick web search methodology for focused factual lookups. Loaded by
 
 # Quick Web Search Methodology
 
-Use the [researcher Complexity Router](../../agent/researcher.md#complexity-router)
+Use the researcher Complexity Router (owner pointer: `../../agent/researcher.md#complexity-router`; informational, no file read)
 to select this branch, including focused version/compatibility and error-message lookups.
 
 ## Workflow
@@ -26,12 +26,12 @@ Done when the answer is supported by snippets or promising pages are selected.
 ### Step 3: Fetch Top Pages
 
 Use `web-research_fetch_pages` for selected pages where snippets leave gaps; fetch at
-most 3 pages. Apply the researcher's [Evidence Discipline](../../agent/researcher.md#evidence-discipline).
+most 3 pages. Apply the researcher's Evidence Discipline (owner pointer: `../../agent/researcher.md#evidence-discipline`; informational, no file read).
 Done when the direct answer is supported or an Escalation trigger below is reached.
 
 ### Step 4: Synthesize Answer
 
-Use the researcher's [Output Format](../../agent/researcher.md#output-format), with a
+Use the researcher's Output Format (owner pointer: `../../agent/researcher.md#output-format`; informational, no file read), with a
 minimal code example when useful. Done when the Quality Bar is met or unresolved
 coverage is explicit under the fallback contract.
 
@@ -50,5 +50,5 @@ Done when the deep-research skill takes over the unresolved question.
 
 ## Fallback Behavior
 
-Follow the researcher's [Three-Tier Fallback Chain](../../agent/researcher.md#three-tier-fallback-chain).
+Follow the researcher's Three-Tier Fallback Chain (owner pointer: `../../agent/researcher.md#three-tier-fallback-chain`; informational, no file read).
 Done when the answer or tooling-limited coverage is reported under that contract.

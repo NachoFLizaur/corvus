@@ -5,6 +5,8 @@ import { join } from "node:path"
 import { loadAgents } from "../load-agents"
 import { agentDir, commandDir, root, skillDir } from "../paths"
 import { toV2Permissions } from "../to-v2-permissions"
+import { evaluateRules } from "../evaluate-rules"
+import { PROTECTED_AGENTS } from "../protected-agents"
 import type { Cleanup } from "../v2/types"
 import { registerAgents } from "../v2/register-agents"
 import { BASELINE_RULES, createFakeContext, defaultInfo } from "./fake-context"
@@ -50,6 +52,33 @@ const withCorpus = async (files: Record<string, string>, body: () => Promise<voi
 }
 
 describe("registerAgents", () => {
+  test("registers last-position root grants without widening protected agents, including replay", async () => {
+    const fake = createFakeContext()
+    await registerAgents(fake.ctx)
+    fake.replay()
+    const pattern = `${root.replaceAll("\\", "/")}/*`
+    for (const [name, config] of Object.entries(corpus)) {
+      const rules = fake.agents.get(name)!.permissions
+      if (config.permission?.skill === "allow") {
+        expect(rules.at(-1)).toEqual({ action: "external_directory", resource: pattern, effect: "allow" })
+        expect(rules.filter(rule => rule.resource === pattern)).toHaveLength(1)
+      } else expect(rules.some(rule => rule.resource === pattern)).toBe(false)
+      if (config.permission?.skill === "allow" || (PROTECTED_AGENTS as readonly string[]).includes(name)) {
+        for (const reference of ["corvus-review-extras/schemas.md", "corvus-phase-4/reference/dispatch-templates.md"])
+          expect(evaluateRules(rules, "external_directory", `${root}/skill/${reference}`))
+            .toBe(config.permission?.skill === "allow" ? "allow" : "deny")
+      }
+    }
+  })
+
+  test("runs the standalone refs probe with its in-memory negative control", () => {
+    const result = Bun.spawnSync([process.execPath, "run", join(root, "scripts/probe-refs.ts")])
+    expect(result.stderr.toString()).toBe("")
+    expect(result.exitCode).toBe(0)
+    expect(result.stdout.toString()).toContain("stripped runtime grant → deny")
+    expect(result.stdout.toString()).toContain("PASS: reference readability")
+  })
+
   test("registers every corpus agent through a single transform", async () => {
     const fake = createFakeContext()
 

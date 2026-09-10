@@ -1,8 +1,9 @@
 import { describe, expect, test } from "bun:test"
 import { loadAgents } from "../load-agents"
-import { agentDir } from "../paths"
+import { agentDir, root } from "../paths"
 import { toV2Agent } from "../to-v2-agent"
 import { renameAction, toV2Permissions } from "../to-v2-permissions"
+import { evaluateRules } from "../evaluate-rules"
 
 /**
  * Translator contract tests (task 06).
@@ -22,6 +23,21 @@ const translate = (frontmatter: Record<string, unknown>, prompt = "Body") =>
   toV2Agent({ name: "fixture", config: { ...frontmatter, prompt } })
 
 describe("toV2Agent over the real corpus", () => {
+  test("keeps the runtime grant last across translation and denies after its removal", () => {
+    const pattern = `${root.replaceAll("\\", "/")}/*`
+    for (const [name, config] of Object.entries(corpus)) {
+      const rules = toV2Agent({ name, config }).fields.permissions!
+      if (config.permission?.skill === "allow")
+        expect(rules.at(-1)).toEqual({ action: "external_directory", resource: pattern, effect: "allow" })
+      else expect(rules.some(rule => rule.resource === pattern)).toBe(false)
+    }
+    const rules = toV2Agent({ name: "corvus-review", config: corpus["corvus-review"] }).fields.permissions!
+    for (const resource of [`${root}/skill/corvus-review-extras/schemas.md`, `${root}/skill/corvus-review-extras/*`]) {
+      expect(evaluateRules(rules, "external_directory", resource)).toBe("allow")
+      expect(evaluateRules(rules.slice(0, -1), "external_directory", resource)).toBe("deny")
+    }
+  })
+
   test("translates all 16 agents with zero warnings", () => {
     expect(ids).toHaveLength(16)
 

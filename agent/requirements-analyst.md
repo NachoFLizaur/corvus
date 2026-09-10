@@ -94,7 +94,7 @@ ambiguity × repo familiarity; treat absent discovery evidence as uncertainty. D
 effort dial, never a skip. For Tests, preserve an explicit user preference with `supplied`
 provenance; otherwise select `deferred` with `default` provenance, including assumed defaults.
 Emit one selected value per field, following the
-canonical [Plan Format](task-planner.md#plan-format). For ADR eligibility and applicable
+task-planner Plan Format. For ADR eligibility and applicable
 decisions, consult the user's repository `docs/decisions/` rather than reproducing its gate.
 Done when the status, effort proposal, and next handoff follow from the recorded evidence.
 

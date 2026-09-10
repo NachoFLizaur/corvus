@@ -32,13 +32,14 @@ Never modify files; return proposed corrections to the caller.
    At deep depth, explicitly account for every touched ADR scope; an omitted plan link
    does not exempt a decision. Check the plan's Decisions links against those records.
    Done when applicable decisions agree with the plan or have concrete contradictions.
-3. Check the shape against [Plan Format](task-planner.md#plan-format), including the
+3. Check task-planner Plan Format: ordered H2s Intent, User Requirements (Immutable), Acceptance Criteria, Decisions, Fog of War, Tasks, Gates, Log;
+   header lines `**Depth**: quick | standard | deep`, `**Tests**: deferred | none`, `**Status**: [ ] Planning | [~] In Progress | [x] Complete`, each with one selected value; depth reason/source and `**Source**` present. Verify the
    immutable section's byte-for-byte fidelity. Trace every requirement to acceptance
    criteria and owning tasks. Check the selected test policy using corvus-phase-2's Tests
    section. Keep implementation paths, code, and command inventories out of planned work;
    ADR links and dispatch history in Log have their schema-defined roles.
    Done when requirements, task outcomes, and verification obligations all have coverage.
-4. Trace every `blocks:` edge using Plan Format's direction. Verify unique task IDs,
+4. Trace every outgoing `blocks:` edge: T1 listing T2 means T2 waits for T1. Verify unique task IDs,
    existing edge targets, acyclicity, and phase boundaries that respect dependencies and
    retain each 4b gate. Check slices can be verified alone and wide refactors expand before
    migration, then contract after consumers move. Resolve shared-surface sequencing hazards
