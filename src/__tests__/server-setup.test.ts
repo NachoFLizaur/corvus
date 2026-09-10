@@ -1,4 +1,6 @@
+import type { PluginInput } from "@opencode-ai/plugin"
 import { describe, expect, test } from "bun:test"
+import { resolve } from "node:path"
 import plugin from "../server"
 import type { SetupContext } from "../v2/types"
 import { createFakeContext, type FakeContext } from "./fake-context"
@@ -7,8 +9,9 @@ import { createFakeContext, type FakeContext } from "./fake-context"
  * The whole v2 entry: `plugin.setup(ctx)` composing all five registrars
  * (tasks 03, 07, 08, 10, 11).
  *
- * Imports come from `src/`, not `dist/`, so this file needs no build and no host
- * at runtime; the entry SHAPE assertions against `dist/server.js` stay in
+ * The v2 setup tests import `src/` and need no host at runtime. The v1 hook
+ * comparison imports `dist/index.js`, so run the build first. Entry SHAPE
+ * assertions against `dist/server.js` stay in
  * `build.test.ts`. No test here spawns a process: `setup()` registers, and only a
  * command invocation would reach a shell.
  */
@@ -87,6 +90,19 @@ const snapshot = (fake: FakeContext) => ({
 })
 
 const ruleCounts = (fake: FakeContext) => [...fake.agents].map(([id, agent]) => [id, agent.permissions.length] as const)
+
+describe("plugin.server", () => {
+  test("returns the same v1 hooks shape as the built root entry", async () => {
+    const { default: legacyPlugin } = await import(resolve(import.meta.dir, "../../dist/index.js"))
+    const fakeV1Input = {} as PluginInput
+
+    const hooks = await plugin.server(fakeV1Input)
+    const legacyHooks = await legacyPlugin(fakeV1Input)
+
+    expect(Object.keys(hooks).sort()).toEqual(Object.keys(legacyHooks).sort())
+    expect(typeof hooks.config).toBe("function")
+  })
+})
 
 describe("plugin.setup", () => {
   test("registers the whole packaged corpus in the fixed registrar order", async () => {

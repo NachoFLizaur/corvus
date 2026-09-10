@@ -115,7 +115,7 @@ These instructions target OpenCode v1's config layout. On OpenCode v2, install t
 
 ### OpenCode v2
 
-Corvus ships one package with two entry points: `dist/index.js` for OpenCode v1 (1.18.x) and `dist/server.js` for OpenCode v2, which the v2 host resolves through the `corvus-ai/server` subpath. Both register the same 16 agents, 4 commands, 18 skills, and the default `web-research` MCP server.
+Corvus ships one package with two entry points: `dist/index.js` remains the legacy OpenCode v1 function entry, while `dist/server.js` serves both OpenCode 1.18.30+ and OpenCode v2 through the `corvus-ai/server` subpath. The shared entry exports `{ id, server, setup }`: v1 invokes the legacy hook function through `server`, and v2 invokes `setup`. Both register the same 16 agents, 4 commands, 18 skills, and the default `web-research` MCP server.
 
 Install with the CLI, which writes the plural `plugins` key into `$XDG_CONFIG_HOME/opencode/opencode.json` (default `~/.config/opencode`):
 

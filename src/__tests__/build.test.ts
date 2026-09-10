@@ -65,7 +65,7 @@ describe("built plugin", () => {
   })
 })
 
-describe("v2 entry (dist/server.js)", () => {
+describe("shared v1/v2 entry (dist/server.js)", () => {
   test("dist/server.js exists", () => {
     expect(existsSync(resolve(DIST, "server.js"))).toBe(true)
   })
@@ -74,7 +74,7 @@ describe("v2 entry (dist/server.js)", () => {
     expect(existsSync(resolve(DIST, "server.d.ts"))).toBe(true)
   })
 
-  test("default export is an object with id \"corvus\" and a setup function", async () => {
+  test("default export has id \"corvus\", server and setup functions, and no tui", async () => {
     // opencode v2's plugin loader decodes the default export as an OBJECT
     // { id, setup } and rejects v1's default async function with
     // SchemaError: Expected object at ["default"].
@@ -83,7 +83,25 @@ describe("v2 entry (dist/server.js)", () => {
     expect(typeof plugin).toBe("object")
     expect(typeof plugin.id).toBe("string")
     expect(plugin.id).toBe("corvus")
+    expect(typeof plugin.server).toBe("function")
     expect(typeof plugin.setup).toBe("function")
+    expect("tui" in plugin).toBe(false)
+  })
+
+  test("v1 detect mode accepts the shared entry and rejects the old setup-only shape", async () => {
+    // Simulate readV1Plugin's server detection for default objects: an id alone
+    // opts into the v1 module contract, even when setup is present.
+    const detectServer = (value: Record<string, unknown>) => {
+      if (!("id" in value) && !("server" in value) && !("tui" in value)) return
+      if (typeof value.server !== "function") {
+        throw new TypeError("Detected v1 modules require server()")
+      }
+      return value.server
+    }
+    const { default: plugin } = await import(resolve(DIST, "server.js"))
+
+    expect(() => detectServer({ id: plugin.id, setup: plugin.setup })).toThrow(TypeError)
+    expect(detectServer(plugin)).toBe(plugin.server)
   })
 
   test("root server.js shim re-exports the dist default unchanged", async () => {

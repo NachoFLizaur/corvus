@@ -1,4 +1,6 @@
+import type { PluginModule } from "@opencode-ai/plugin"
 import type { Plugin } from "@opencode-ai/plugin-v2"
+import legacyPlugin from "./index"
 import { enforceProtected } from "./v2/enforce-protected"
 import { registerAgents } from "./v2/register-agents"
 import { registerCommands } from "./v2/register-commands"
@@ -27,12 +29,13 @@ const REGISTRARS: readonly Registrar[] = [
 ]
 
 /**
- * Corvus AI plugin — OpenCode v2 entry (built to `dist/server.js`).
+ * Corvus AI plugin — shared OpenCode v1/v2 entry (built to `dist/server.js`).
  *
- * The v2 host decodes the default export as an OBJECT `{ id, setup }`; v1's
- * default async function is rejected (`Expected object at ["default"]`), which
- * is why `dist/index.js` remains the untouched v1 entry and this module builds
- * to a separate artifact. SDK imports here are TYPE-ONLY. A value import (for
+ * OpenCode 1.18.30+ resolves `exports["./server"]` before `main` and requires
+ * a callable `server` on a default object with `id`. The v2 host requires
+ * `{ id, setup }`; each loader ignores the other handler. `server` reuses the
+ * legacy hook function, and `dist/index.js` remains the root function entry.
+ * SDK imports here are TYPE-ONLY. A value import (for
  * example `Plugin.define`, which is an identity function) would turn the beta
  * SDK into a runtime dependency and break v1 hosts that do not ship it, so
  * `dist/server.js` must contain zero runtime `@opencode-ai` imports.
@@ -56,6 +59,7 @@ const REGISTRARS: readonly Registrar[] = [
  */
 const plugin = {
   id: "corvus",
+  server: legacyPlugin,
   setup: async (ctx: Plugin.Context): Promise<Plugin.Cleanup> => {
     const cleanups: Cleanup[] = []
 
@@ -77,6 +81,6 @@ const plugin = {
 
     return unwind
   },
-} satisfies Plugin.Plugin
+} satisfies Plugin.Plugin & PluginModule
 
 export default plugin
