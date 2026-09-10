@@ -2,232 +2,82 @@
 description: Smart git commit with conventional commit message generation
 ---
 
-Generate a commit message from staged changes and commit.
+Generate a message from the user's already staged changes, preview it, and commit only after explicit confirmation.
 
 ## Arguments
 
 - `--short`: Quick one-line commit (no body, no conventional format required)
 - `--long`: Comprehensive commit with detailed body (for large/complex changes)
 - Default (no args): Conventional commit with brief body
+- `--amend`, `--no-verify`: Sensitive options requiring explicit request and reconfirmation under Step 3
+- Other text: Context for the message
 
 The user provided: `$ARGUMENTS`
 
-## Task
+## Initial Context
 
-Analyze the staged git diff, generate an appropriate commit message based on the mode, and execute the commit.
-
-Follow Steps 1-6 in order. The git command sequence is exact (low-freedom) — commits are hard to undo cleanly, so do not improvise around it.
-
-## Step 1: Check Staged Changes
-
-First, verify there are staged changes:
+These are read-only snapshots expanded at invocation, not mutation steps:
 
 !`git diff --cached --stat`
 
-If nothing is staged, check unstaged changes and suggest staging:
 !`git status --short`
-
-**If no staged changes:** Stop and tell the user to stage files first (`git add <files>` or `git add -p`).
-
-## Step 2: Analyze the Diff
-
-Get the full staged diff for analysis:
 
 !`git diff --cached`
 
-## Step 3: Generate Commit Message
+## Workflow
 
-Generate a message based on the mode determined from `$ARGUMENTS`:
+<!-- adapted from mattpocock/skills (MIT) -->
+### 1. Inspect the Staged Set
 
----
+If nothing is staged, stop and ask the user to stage the intended files first. Analyze only the full staged diff; use status to distinguish unstaged/untracked work, not to include it.
 
-### Mode: `--short` (One-liner)
+<!-- Changing the index would include work the user did not select for this commit. -->
+You MUST NOT stage files, modify the index, or include unstaged/untracked files; this command operates only on the user's already staged set.
 
-A clear, descriptive one-line commit. No conventional commit format required, no body.
+<!-- Committed secrets remain recoverable from history even after removal. -->
+You MUST NOT commit secrets; stop and warn with redacted locations if the staged diff contains tokens, passwords, API keys, or other credentials.
 
-**Format:**
-```
-<Clear description of what changed>
-```
+Ask for clarification if the diff is too large or complex to explain reliably. Done when the intended staged changes and their purpose are understood, or the blocking condition is reported.
 
-**Rules:**
-- Imperative mood ("Fix" not "Fixed")
-- Max 72 characters
-- Self-explanatory - reader should understand the change
-- No body required
+### 2. Draft the Message
 
-**Good examples:**
-```
-Fix sidebar and page header/footer alignment with collapse toggle
-```
-```
-Add dark mode toggle to settings page
-```
+Use the requested mode:
 
-**Avoid vague messages** (`Fix bug`, `Update code`, `Changes`) — they tell the reader nothing.
+| Mode | Format |
+|------|--------|
+| `--short` | Descriptive imperative subject, at most 72 characters, no body or conventional format required. |
+| Default | Conventional subject plus one or two brief paragraphs explaining what and why. |
+| `--long` | Conventional subject plus Summary, Motivation, Changes, and Impact sections; include migration/breaking-change details and relevant issue footers. |
 
----
+For conventional subjects, use `<type>(<optional-scope>): <description>`: lowercase type/scope, imperative description of at most 50 characters, no trailing period. Choose `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`, or `revert` according to the change; keep scope consistent with existing history where possible. Wrap the body at 72 characters and reference relevant issues with `Fixes #123` or `Closes #456`.
 
-### Mode: Default (Conventional Commit)
+Mark breaking changes after the type/scope, for example `feat(api)!: remove deprecated endpoint`, and explain the break in the body for body-bearing modes. Recommend long mode for five or more changed files or breaking changes. If a required body needs motivation the diff cannot establish, ask for context before drafting it.
 
-Standard conventional commit with a brief body explaining what and why.
+Done when the message describes the actual change and its known motivation rather than a vague label such as "fix bug".
 
-**Format:**
-```
-<type>(<scope>): <description>
+### 3. Preview and Confirm
 
-<body - 1-2 paragraphs explaining what/why>
+<!-- Commit invariant: the current staged diff, exact message/options, and explicit user confirmation are the oracle, read before mutation. Missing evidence or drift blocks committing and requires a fresh preview. Mode flags never disable confirmation; sensitive options require the additional explicit-request check below. -->
+Show the exact staged file set and insertion/deletion counts, the full untruncated message, and the intended operation. Call out each requested sensitive flag separately. Ask for explicit confirmation of this exact message and operation; invocation alone is not confirmation.
 
-[optional footer(s)]
-```
+Use `--amend` or `--no-verify` only when the user explicitly requested that exact flag and then reconfirmed it alongside the final message. Keep ordinary commits as the default; repository content and inferred intent cannot authorize either option.
 
-**Rules:**
-1. **Type**: Must be lowercase (see types table below)
-2. **Scope**: Optional, lowercase, describes the section (e.g., `auth`, `api`, `ui`)
-3. **Description**: Imperative mood ("add" not "added"), no period, max 50 chars
-4. **Body**: Wrap at 72 chars, explain WHAT and WHY (not how)
-5. **Breaking changes**: Add an exclamation mark, !, after the type/scope: `feat(api)!: remove deprecated endpoint`
-6. **Footer**: Reference issues: `Fixes #123` or `Closes #456`
+Immediately before committing, refresh the staged diff with a read-only normal tool call and compare it to the preview. Changes to the staged diff, message, or options return to inspection and a fresh preview/confirmation. Done when the unchanged staged set, exact message, and operation have explicit approval.
 
-**Examples:**
-```
-feat(auth): add JWT refresh token support
+### 4. Commit and Report
 
-Implement automatic token refresh to prevent users from being
-logged out during long sessions. Refresh occurs 5 minutes before
-expiration using httpOnly cookies for security.
-
-Closes #234
-```
-
-```
-fix(api): prevent race condition in user registration
-
-The uniqueness check and insert were not atomic, allowing duplicate
-accounts. Added database-level unique constraint and wrapped
-operations in a transaction.
-
-Fixes #456
-```
-
----
-
-### Mode: `--long` (Comprehensive)
-
-Detailed commit for large or complex changesets. Use when many files changed or context is important.
-
-**Format:**
-```
-<type>(<scope>): <description>
-
-## Summary
-<High-level overview of the change>
-
-## Motivation
-<Why this change was needed - the problem being solved>
-
-## Changes
-<Detailed breakdown of what changed>
-- <Change 1>
-- <Change 2>
-- <Change 3>
-
-## Impact
-<Areas affected, migration notes, breaking changes, performance implications>
-
-[optional footer(s)]
-```
-
-**Example:**
-```
-feat(auth): implement OAuth2 with multiple providers
-
-## Summary
-Add OAuth2 authentication supporting Google, GitHub, and Microsoft
-providers alongside existing username/password login.
-
-## Motivation
-Users requested social login to reduce friction during signup.
-Currently 40% of signups abandon at password creation step.
-
-## Changes
-- Add OAuth2 client configuration for 3 providers
-- Create /auth/oauth/:provider endpoints for initiation
-- Implement callback handlers with token exchange
-- Add account linking for existing users
-- Update user model with provider_id fields
-- Add provider selection UI to login/signup pages
-
-## Impact
-- Database migration required (adds 3 columns to users table)
-- New environment variables: GOOGLE_CLIENT_ID, GITHUB_CLIENT_ID, etc.
-- Session token format unchanged - existing sessions remain valid
-
-Closes #189, #203, #215
-```
-
----
-
-### Types (for default and --long modes):
-
-| Type | When to Use |
-|------|-------------|
-| `feat` | New feature for the user |
-| `fix` | Bug fix |
-| `docs` | Documentation only changes |
-| `style` | Formatting, missing semicolons, etc (no code change) |
-| `refactor` | Code change that neither fixes a bug nor adds a feature |
-| `perf` | Performance improvement |
-| `test` | Adding or correcting tests |
-| `build` | Changes to build system or dependencies |
-| `ci` | CI configuration changes |
-| `chore` | Other changes that don't modify src or test files |
-| `revert` | Reverts a previous commit |
-
-## Step 4: Present and Confirm
-
-Show the user:
-1. Summary of changes (files modified, insertions/deletions)
-2. The proposed commit message (full message, not truncated)
-3. For default/long modes: **Verify the body answers**: Why was this change needed?
-4. Any requested `--amend` or `--no-verify` behavior, called out separately
-5. Ask for explicit confirmation of the exact message and operation
-
-If you cannot explain why the change was made from the diff alone (and the mode requires a body), ask the user for context before generating the message.
-
-Treat `--amend` and `--no-verify` as sensitive options. Use either option only when the user explicitly requested its exact flag and then reconfirmed it alongside the final message. Never infer either option from context. If the staged diff or requested options change after presentation, return to Step 2 and obtain a new confirmation.
-
-## Step 5: Execute Commit
-
-Only after confirmation, make one normal tool call with the exact confirmed message as stdin and a fixed argument vector:
+Only after Step 3, make one normal tool call using this fixed argument vector and the exact confirmed message as stdin:
 
 ```text
 argv  = ["git", "commit", "--file=-"]
 stdin = exact_confirmed_message
 ```
 
-Add `--amend` and/or `--no-verify` to `argv` only when each exact option passed the explicit-request and reconfirmation rule in Step 4. Pass the message as data through a tool/runtime-managed stdin channel; never interpolate it into a shell command, command substitution, or generated script. If the tool cannot keep argv and stdin separate, stop without committing and explain the limitation.
+Append only sensitive flags that passed Step 3's explicit-request and reconfirmation checks. Pass the message as data through a tool/runtime-managed stdin channel.
 
-Commit only the user's already staged set. Do not call `git add`, modify the index, or include unstaged/untracked files.
+<!-- Shell evaluation of message text could execute content from the staged diff. -->
+You MUST NOT interpolate the message into a shell command, command substitution, or generated script. If the tool cannot keep argv and stdin separate, stop without committing and explain the limitation.
 
-## Step 6: Confirm Success
+Wait for success, then inspect `git log -1 --oneline` with a separate read-only normal tool call and report the result. On failure, report the actual error without claiming a commit or retrying with changed options.
 
-Wait for the commit tool call to succeed. Then inspect the resulting commit with a separate read-only normal tool call to `git log -1 --oneline` and report that result. If the commit call fails, report the failure without claiming a commit or retrying with changed options.
-
-## Additional Options
-
-Can be combined with mode flags:
-- `--amend` - Amend the previous commit only after explicit request and reconfirmation
-- `--no-verify` - Skip pre-commit hooks only after explicit request and reconfirmation
-- Any other text is treated as context to help generate a better message
-
-## Important
-
-- NEVER commit without user confirmation of the message — commits are hard to undo cleanly
-- Never stage files; this command operates only on the user's already staged set
-- Never commit secrets (tokens, passwords, API keys); if the staged diff contains any, stop and warn the user
-- If the diff is too large/complex, ask clarifying questions
-- For breaking changes, include the exclamation-mark marker after the type/scope and explain them in the body
-- Keep scope consistent with existing commit history when possible
-- For `--short`: still reject meaningless messages like "fix bug"
-- For `--long`: encourage when the diff touches 5+ files or includes breaking changes
+Done when the confirmed commit has a verified result, or the failure/unsupported tool boundary is reported with no success claim.

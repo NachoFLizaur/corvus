@@ -91,9 +91,10 @@ describe("enforceProtected permission boundary", () => {
 
     const allowlisted = [
       "gh api --method GET repos/o/r/pulls/1 -H Accept:application/vnd.github+json",
-      "gh api --method POST repos/o/r/pulls/1/reviews --input .corvus/review-payload.json",
-      "jq . .corvus/review-payload.json",
-      "python3 -m json.tool .corvus/review-payload.json",
+      "gh api --method POST repos/o/r/pulls/1/reviews --input .corvus/reviews/o__r__pr1/post-request.json",
+      "jq . .corvus/reviews/o__r__pr1/post-request.json",
+      "python3 -m json.tool .corvus/reviews/o__r__pr1/post-request.json",
+      "shasum -a 256 .corvus/reviews/o__r__pr1/post-request.json",
     ]
 
     for (const command of allowlisted) {
@@ -108,26 +109,46 @@ describe("enforceProtected permission boundary", () => {
       expect(decision.message).toBeUndefined()
     }
 
-    const denied = await fake.evaluate({
-      agent: "pr-comment-writer",
-      action: "shell",
-      resources: ["gh api --method DELETE repos/o/r/pulls/1"],
-      effect: "allow",
-    })
-
-    expect(denied.effect).toBe("deny")
-    expect(denied.message).toBe(boundaryMessage("pr-comment-writer", "shell"))
+    for (const command of [
+      "gh api --method DELETE repos/o/r/pulls/1",
+      "gh api --method POST repos/o/r/issues/1/comments --input .corvus/reviews/o__r__pr1/post-request.json",
+      "gh api --method POST repos/o/r/pulls/1/comments --input .corvus/reviews/o__r__pr1/post-request.json",
+      "gh api --method POST repos/o/r/pulls/1/reviews --input .corvus/review-payload.json",
+      "gh api --method POST repos/o/r/pulls/1/reviews --input /tmp/post-request.json",
+      "gh pr review 1 --approve",
+      "shasum -a 256 /tmp/post-request.json",
+      "shasum -a 256 .corvus/tasks/1/post-request.json",
+      "shasum -a 256 .corvus/reviews/o__r__pr1/other.json",
+      "jq . /tmp/post-request.json",
+      "python3 -m json.tool /tmp/post-request.json",
+    ]) {
+      const denied = await fake.evaluate({ agent: "pr-comment-writer", action: "shell", resources: [command], effect: "allow" })
+      expect({ command, effect: denied.effect }).toEqual({ command, effect: "deny" })
+      expect(denied.message).toBe(boundaryMessage("pr-comment-writer", "shell"))
+    }
 
     // Fail closed across a multi-resource request: one denied resource is enough,
     // even when another resource in the same request is explicitly allowed.
     const mixed = await fake.evaluate({
       agent: "pr-comment-writer",
-      action: "edit",
-      resources: [".corvus/review-payload.json", "src/index.ts"],
+      action: "shell",
+      resources: [allowlisted[4], "shasum -a 256 /tmp/post-request.json"],
       effect: "allow",
     })
 
     expect(mixed.effect).toBe("deny")
+  })
+
+  test("writer reads the artifact but cannot edit it or reconstruct the retired payload", async () => {
+    const fake = createFakeContext()
+    await enforceProtected(fake.ctx)
+    const artifact = ".corvus/reviews/o__r__pr1/post-request.json"
+    const read = await fake.evaluate({ agent: "pr-comment-writer", action: "read", resources: [artifact], effect: "allow" })
+    expect(read.effect).toBe("allow")
+    for (const action of ["write", "edit", "patch"]) for (const path of [artifact, ".corvus/review-payload.json", "src/index.ts"]) {
+      const decision = await fake.evaluate({ agent: "pr-comment-writer", action, resources: [path], effect: "allow" })
+      expect({ action, path, effect: decision.effect }).toEqual({ action, path, effect: "deny" })
+    }
   })
 
   test("leaves non-protected agents and agentless requests completely alone", async () => {

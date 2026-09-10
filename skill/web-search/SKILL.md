@@ -5,89 +5,50 @@ description: Quick web search methodology for focused factual lookups. Loaded by
 
 # Quick Web Search Methodology
 
-This skill provides the methodology for quick, focused web searches. Use when the complexity router classifies a question as a simple factual lookup, specific API/syntax question, or single-topic query.
-
-## When This Skill Applies
-
-- Simple factual lookups (e.g., "What's the default port for Redis?")
-- Specific API or syntax questions (e.g., "How to use useEffect cleanup?")
-- Single-topic queries with clear, direct answers
-- Version/compatibility checks
-- Error message lookups
+Use the [researcher Complexity Router](../../agent/researcher.md#complexity-router)
+to select this branch, including focused version/compatibility and error-message lookups.
 
 ## Workflow
 
-### Step 1: Formulate Queries (1-3 queries max)
+<!-- adapted from mattpocock/skills (MIT) -->
+### Step 1: Formulate Queries
 
-Craft 1-3 precise, targeted search queries. Each query should approach the topic from a slightly different angle:
-
-```javascript
-web-research_multi_search({
-  queries: [
-    "exact technical question with key terms",
-    "alternative phrasing or related aspect"  // optional 2nd query
-  ],
-  results_per_query: 5
-})
-```
-
-**Query crafting rules**:
-- Use specific technical terms, not natural language
-- Include version numbers when relevant (e.g., "React 19 useEffect")
-- Include error codes/messages verbatim when debugging
-- Max 3 queries — needing more signals deep research (see Escalation below)
+Use `web-research_multi_search` for 1-3 targeted queries with specific technical terms,
+relevant versions, and verbatim error messages. Vary the angle only where useful.
+Done when results address the question or a tooling limitation is recorded.
 
 ### Step 2: Scan Snippets
 
-Review the search result snippets and titles. Identify the 2-3 most relevant URLs:
-- Official documentation (highest priority)
-- Stack Overflow answers with high votes
-- Recent blog posts from known authors
-- GitHub issues/discussions
+Identify 2-3 relevant URLs from titles and snippets. Prioritize official documentation,
+then well-supported answers, known technical authors, and GitHub issues/discussions.
+Done when the answer is supported by snippets or promising pages are selected.
 
-### Step 3: Fetch Top Pages (2-3 pages max)
+### Step 3: Fetch Top Pages
 
-```javascript
-web-research_fetch_pages({
-  urls: ["top-result-url", "second-result-url"],
-  max_chars: 10000  // shorter limit for quick searches
-})
-```
-
-**Page selection rules**:
-- Prefer official docs over third-party
-- Prefer recent content over old
-- Skip pages whose snippets already answered the question
-- Max 3 pages — needing more signals deep research (see Escalation below)
+Use `web-research_fetch_pages` for selected pages where snippets leave gaps; fetch at
+most 3 pages. Apply the researcher's [Evidence Discipline](../../agent/researcher.md#evidence-discipline).
+Done when the direct answer is supported or an Escalation trigger below is reached.
 
 ### Step 4: Synthesize Answer
 
-Combine findings into a concise response following the researcher's output format:
-- TL;DR (1-3 sentences)
-- Direct answer with code example if applicable
-- Source citations
-- Effort estimate
+Use the researcher's [Output Format](../../agent/researcher.md#output-format), with a
+minimal code example when useful. Done when the Quality Bar is met or unresolved
+coverage is explicit under the fallback contract.
 
 ## Quality Bar
 
-- **Sufficient sources**: 1-3 authoritative sources
-- **Answer length**: Concise — typically under 300 words
-- **Citations**: Every claim backed by a source
-- **Confidence**: High (clear answer found) or redirect to deep research if ambiguous
+- **Sources**: 1-3 authoritative sources, cited under Evidence Discipline.
+- **Length**: Typically under 300 words.
+- **Confidence**: High for a clear answer; ambiguity triggers Escalation.
 
 ## Escalation to Deep Research
 
-If during quick search you discover:
-- The question is more complex than initially assessed
-- Multiple conflicting answers exist
-- The topic requires comparative analysis
-- More than 3 sources are needed for a complete answer
+Escalate when the question proves more complex, answers conflict, comparison is needed,
+or a complete answer needs more than 3 queries, pages, or sources. Stop quick search
+and load `skill({ name: "deep-research" })`; carry findings into its methodology.
+Done when the deep-research skill takes over the unresolved question.
 
-**Stop and escalate**: Load the `deep-research` skill instead and restart with the deep methodology.
+## Fallback Behavior
 
-## Anti-Patterns
-
-- **Over-researching**: A simple question needs 2-3 pages, not 10
-- **Query sprawl**: Needing 5+ queries signals deep research — escalate instead
-- **Skipping snippets**: Scan snippets before fetching — the answer is often already there
-- **Ignoring official docs**: When official docs answer the question, stop searching
+Follow the researcher's [Three-Tier Fallback Chain](../../agent/researcher.md#three-tier-fallback-chain).
+Done when the answer or tooling-limited coverage is reported under that contract.

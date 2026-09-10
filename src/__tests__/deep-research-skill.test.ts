@@ -57,6 +57,7 @@ describe("Deep Research Skill", () => {
   test("checklist requires citations", () => {
     // Assert
     expect(content.toLowerCase()).toMatch(/citation/)
+    expect(content).toContain("../../agent/researcher.md#evidence-discipline")
   })
 
   test("checklist requires conflict analysis", () => {
@@ -71,7 +72,8 @@ describe("Deep Research Skill", () => {
 
   test("has structured output template", () => {
     // Assert
-    expect(content).toContain("Executive Summary")
+    expect(content).toContain("../../agent/researcher.md#output-format")
+    expect(content).toContain("starting with its TL;DR")
   })
 
   test("has comparison table in template", () => {
@@ -82,16 +84,21 @@ describe("Deep Research Skill", () => {
   test("has research gaps section", () => {
     // Assert
     expect(content).toContain("Research Gaps")
+    expect(content).toContain("`UNRESOLVED_SCOPE`")
   })
 
-  test("has anti-patterns section", () => {
+  test("has evidence quality guidance", () => {
     // Assert
-    expect(content).toContain("Anti-Pattern")
+    expect(content).toContain("## Evidence Quality")
+    expect(content).toContain("Read full pages, seek disconfirming evidence, and diversify source types")
   })
 
   test("has fallback behavior section", () => {
     // Assert
-    expect(content.toLowerCase()).toMatch(/fallback/)
+    expect(content).toContain("## Fallback Behavior")
+    expect(content).toContain("../../agent/researcher.md#three-tier-fallback-chain")
+    expect(content).toContain("explain checklist shortfalls, including fewer sources")
+    expect(content).toContain("mark the resulting gaps as unresolved")
   })
 
   test("has 5-10 query guidance", () => {

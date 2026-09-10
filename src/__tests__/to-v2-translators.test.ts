@@ -105,7 +105,7 @@ describe("toV2Permissions", () => {
   test("turns a resource map into one rule per resource in frontmatter order", () => {
     const rules = toV2Permissions(corpus["pr-comment-writer"].permission)
 
-    // `agent/pr-comment-writer.md:11-16`: a `*` deny followed by four allowlisted
+    // `agent/pr-comment-writer.md:11-17`: a `*` deny followed by five allowlisted
     // commands. Order is the whole precedence model (last match wins), so the
     // deny MUST come first and the allows MUST keep their authored sequence.
     expect(rules.filter((rule) => rule.action === "shell")).toEqual([
@@ -113,13 +113,15 @@ describe("toV2Permissions", () => {
       { action: "shell", resource: "gh api --method GET repos/*/pulls/* -H Accept:*", effect: "allow" },
       {
         action: "shell",
-        resource: "gh api --method POST repos/*/pulls/*/reviews --input .corvus/review-payload.json",
+        resource: "gh api --method POST repos/*/pulls/*/reviews --input .corvus/reviews/*/post-request.json",
         effect: "allow",
       },
-      { action: "shell", resource: "jq . .corvus/review-payload.json", effect: "allow" },
-      { action: "shell", resource: "python3 -m json.tool .corvus/review-payload.json", effect: "allow" },
+      { action: "shell", resource: "jq . .corvus/reviews/*/post-request.json", effect: "allow" },
+      { action: "shell", resource: "python3 -m json.tool .corvus/reviews/*/post-request.json", effect: "allow" },
+      { action: "shell", resource: "shasum -a 256 .corvus/reviews/*/post-request.json", effect: "allow" },
     ])
-    expect(rules).toHaveLength(25)
+    // T15: 25 + one hash rule - two payload edit/write allows = 24; both denies remain.
+    expect(rules).toHaveLength(24)
   })
 
   test("renames v1 actions onto their v2 tool names, collapsing write and patch", () => {

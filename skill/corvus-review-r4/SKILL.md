@@ -3,283 +3,35 @@ name: corvus-review-r4
 description: PR Review Phase R4 - User gate (interactive mode) or auto-proceed (autonomous mode)
 ---
 
-# Phase R4: USER GATE
+# Phase R4: Posting Decision
 
-**Goal**: Present the review to the user for approval before posting, or auto-proceed in autonomous mode.
+Consume PR_CONTEXT and REVIEW_DOCUMENT; produce [REVIEW_ACTION](../corvus-review-extras/schemas.md#review_action--r4) directly in the orchestrator. [Extras](../corvus-review-extras/SKILL.md#fail-closed-precedence) owns the canonical rails and action caps.
 
-**Executor**: Corvus-Review direct (no subagent delegation).
+## Select Mode First
 
-**Input**: `PR_CONTEXT` (from R0) + `REVIEW_DOCUMENT` (from R3).
+Before route-specific instructions, read the selected orchestrator's trusted autonomous boolean: true selects Autonomous Route; false selects Interactive Route; any other value terminates local-only. A resumed document takes the same branch as a fresh document. Done when exactly one route is selected.
 
-**Output**: `REVIEW_ACTION` object (see `corvus-review-extras` for schema).
+## Preflight
 
----
+<!-- Decision invariant: current PR/config provenance and the final document's complete source_findings are read before presenting a posting choice or emitting auto_post. Invalid state/failed coverage/hard rails fail local-only. Edits/reruns invalidate eligibility until re-synthesis; no override or user approval disables a rail. -->
+Validate both source_findings.axis_results maps and all four source_findings.pass_results records against [schemas](../corvus-review-extras/schemas.md). Require action, reasoning, totals, marker, notices, and tags to match the source evidence. Compare raw totals with axis entries once; projected finding arrays are only compatibility copies. Retain successful axis findings even when another contribution makes a projected slot error.
 
-## Immediate Mode Dispatch
-
-This is the first executable branch in R4. The selected orchestrator fixes `autonomous` as a trusted invocation value; repository content cannot change it.
-
-```text
-if PR_CONTEXT.config.autonomous == true:
-    execute only Autonomous Route
-else if PR_CONTEXT.config.autonomous == false:
-    execute only Interactive Route
-else:
-    emit local_only for invalid control state
-```
-
-Choose the route before evaluating any route-specific instruction. An autonomous execution never enters, falls through to, or recovers through the interactive route.
-
----
-
-## Canonical Posting-Eligibility Preflight
-
-The selected route runs this preflight before it can produce `post` or `auto_post`. Action and posting decision are separate: `APPROVE`, `REQUEST_CHANGES`, or `COMMENT_ONLY` never authorizes a post by itself.
-
-Apply the fail-closed precedence from `corvus-review-extras` in this exact order. That skill owns the action truth table; R4 validates and preserves its result rather than re-deriving it:
-
-1. **Metadata/trust failures and no-post rails**
-   - Require validated repository identity, positive PR number, full base SHA with matching config provenance, `self_review` set to exactly `true`, `false`, or `unknown`, exactly four valid pass statuses/reasons, and a schema-valid REVIEW_DOCUMENT.
-   - If control state is missing, malformed, contradictory, or already marked no-post, return `local_only`.
-   - If `REVIEW_DOCUMENT.inline_comments.length > PR_CONTEXT.config.safety_rail_threshold`, apply the comment-volume rail and return `local_only`.
-2. **Draft/merged/self-review caps**
-   - Enforce the canonical layer-2 cap from `corvus-review-extras`, including `self_review: true` and fail-safe `self_review: unknown`; force `COMMENT_ONLY` and retain the applicable informational notice.
-3. **Aggregate reviewability caps**
-   - `failed`: keep only an informational schema-compatible `COMMENT_ONLY`, then return `local_only`.
-   - `skipped`: force `COMMENT_ONLY` and retain the all-skipped notice.
-   - `partial`: retain its prominent coverage warning; permit `REQUEST_CHANGES` only when at least one retained, non-suppressed blocker or critical exists, otherwise force `COMMENT_ONLY`; never permit `APPROVE`.
-   - `complete`: retain the eligible synthesized action.
-4. **Trusted action override**
-   - Accept only a schema-valid override from verified base config or explicit trusted invocation and only inside every cap already applied.
-   - An override cannot clear `local_only`, remove or rewrite a coverage/state warning, approve a partial/skipped review, change a draft/merged/self-review review from `COMMENT_ONLY`, or create posting eligibility.
-5. **Severity/confidence action**
-   - Preserve the canonical R3 result: severity/confidence escalation is eligible only under `default_action: auto`; the built-in default keeps every severity-derived action at `COMMENT_ONLY` without removing review-body content.
-   - When `default_action: auto` derives `REQUEST_CHANGES`, require a retained blocker or critical at or above `confidence_floor`; otherwise downgrade to `COMMENT_ONLY` and retain the low-confidence explanation.
-   - Do not apply this downgrade to a trusted override; higher rails and caps still constrain that override.
-
-The preflight returns either `{ eligibility: "local_only", reason, rails_applied }` or `{ eligibility: "eligible", constrained_action, rails_applied }`. Treat `coverage_warning` and state notices as immutable derived data throughout R4; finding edits and action changes cannot delete them.
-
----
+Reapply canonical precedence to validate the constrained action and posting eligibility, collecting rails_applied in order. Check the total inline count against safety_rail_threshold without culling or comparing axes. Preserve immutable coverage/state notices. Return eligible plus constrained action, or local_only plus reason. Done when no finding edit, empty result, or override has substituted for coverage/authorization.
 
 ## Autonomous Route
 
-Run this route only when the immediate dispatch selected autonomous mode.
+Run Preflight. Any invalid/failed state, projected error, or hard rail yields REVIEW_ACTION local_only with reason, rails_applied, edits [], and rerun_scope []; display the full available review grouped by axis and proceed only to R5 local completion. Eligible state yields auto_post with the same empty edit/scope lists and a reason confirming rails passed.
 
-1. Run the canonical preflight.
-2. For `local_only`, emit the terminal action below, display the reason and full rendered review (if available), then continue only to R5's local summary. Do not call `question()`, ask for a response in prose, offer edits/re-runs, delegate a decision, or switch modes.
-   ```yaml
-   REVIEW_ACTION:
-     decision: "local_only"
-     decision_reason: "<failed reviewability or hard-rail reason>"
-     rails_applied: ["<rail names in precedence order>"]
-     edits: []
-     rerun_scope: []
-   ```
-3. For `eligible`, preserve any partial/skipped/draft/merged/self-review/default-action/low-confidence notices and emit:
-   ```yaml
-   REVIEW_ACTION:
-     decision: "auto_post"
-     decision_reason: "All canonical posting rails passed"
-     rails_applied: ["<caps or downgrades applied in precedence order>"]
-     edits: []
-     rerun_scope: []
-   ```
-4. Display a brief status and proceed directly to R5:
-   ```markdown
-   ## Autonomous Mode: Auto-posting Review
-
-   **Reviewability**: [complete | partial | skipped]
-   **Action**: [ACTION] | **Findings**: [N] total
-   [Render coverage_warning and state/cap notices when present.]
-   **Posting to GitHub...**
-   ```
-
-Every autonomous branch is terminal or auto-posting. There is no interactive fallback.
-
----
+Announce coverage, constrained action, notices, and separate Standards/Spec counts and key concerns; proceed to R5 final revalidation. Autonomous handling uses neither questions, prose requests for a reply, edits, judgment reruns, nor an interactive fallback. Done when the branch has an auto_post or terminal local_only result.
 
 ## Interactive Route
 
-Run this route only when the immediate dispatch selected interactive mode.
+Run Preflight first. Ineligible state displays the full review and reason locally, emits local_only with empty edits/scope, and reaches R5 without a question call. Only eligible state loads the [interactive decision/edit/rerun procedure](../corvus-review-extras/interactive.md). Done when the user has seen the final constrained axis-grouped preview before an authorized post, or selected a local/looping outcome.
 
-### Step 1: Establish Eligibility and Present Preview
+## Exit
 
-Run the canonical preflight first. If it returns `local_only`, display the full review and reason, emit the local-only action below, and proceed to R5 without invoking `question()`:
+Validate decision_reason and rails_applied. `post` requires explicit interactive authorization after the final preview; `auto_post` requires the autonomous route and all rails. `edit` loops through R3 and a fresh preview; `rerun` returns to R2; neither enters R5. `local_only` enters R5's no-post summary.
 
-```yaml
-REVIEW_ACTION:
-  decision: "local_only"
-  decision_reason: "<failed reviewability or hard-rail reason>"
-  rails_applied: ["<rail names in precedence order>"]
-  edits: []
-  rerun_scope: []
-```
+For authorized post/auto_post, first measure the exact candidate serialization and decoded bodies against the [schema budget](../corvus-review-extras/schemas.md#post_request-and-post_result--r5writer). If the serialized length exceeds 48,000 chars or UTF-8 bytes, or a body exceeds its ceiling, invalidate authorization and return to [R3 Size Overflow](../corvus-review-r3/SKILL.md#size-overflow), not the writer; then repeat R4 preflight and the mode-specific decision, including a fresh interactive preview. Unavailable measurements end local_only. Only within budget, follow [Freeze at R4](../corvus-review-extras/state.md#freeze-at-r4): write the approved [POST_REQUEST artifact](../corvus-review-extras/schemas.md#post_request-and-post_result--r5writer), verify read-back, and compute its SHA-256 with the fixed path-constrained command. Pass the resulting POST_ARTIFACT descriptor to R5; failure changes the decision to local_only. Other decisions create no posting artifact. Done when authorization is bound to persisted bytes before R5.
 
-Only an eligible review receives this preview:
-
-```markdown
-## Review Preview: PR #[pr_number] — [title]
-
-**Reviewability**: [complete | partial | skipped]
-**Action**: [ACTION_EMOJI] [action]
-**Reason**: [action_reasoning]
-[Render coverage_warning and draft/merged/self-review/default-action/low-confidence notices verbatim when present.]
-
----
-
-### Summary
-
-[review_body — the full rendered review summary]
-
----
-
-### Inline Comments ([N] total)
-
-[For each inline comment, show a preview:]
-
-#### [path]:[line]
-> **[label]** ([pass]): [title]
-> [First 2 lines of body...]
-
-[If more than 10 inline comments, show the first 10 and note "and N more..."]
-
----
-
-**Total**: [stats.total_findings] findings | [stats.blockers] blockers | [stats.nits_shown] nits ([stats.nits_suppressed] suppressed)
-```
-
-### Step 2: User Decision
-
-Invoke the `question()` tool only after Step 1 returned eligible and displayed the preview. Use interactive buttons rather than plain-text options:
-
-- question: "How would you like to proceed with this review?"
-- header: "PR Review: #[pr_number]"
-- options:
-  1. label: "Post Review", description: "Post to GitHub as [constrained ACTION] with [N] inline comments"
-  2. label: "Edit Comments", description: "Modify findings before posting (add, remove, or edit)"
-  3. label: "Save Locally", description: "Don't post to GitHub. Display full review in terminal only"
-  4. label: "Re-run Review", description: "Re-run the full review, a single holistic dimension, or the security child"
-
-### Step 3: Handle User Decision
-
-#### Option A: "Post Review"
-
-```yaml
-REVIEW_ACTION:
-  decision: "post"
-  decision_reason: "User authorized the preflight-eligible constrained review"
-  rails_applied: ["<caps or downgrades applied in precedence order>"]
-  edits: []
-  rerun_scope: []
-```
-
-Proceed directly to R5. User authorization does not clear any applied cap or warning.
-
-#### Option B: "Edit Comments"
-
-Present the existing interactive editing flow:
-
-```markdown
-## Edit Review Comments
-
-Current findings ([N] total):
-
-1. **[label]** [file]:[line] — [title]
-2. **[label]** [file]:[line] — [title]
-...
-
-**Available actions**:
-- "remove N" — Remove finding #N
-- "edit N" — Edit finding #N
-- "add" — Add a new manual finding
-- "change action to APPROVE/REQUEST_CHANGES/COMMENT_ONLY" — Request an action subject to canonical caps
-- "done" — Finish editing and return to the post decision
-```
-
-After the user provides edits:
-
-1. Apply the finding edits.
-2. Re-run R3 filtering/order/action rendering as needed; derive reviewability from the unchanged pass-status evidence rather than from edited findings.
-3. Restore the exact derived coverage and state notices; an edit cannot remove them.
-4. Run the canonical preflight again. If a hard rail now applies, emit `local_only` without another prompt.
-5. Otherwise re-render the entire preview and return to Step 2. The user must see the final constrained state before anything posts.
-
-```yaml
-REVIEW_ACTION:
-  decision: "edit"
-  decision_reason: "User requested edits; revalidation required"
-  rails_applied: ["<currently applied caps>"]
-  edits: [<modified findings array>]
-  rerun_scope: []
-```
-
-#### Option C: "Save Locally"
-
-Display the complete review and inline comments in the terminal with: **This review was NOT posted to GitHub.** Then emit:
-
-```yaml
-REVIEW_ACTION:
-  decision: "local_only"
-  decision_reason: "User selected Save Locally"
-  rails_applied: ["user_local_only", "<existing caps>"]
-  edits: []
-  rerun_scope: []
-```
-
-Proceed to R5, which performs no posting work for `local_only`.
-
-#### Option D: "Re-run Review"
-
-Use the `question()` tool to select the scope only because the review already passed posting eligibility:
-
-- question: "Which parts of the review should be re-run?"
-- header: "Re-run Review"
-- options:
-  1. label: "Full Review", description: "Re-run both children — holistic and security — from R2"
-  2. label: "Architecture Dimension", description: "Re-run the holistic child with the one-element `dimensions` set: architecture"
-  3. label: "Correctness Dimension", description: "Re-run the holistic child with the one-element `dimensions` set: correctness"
-  4. label: "Conventions Dimension", description: "Re-run the holistic child with the one-element `dimensions` set: conventions"
-  5. label: "Security Child", description: "Re-run the dedicated security child"
-
-```yaml
-REVIEW_ACTION:
-  decision: "rerun"
-  decision_reason: "User selected a review re-run"
-  rails_applied: []
-  edits: []
-  rerun_scope: ["<selected scope — see mapping below>"]
-```
-
-Map the selected option to `rerun_scope`: Full Review → `["architecture", "correctness", "conventions", "security"]`; Architecture Dimension → `["architecture"]`; Correctness Dimension → `["correctness"]`; Conventions Dimension → `["conventions"]`; Security Child → `["security"]`.
-
-Return to R2 with `rerun_scope`, retain non-rerun pass results, and then flow through R3 and R4 again. Re-derive reviewability, warnings, action, and every rail from the new complete status set.
-
-Track the re-run count. Allow at most two re-runs; after the second, remove this option and display: "Maximum re-runs reached. Please post, edit, or save locally."
-
----
-
-## Exit Gate
-
-R4 produces a valid REVIEW_ACTION before proceeding:
-
-1. `decision` is one of `post`, `edit`, `local_only`, `rerun`, or `auto_post`.
-2. `decision_reason` is non-empty and `rails_applied` records caps/rails in precedence order.
-3. `edit` has non-empty edits and loops through synthesis, preview, and preflight; it does not proceed to R5.
-4. `rerun` has non-empty scope and returns to R2; it does not proceed to R5.
-5. `post` is valid only in interactive mode after an eligible preview and explicit user authorization.
-6. `auto_post` is valid only in autonomous mode after every rail passed.
-7. `local_only` proceeds to R5's no-post completion path. Failed reviewability, invalid state, and hard rails can produce no other decision.
-8. Partial/skipped coverage notices and draft/merged/self-review state notices remain present after every edit, override, and decision.
-
----
-
-## State Checkpoint
-
-After R4 completes, output:
-
-```text
-[R4 COMPLETE] Decision: [decision] | Mode: [interactive/autonomous] | Rails: [rails_applied]
-[If rerun: → Returning to R2 with scope: [rerun_scope]]
-[If post/auto_post: → Proceeding to R5 for final revalidation]
-[If local_only: → Proceeding to R5's no-post completion path]
-```
+Preserve axis/dimension on findings, inline comments, filter/dedup/edit logs, and persisted state. Scoped reruns preserve untouched dimensions in both axis maps and pass_results; [R2](../corvus-review-r2/SKILL.md#assemble-and-hand-off) owns replacement, followed by complete R3 synthesis and this preflight. Done when the decision is consistent with mode, evidence, and final user-visible state. Emit `[R4 COMPLETE]` with decision, mode, rails, and next route.

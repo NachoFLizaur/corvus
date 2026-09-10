@@ -5,6 +5,93 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.10.0-beta.0 — 2026-09-09
+
+### Breaking
+
+- The plan-type question is removed. The model proposes `depth: quick | standard | deep`
+  as an effort dial, user-overridable at the single approval gate; depth never skips
+  discovery, review, or required gates (ADR-0001).
+- `MASTER_PLAN.md`, task files, `CONTEXT.md`, and `specs/` are replaced by one `PLAN.md`
+  per feature. Legacy plans remain read-only; resume and follow-up copy relevant
+  requirements, history, and remaining work forward into a fresh plan (ADR-0001).
+- The `tests_enabled`/`tests_deferred`/`test_scope` triad collapses to
+  `tests: deferred | none`, defaulting to deferred execution at final validation (ADR-0001).
+- The byte-pin test `src/__tests__/prompt-contracts.test.ts` is deleted in favor of
+  `src/__tests__/prompt-structure.test.ts` and the root `prompt-budgets.json`
+  structural contract (ADR-0001, ADR-0002).
+
+### Added
+
+- ADRs under `docs/decisions/`, with records written only when all three conditions
+  hold: hard to reverse, surprising without context, and the result of a real
+  trade-off. Accepted records change through superseding ADRs (ADR-0001).
+- Cross-model whole-plan review: `REJECT` → `PLAN_FIX` → automatic re-review until
+  `OK`, with no round cap. A stall guard surfaces unchanged findings as unresolved
+  and holds execution rather than treating them as `OK` (ADR-0001).
+- Vertical-slice tasks with `blocks:` edges and frontier dispatch, resolving
+  disjoint parallel file ownership at dispatch time (ADR-0001).
+- Two-axis PR review: parallel Standards and Spec review, a pasted Fowler smell
+  baseline, and axis-preserving aggregation without cross-axis merging or reranking
+  (ADR-0001).
+- Packaged root `NOTICE` with MIT attribution for text adapted from
+  mattpocock/skills, alongside attribution comments at adapted passages (ADR-0002).
+- Structural prompt test with per-class budgets, frontmatter and heading checks,
+  dispatch and identity contracts, a prohibition ceiling, and stated-once checks
+  (ADR-0002).
+
+### Changed
+
+- All 38 prompt entries are rewritten to the ADR-0002 authoring standard; the
+  corpus shrinks from 13,762 to ~4,898 lines including sibling reference files.
+- `docs/CORVUS-STATE-MACHINE.md` becomes a 61-line diagram and navigation map with
+  pointers to the phase skills (ADR-0001).
+- requirements-analyst adopts design-tree grilling: whole-frontier question batches
+  with recommended answers, agent-led fact-finding, and user decisions, retaining
+  the three-round cap and recording unresolved decisions as assumptions (ADR-0001).
+- The `[ux]` task tag replaces `requires_ux_dx_review` for routing subjective review.
+
+### Removed
+
+- Plan-type taxonomy and the /16 recommendation rubric (ADR-0001).
+- Phase 3.5 verdict tiers, finding categories, changed-lines manifests, REJECT
+  budget, and carve-out (ADR-0001).
+- Validation Commands blocks from agent and skill prompts (ADR-0001).
+- Planner-assigned workstream tags, replaced by dependency edges (ADR-0001).
+
+### Fixed
+
+Review round 1:
+
+- Same-model plan review now proceeds with a visible degraded warning; distinct
+  planner/reviewer models remain preferred (R1-B1).
+- Agent skill references respect tool access; the posting writer carries its closed
+  schemas inline instead of depending on an inaccessible skill reference (R1-B2).
+- R4 freezes approved review bytes and SHA-256; R5 sends only the artifact descriptor,
+  and the writer verifies and posts from the unchanged file (R1-B3).
+- `AMEND_PLAN` adds phases or scoped fixes and copies legacy plans forward without
+  modifying sources; `DISCOVERY.md` persists evidence for resume (R1-M1, M4, M5).
+- Plan-review stalls use defect-key sets and full round history, detecting reworded
+  repeats and oscillation rather than comparing fix prose (R1-M3).
+- Frontier dispatch resolves file ownership through code-explorer, serializes overlaps,
+  and escalates out-of-scope production gaps on initial and fix reports (R1-M2).
+- Prior-review dispositions reach both axes; concrete security indicators, safety pins
+  and closed permission boundaries are restored or hardened (R1-M6–M9).
+- Review docs and upgrade guidance now describe both axes, per-axis caps and artifact
+  posting; ADR-0002 records the canonical-template planner budget exception (R1-M10, M12, M13).
+
+- Review round 2 (external): 10 minor consistency fixes — host-config path resolution, `AMEND_PLAN add-fix-tasks` for production gaps, REVIEW HISTORY reset on Request Changes, `REVIEW_INPUT` schema, `review_mode` token, docs
+- Review round 3 (external): AMEND_PLAN dispatch template homed in the phase-7 skill; `unchanged_code_min_severity` consumer rule; `.jsonc` config path
+- Review round 4 (user-reported): review orchestrators can materialize the validated PR head with detached checkout, preserving named branches and falling back to inline evidence on failure (R4-1).
+- Review round 4 (user-reported): hard review size budgets (24k body / 4k inline / 48k serialized, characters and UTF-8 bytes), deterministic R3 overflow preserving blockers/criticals, and R4 read-back verification before hashing (R4-2).
+
+### Known Limitations
+
+- The structural test validates prompt shape, not prose meaning or behavioral
+  correctness; it does not replace review of prompt changes (ADR-0002).
+- `prompt-budgets.json` is a repo-time contract consumed by the structural test,
+  not a runtime dependency; it is not included in the published package.
+
 ## 0.9.0-beta.0 — 2026-09-05
 
 First release with OpenCode v2 support. Corvus loads on OpenCode v2 (`opencode2`

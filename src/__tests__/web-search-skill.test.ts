@@ -39,17 +39,21 @@ describe("Web Search Skill", () => {
 
   test("has query limit guidance", () => {
     // Assert - should contain "1-3" for query limits
-    expect(content).toContain("1-3")
+    expect(content).toContain("1-3 targeted queries")
   })
 
   test("has page limit guidance", () => {
     // Assert - should contain "2-3" for page limits
-    expect(content).toContain("2-3")
+    expect(content).toContain("Identify 2-3 relevant URLs")
+    expect(content).toContain("most 3 pages")
   })
 
   test("has escalation section", () => {
-    // Assert - should contain "escalat" (escalation/escalate)
-    expect(content.toLowerCase()).toMatch(/escalat/)
+    // Assert - complexity and scope limits select the deep-research branch
+    expect(content).toContain("## Escalation to Deep Research")
+    expect(content).toContain("question proves more complex, answers conflict, comparison is needed")
+    expect(content).toContain("more than 3 queries, pages, or sources")
+    expect(content).toContain('skill({ name: "deep-research" })')
   })
 
   test("has workflow steps", () => {
@@ -58,5 +62,10 @@ describe("Web Search Skill", () => {
     expect(content).toContain("Step 2")
     expect(content).toContain("Step 3")
     expect(content).toContain("Step 4")
+    expect(content).toContain("../../agent/researcher.md#complexity-router")
+    expect(content).toContain("../../agent/researcher.md#evidence-discipline")
+    expect(content).toContain("../../agent/researcher.md#output-format")
+    expect(content).toContain("../../agent/researcher.md#three-tier-fallback-chain")
+    expect(content).toContain("tooling-limited coverage is reported under that contract")
   })
 })

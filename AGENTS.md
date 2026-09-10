@@ -5,12 +5,18 @@ Corvus is a Bun-based OpenCode plugin: agent, command, and skill prompt files (i
 ## Style Guidelines (Markdown Prompt Files)
 
 - **Files**: `kebab-case.md` in `agent/` or `command/`; skills live at `skill/<name>/SKILL.md`, where the frontmatter `name` equals the directory name. Filenames are agent identities — renaming a file renames the agent
-- **Frontmatter**: starts on line 1 with `---` (the loader parses it; one malformed file breaks loading for all agents). Agent frontmatter carries exactly five keys — `description`, `mode`, `temperature`, native singular `permission`, and `color` — and any other key is dropped with a warning when the corpus is registered. Command fields: `description`, `agent`, and `model`; `subtask` is accepted but dropped with a warning (v2 commands always run in the invoking session), and `mode`/`temperature` are not command fields on either host — both are ignored at load, and the prompt-corpus contract test keeps them out of `command/*.md`. Manual installs expose frontmatter directly, so always author `permission`; the plugin loader accepts legacy `permissions` only as a read alias when singular is absent, gives singular precedence when both exist, and never returns the plural key
+- **Frontmatter**: starts on line 1 with `---` (the loader parses it; one malformed file breaks loading for all agents). Agent frontmatter carries up to five keys — `description`, `mode`, `temperature`, native singular `permission`, and optional `color` — and any other key is dropped with a warning when the corpus is registered. Command fields: `description`, `agent`, and `model`; `subtask` is accepted but dropped with a warning (v2 commands always run in the invoking session), and `mode`/`temperature` are not command fields on either host — both are ignored at load, and `prompt-budgets.json` plus `src/__tests__/prompt-structure.test.ts` define the prompt contract and keep them out of `command/*.md`. Manual installs expose frontmatter directly, so always author `permission`; the plugin loader accepts legacy `permissions` only as a read alias when singular is absent, gives singular precedence when both exist, and never returns the plural key
 - **Headings**: Title Case
 - **Emphasis**: write plain imperatives. Reserve strong emphasis (uppercase, warnings) for the few genuinely safety-critical constraints per file — irreversible actions, data loss, secret exposure
 - **Duplication**: state each rule once in its most authoritative location and cross-reference it elsewhere; drifted duplicates read as contradictions
 - **Instructions**: prefer positive forms with brief motivation ("Do Y because Z") over bare prohibitions
 - **Code blocks**: use language hints (```typescript, ```bash)
+
+## Decision Records
+
+- Architecture Decision Records live in `docs/decisions/`; its README carries the convention (when an ADR is warranted, naming, frontmatter, and body template)
+- Read every ADR whose `scope` globs match files you are about to change, before planning or editing them
+- Change an accepted ADR only by adding a superseding ADR; never rewrite one in place
 
 ## Default to Delegation
 
@@ -35,21 +41,21 @@ When a user request clearly matches an agent's purpose, delegate immediately —
 | plan-reviewer | High-accuracy plan review before implementation (Corvus Phase 3.5) | `@plan-reviewer` |
 | researcher | Technical questions, best practices, comparing approaches, external research | `@researcher` |
 | corvus | Orchestrating complex multi-step workflows with user interaction | `@corvus` |
-| corvus-auto | Fully autonomous workflows: auto plan selection, mandatory plan review, deferred tests, local-only completion by default, guarded opt-in Git delivery | `@corvus-auto` |
+| corvus-auto | Fully autonomous workflows: model-chosen depth, mandatory plan review, deferred tests by default, local-only completion by default, guarded opt-in Git delivery | `@corvus-auto` |
 | requirements-analyst | Analyzing requests, identifying gaps, asking clarifying questions (Corvus Phase 0) | `@requirements-analyst` |
 | ux-dx-quality | Subjective quality: UX, DX, docs, architecture | `@ux-dx-quality` |
 | corvus-review | Interactive multi-pass PR review — preview/edit before posting | `@corvus-review` |
 | corvus-review-auto | Autonomous PR review — auto-posts with safety rails; suits CI/CD and batch review | `@corvus-review-auto` |
-| security-reviewer | Dedicated security analysis with OWASP/CWE knowledge; R2's parallel security child | `@security-reviewer` |
+| security-reviewer | R2's Spec-axis child plus independent security analysis with OWASP/CWE knowledge | `@security-reviewer` |
 | pr-context-gatherer | PR-specific context gathering (diffs, deps, conventions) | `@pr-context-gatherer` |
-| pr-code-reviewer | Internal, mechanically read-only R2 holistic detection (architecture, correctness, and conventions in one invocation) | `@pr-code-reviewer` |
+| pr-code-reviewer | Internal, mechanically read-only R2 Standards-axis detection (architecture, correctness, and conventions in one invocation) | `@pr-code-reviewer` |
 | pr-comment-writer | GitHub review posting with error recovery | `@pr-comment-writer` |
 
 **Routing notes**:
-- `@corvus` vs `@corvus-auto`: both orchestrate the same phase workflow. Use `@corvus` when the user should pick the plan type, test preference, and approve the plan; use `@corvus-auto` for zero-interruption runs (CI/CD, hands-off execution) where question() calls would block. Both dispatch Phase 4 in workstream batches (one code-implementer per workstream of 1-5 dependency-ordered tasks) and detect an in-progress MASTER_PLAN at intake for cross-session resume — `@corvus` asks before resuming; `@corvus-auto` decides deterministically.
+- `@corvus` vs `@corvus-auto`: both use one PLAN.md with model-chosen depth (`quick | standard | deep`) and the same all-depth workflow. Use `@corvus` for `question()` choices and a depth override at the single approval gate; use `@corvus-auto` for question-free runs that accept supplied depth or the model's proposal. Cross-model review is preferred; same-model proceeds degraded with a visible warning. Both retain REJECT → PLAN_FIX → whole-plan re-review until OK; stalled findings hold execution, never count as OK. Phase 4 works the frontier with file ownership resolved at dispatch and disjoint parallel writes; see [the phase skills](docs/CORVUS-STATE-MACHINE.md). Intake detects an in-progress PLAN.md — `@corvus` asks before resuming; `@corvus-auto` decides deterministically. Legacy sources stay read-only; use `AMEND_PLAN copy-forward` into a fresh PLAN.md with a DISCOVERY.md companion.
 - `@corvus-review` vs `@corvus-review-auto`: use the interactive variant to preview and edit reviews before posting (sensitive PRs, first-time calibration); use the autonomous variant when you trust the review config and want auto-posting.
-- `plan-reviewer`, `requirements-analyst`, `pr-code-reviewer`, `security-reviewer`, `pr-context-gatherer`, and `pr-comment-writer` are internal orchestration agents, not general-purpose direct entry points. In particular, do not use `pr-code-reviewer` as a general code-review agent; R2 supplies its trusted `dimensions` control and structured PR evidence in one holistic invocation.
-- `@code-quality` owns implementation-workflow validation and may run the commands that workflow authorizes: it owns the 4b phase-targeted test runs (`test_scope: targeted`, the union of the phase's task test files, once) and the single Phase 5 full-suite run (`test_scope: full`; a Lightweight non-deferred plan has no Phase 5 and carries this single full run at its final 4b gate). It must not consume untrusted PR-controlled content; audit and review-only dispatches go to `@pr-code-reviewer`/`@security-reviewer` instead — R2 launches two parallel children, sending non-security detection (the holistic architecture, correctness, and conventions dimensions) to read/glob/grep-only `@pr-code-reviewer` and security detection to the similarly read-only `@security-reviewer`.
+- `plan-reviewer`, `requirements-analyst`, `pr-code-reviewer`, `security-reviewer`, `pr-context-gatherer`, and `pr-comment-writer` are internal orchestration agents, not general-purpose direct entry points. In particular, do not use `pr-code-reviewer` as a general code-review agent; R2 supplies its trusted `dimensions` control and structured PR evidence for the Standards axis.
+- `@code-quality` owns implementation-workflow validation and may run only authorized checks. The contract is `**Tests**: deferred | none`: deferred authors coverage during implementation and runs one full suite at Phase 5a; none neither authors nor runs tests. Every 4b gate is acceptance-only; see [Tests](skill/corvus-phase-2/SKILL.md#tests) and [final validation](skill/corvus-phase-5/SKILL.md). It must not consume untrusted PR-controlled content; audit and review-only dispatches go to `@pr-code-reviewer`/`@security-reviewer` instead — R2 launches two parallel children, sending Standards non-security detection to read/glob/grep-only `@pr-code-reviewer` and Spec across eligible dimensions plus independent security detection to the similarly read-only `@security-reviewer`. Axis is separate from dimension; findings are never merged or reranked across axes.
 
 ## Mutation and Delivery Safety
 

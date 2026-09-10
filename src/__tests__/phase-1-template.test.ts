@@ -11,14 +11,16 @@ describe("Phase 1 Template", () => {
   const content = readFileSync(SKILL_PATH, "utf-8")
   const { frontmatter } = parseFrontmatter<Record<string, any>>(content)
 
-  test("template references multi_search", () => {
+  test("template carries discovery origin and return target", () => {
     // Assert
-    expect(content).toContain("web-research_multi_search")
+    expect(content).toContain("**DISCOVERY_ORIGIN**: <PHASE_0A or DIRECT_CALLER>")
+    expect(content).toContain("**RETURN_TARGET**: <PHASE_0B or original caller identity>")
   })
 
-  test("template references fetch_pages", () => {
+  test("template carries unresolved scope and existing findings", () => {
     // Assert
-    expect(content).toContain("web-research_fetch_pages")
+    expect(content).toContain("**DISCOVERY_SCOPE**: <specific unresolved questions>")
+    expect(content).toContain("**EXISTING_FINDINGS**: <accumulated findings, or none>")
   })
 
   test("template mentions complexity router", () => {
@@ -30,9 +32,14 @@ describe("Phase 1 Template", () => {
     expect(hasRouter).toBe(true)
   })
 
-  test("template mentions fallback", () => {
+  test("completion payload preserves routing and accumulates findings", () => {
     // Assert
-    expect(content.toLowerCase()).toContain("fallback")
+    expect(content).toContain("**DISCOVERY_ORIGIN**: <unchanged from dispatch>")
+    expect(content).toContain("**RETURN_TARGET**: <unchanged from dispatch>")
+    expect(content).toContain("**NEW_FINDINGS**: <findings from this invocation>")
+    expect(content).toContain("**ACCUMULATED_FINDINGS**: <EXISTING_FINDINGS merged with NEW_FINDINGS, deduplicated>")
+    expect(content).toContain("**COMPETING IN-FLIGHT WORK**: <overlapping PRs and paths, none, not applicable, or coverage gap>")
+    expect(content).toContain("**UNRESOLVED_SCOPE**: <remaining questions, or none>")
   })
 
   test("no context7 references", () => {
@@ -46,19 +53,14 @@ describe("Phase 1 Template", () => {
   })
 
   test("routes discovery results by origin", () => {
-    expect(content).toContain("| `PHASE_0A` | `PHASE_0B` |")
-    expect(content).toMatch(
-      /\| `PHASE_0A` \| Return `ACCUMULATED_FINDINGS` to Phase 0b,[^\n]*`POST_DISCOVERY`/,
-    )
-    expect(content).toContain("| `DIRECT_CALLER` | Original caller identity |")
-    expect(content).toMatch(
-      /\| `DIRECT_CALLER` \| Return the payload to the original caller and stop\./,
-    )
+    expect(content).toContain("`PHASE_0A` → `PHASE_0B`; `DIRECT_CALLER` → original")
+    expect(content).toContain("For `PHASE_0A`, return `ACCUMULATED_FINDINGS` to Phase 0b for analyst `POST_DISCOVERY`.")
+    expect(content).toContain("For `DIRECT_CALLER`, return the payload to the original caller and stop.")
   })
 
   test("does not unconditionally enter planning", () => {
     expect(content).not.toContain("Immediately invoke task-planner")
-    expect(content).toContain("Phase 1 never invokes task-planner directly.")
+    expect(content).toContain("Phase 1 never invokes task-planner; the caller owns subsequent workflow routing.")
   })
 
   test("has valid frontmatter", () => {

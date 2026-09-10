@@ -31,6 +31,7 @@ Structured planning. Delegated execution. Quality gates at every boundary.
   - [Skills (18)](#skills-18)
 - [How Corvus Works](#how-corvus-works)
 - [Corvus PR Review](#corvus-pr-review)
+- [Upgrading from 0.9 to 0.10](#upgrading-from-09-to-010)
 - [Project Structure](#project-structure)
 - [Development](#development)
 - [Troubleshooting](#troubleshooting)
@@ -49,7 +50,7 @@ Structured planning. Delegated execution. Quality gates at every boundary.
 One agent to drive your entire workflow. Describe what you need, and Corvus handles the rest — clarifying requirements, exploring the codebase, planning, implementing, testing, and validating.
 
 - **Single point of entry** — no need to pick the right agent or remember who does what
-- **Adaptive planning depth** — automatically scales from zero-ceremony quick fixes to spec-driven workflows based on task complexity
+- **Adaptive planning depth** — one model-chosen effort level, from narrow discovery to wider architectural investigation; simple fixes still delegate directly
 - **Full lifecycle management** — from requirements through implementation to validation
 - **Context across phases** — maintains coherence across a complex, multi-step task
 - **Quality gates at every boundary** — objective and subjective validation before moving on
@@ -60,9 +61,9 @@ Have a complex task in mind? Tell `@corvus` what you need. It handles clarificat
 
 ```
 @corvus fix the typo in the footer              # no plan — direct delegation
-@corvus add a dark mode toggle with tests        # lightweight plan — minimal ceremony
-@corvus refactor the payment module to use the new API  # standard plan — full workflow
-@corvus redesign the plugin architecture         # spec-driven — formal specs + full workflow
+@corvus add a dark mode toggle with tests        # one adaptive plan, deferred tests
+@corvus refactor the payment module to use the new API  # reviewed implementation slices
+@corvus redesign the plugin architecture         # wider discovery for architectural change
 ```
 
 Need something quick? Talk to `@corvus` directly, it'll know which specialists to involve:
@@ -259,9 +260,9 @@ Corvus contains **38 prompt files**: 16 agents, 4 commands, and 18 skills.
 | `@ux-dx-quality` | Subjective quality: UX, DX, docs, architecture |
 | `@corvus-review` | **PR Review Coordinator** — interactive multi-pass PR review with user gates |
 | `@corvus-review-auto` | **Autonomous PR Review** — zero-interruption PR review with safety rails |
-| `@security-reviewer` | Dedicated security analysis: OWASP Top 10, CWE, taint analysis |
+| `@security-reviewer` | R2 Spec-axis review plus independent security analysis: OWASP Top 10, CWE, taint analysis |
 | `@pr-context-gatherer` | PR-specific context gathering: diffs, dependencies, conventions |
-| `@pr-code-reviewer` | Internal mechanically read-only R2 holistic detection: architecture, correctness, and conventions in one invocation |
+| `@pr-code-reviewer` | Internal mechanically read-only R2 Standards-axis detection: architecture, correctness, and conventions in one invocation |
 | `@pr-comment-writer` | GitHub review posting: API payloads, error recovery, line validation |
 
 ### Commands (4)
@@ -281,7 +282,7 @@ Skills are loaded on-demand to minimize initial context size. Each Corvus phase 
 |-------|---------|
 | `corvus-phase-0` | Requirements analysis |
 | `corvus-phase-1` | Discovery and research |
-| `corvus-phase-2` | Planning, user approval, and optional plan review (Phase 3.5) |
+| `corvus-phase-2` | One adaptive plan, mandatory plan-review loop, and approval |
 | `corvus-phase-4` | Implementation loop |
 | `corvus-phase-5` | Final validation |
 | `corvus-phase-6` | Completion and summary |
@@ -297,7 +298,7 @@ Skills are loaded on-demand to minimize initial context size. Each Corvus phase 
 |-------|---------|
 | `corvus-review-r0` | PR intake, triage, config loading |
 | `corvus-review-r1` | Parallel context gathering |
-| `corvus-review-r2` | Parallel two-child review orchestration (holistic + security) |
+| `corvus-review-r2` | Parallel Standards and Spec review with independent security coverage |
 | `corvus-review-r3` | Comment synthesis and filtering |
 | `corvus-review-r4` | User gate / autonomous auto-proceed |
 | `corvus-review-r5` | GitHub posting and completion |
@@ -307,82 +308,57 @@ Skills are loaded on-demand to minimize initial context size. Each Corvus phase 
 
 ## How Corvus Works
 
-Under the hood, Corvus follows a structured multi-phase workflow:
+Simple requests delegate directly to a specialist without a plan. Planned work follows the [phase map](docs/CORVUS-STATE-MACHINE.md); its links lead to the skills that own each procedure.
 
-```
-User Request
-    │
-    ├─── spec-complete ──► skip 0a/0b ──► Plan Input
-    ▼
-Phase 0a: Requirements Clarification (@requirements-analyst)
-    │
-    ├─── QUESTIONS_NEEDED ──► Corvus presents one batch ──► Phase 0a
-    ├─── DISCOVERY_NEEDED ──► Phase 1 ──► Phase 0b POST_DISCOVERY
-    │                                      ├── questions/discovery delta ──► Phase 0b
-    │                                      └── clear ──────────────────────┐
-    └─── CLEAR ────────────────────────────────────────────────────────────┤
-                                                                           ▼
-Plan Input (consume preselection; otherwise interactive choice/auto heuristic)
-    │
-    ├─── No Plan ────────► Direct delegation (single task, done)
-    └─── Lightweight / Standard / Spec-Driven
-              │
-              └──► Test Input (consume supplied flags; ask/default only missing values)
-    │
-    ▼
-Phase 2: Planning (@task-planner creates MASTER_PLAN.md + CONTEXT.md)
-    │
-    ▼
-Phase 3: User Approval (single approval gate)
-    │
-    ▼
-User Choice: "Start Implementation" → Phase 4
-             "High Accuracy Review" → Phase 3.5
-    │
-    ▼
-Phase 3.5: Plan Review (@plan-reviewer) [optional]
-    │   OKAY → user confirms → Phase 4
-    │   REJECT → @task-planner fixes → User chooses: re-review or proceed
-    │
-    ▼
-Phase 4: Implementation Loop (per-PHASE, not per-task)
-    │   4a: @code-implementer (workstreams of phase tasks, parallel when file sets are disjoint)
-    │   4b: @code-quality (entire phase, phase-targeted tests, with failure attribution; risk-triaged when acceptance-only)
-    │       FAIL → fix (iteration 1: direct; iteration ≥2: FAILURE_ANALYSIS first) → revalidate
-    │   4c: @task-planner PROGRESS_UPDATE → verify plan-only diff → next phase
-    │
-    ▼
-Phase 5: Final Validation
-    │   5a: @code-quality (objective PASS / FAIL — the single full-suite run; a Lightweight non-deferred plan takes this run at its final 4b gate)
-    │   5b: @ux-dx-quality (PASS / NEEDS_IMPROVEMENT / CRITICAL_ISSUES, when flagged)
-    │
-    ▼
-Phase 6: Completion
-    │   @task-planner SUCCESS_EXTRACTION (feature-wide, once)
+### One Plan, Adaptive Effort
+
+The model chooses `depth: quick | standard | deep`, recorded as one `**Depth**` line with a reason in `.corvus/tasks/<feature>/PLAN.md`. Quick narrows discovery and plan prose, standard is the default, and deep widens discovery and checks every touched ADR scope. Every depth retains discovery, the review loop, phase gates, and final validation.
+
+<!-- adapted from mattpocock/skills (MIT) -->
+The single plan holds immutable user requirements, acceptance criteria, decisions, unknowns, tasks, gates, and history. Tasks are vertical slices with `blocks:` dependencies and observable done-whens. Implementation paths and code snippets stay out of the plan body; exact file ownership is resolved at dispatch and recorded in its Log. See [Plan Format](agent/task-planner.md#plan-format).
+
+### From Request to Completion
+
+- **Clarify and discover** — [requirements grilling](skill/corvus-phase-0/SKILL.md) returns question batches; [discovery](skill/corvus-phase-1/SKILL.md) grounds the plan at every depth. A spec-complete request can bypass grilling, not discovery.
+- **Plan, review, approve** — [planning and approval](skill/corvus-phase-2/SKILL.md) creates the plan, then runs mandatory Phase 3.5 plan review: `REJECT → PLAN_FIX → whole-plan re-review` until `OK`, without a round cap. Unchanged findings produce `STALLED` and remain unresolved, never OK. The single approval gate offers **Start Implementation** only after OK, **Request Changes**, or **Override Depth**; changes return through planning and review, refreshing discovery as needed.
+- **Implement the frontier** — [execution](skill/corvus-phase-4/SKILL.md) works unblocked tasks in the current phase with disjoint parallel file sets. Each phase closes through `4a → 4b → 4c`: implementation, acceptance-only gate, then one batched `PROGRESS_UPDATE`. Failure iteration 1 gets a direct fix; iteration ≥2 gets `FAILURE_ANALYSIS` first; three unsuccessful fix iterations stop execution. Material divergence from the approved plan returns to planning.
+- **Validate the feature** — [final validation](skill/corvus-phase-5/SKILL.md) runs objective 5a and, when a task carries `[ux]`, subjective 5b. Blocking findings return to scoped fixes; missing evidence holds completion.
+- **Extract and summarize** — [completion](skill/corvus-phase-6/SKILL.md) owns feature-wide `SUCCESS_EXTRACTION`, Corvus-process learnings, and the final summary. [Follow-up triage](skill/corvus-phase-7/SKILL.md) routes subsequent requests while preserving completed history.
+
+### Cross-model plan review (recommended)
+
+Assign different models to `task-planner` and `plan-reviewer` through host configuration, not packaged prompt frontmatter. With neither override set, both use the host default: Phase 0 emits one degraded warning and review proceeds. The gate summary reports `review_mode: same-model` (degraded) or `review_mode: cross-model` for distinct resolved models, without a degraded warning.
+
+On v1, merge these per-agent overrides into `opencode.json`:
+
+```json
+{"agent":{"task-planner":{"model":"<provider/model-a>"},"plan-reviewer":{"model":"<provider/model-b>"}}}
 ```
 
-Key features:
-- **Adaptive plan-type selection**: Scores task complexity across 6 dimensions, recommends one of 4 tiers (No Plan → Lightweight → Standard → Spec-Driven), user can override
-- **Test preference**: Choose tests at every quality gate, deferred to final validation only, or skipped entirely (`@corvus-auto` always defers tests to Phase 5)
-- **Predictable test cadence**: Every dispatch carries `test_scope: targeted | full | none` — phase-targeted runs at each 4b gate (when not deferred), then THE single full-suite run at Phase 5a for all test-enabled modes (a Lightweight non-deferred plan carries this run at its final 4b gate)
-- **Phase-level validation**: Quality checks run once per phase, not per task
-- **Workstream dispatch**: One code-implementer per workstream (1-5 dependency-ordered tasks); workstreams with disjoint file sets run in parallel
-- **Cross-session resume**: An in-progress MASTER_PLAN is detected at intake and resumed at the first incomplete step (`@corvus` asks first; `@corvus-auto` decides deterministically)
-- **Conditional clarification**: Phase 0b skipped when requirements are already clear
-- **Conditional requirements analysis + risk-triaged gates**: spec-complete requests skip Phase 0a; acceptance-only 4b gates may be triage-skipped with lightweight verification (non-deferred gates always run)
-- **Two-tier quality gates**: Objective (@code-quality) at phase boundaries + Subjective (@ux-dx-quality) at feature completion
-- **Failure attribution**: Quality gate identifies exactly which task(s) failed
-- **Learning loops**: Repeated gate failures (iteration ≥2) get FAILURE_ANALYSIS before the next fix; Phase 6 alone extracts feature-wide success learnings, distilled to the local-only `.corvus/tasks/learnings.md`
-- **Optional plan review**: Phase 3.5 validates plan quality before implementation begins
-- **Safe autonomous completion**: `@corvus-auto` finishes locally by default; Git delivery requires an explicit trusted opt-in and guarded single-commit route
+On v2, use the plural `agents` key in `$XDG_CONFIG_HOME/opencode/opencode.json` (default `~/.config/opencode/opencode.json`), the same file that holds `plugins`; see [Agent Overrides Under v2](#agent-overrides-under-v2):
 
-> 📖 **Detailed Documentation**: See [docs/CORVUS-STATE-MACHINE.md](./docs/CORVUS-STATE-MACHINE.md) for complete state machine diagrams, parallel execution rules, and constraint tables.
+```json
+{"agents":{"task-planner":{"model":"<provider/model-a>"},"plan-reviewer":{"model":"<provider/model-b>"}}}
+```
+
+### Tests and Resume
+
+`tests: deferred | none` is recorded as `**Tests**` in the plan and defaults to deferred. Deferred authors coverage during implementation but executes no tests before the single full-suite run at Phase 5a. None neither authors nor runs tests. Both use acceptance-only 4b gates and retain final validation; see the authoritative [Tests policy](skill/corvus-phase-2/SKILL.md#tests).
+
+Intake reads PLAN.md's `**Status**` and resumes at the first incomplete step, checking the last gate's evidence. `@corvus` asks before resuming; `@corvus-auto` selects deterministically. Legacy plans are read-only context; resume and follow-up use task-planner's `AMEND_PLAN copy-forward` into a fresh PLAN.md with a DISCOVERY.md companion; completed plans are likewise preserved for follow-ups.
+
+Interactive Corvus uses `question()` for choices and lets the user override depth at approval. Corvus Auto accepts supplied inputs or defaults, records assumptions, auto-approves only OK, and halts on stalled review. It finishes locally by default; [Git delivery](agent/corvus-auto.md#git-delivery) requires trusted opt-in renewed on resume and its guarded delivery checks. Interactive delivery remains a user handoff.
+
+### Decision Records
+
+<!-- adapted from mattpocock/skills (MIT) -->
+Architecture decisions belong in the user's repository at [`docs/decisions/`](docs/decisions/README.md) only when all three conditions hold: **hard to reverse**, **surprising without context**, and **the result of a real trade-off**. Otherwise, no ADR is needed. The plan links records by ID, and review checks those whose scope it touches. Accepted decisions change through superseding records; `.corvus/tasks/learnings.md` keeps only Corvus-process learnings.
 
 ---
 
 ## Corvus PR Review
 
-Corvus PR Review is a multi-pass code review system that brings the same structured, multi-agent approach to pull request reviews. It runs two detection children in parallel — a holistic reviewer and a dedicated security reviewer — synthesizes their dimension-tagged findings, and posts formatted reviews to GitHub — either interactively with user gates or fully autonomously.
+Corvus PR Review is a multi-pass code review system that brings the same structured, multi-agent approach to pull request reviews. It runs two detection children in parallel — Standards (`@pr-code-reviewer`) and Spec plus independent security (`@security-reviewer`) — keeps findings separate by axis through synthesis, and posts formatted reviews to GitHub — either interactively with user gates or fully autonomously.
 
 ### When to Use
 
@@ -413,32 +389,32 @@ R1: Context Gathering [parallel]
     └── @researcher (issues, CI, advisories)
     │
     ▼
-R2: Two-Child Review [parallel]
-    ├── Holistic: architecture + correctness + conventions (@pr-code-reviewer, read-only)
-    └── Security (@security-reviewer, read-only)
-        → dimension-tagged findings fan into four result slots
+R2: Two-Axis Review [parallel]
+    ├── Standards: architecture + correctness + conventions (@pr-code-reviewer, read-only)
+    └── Spec across eligible dimensions + independent security (@security-reviewer, read-only)
+        → separate axis results; four projected dimension-status slots
     │
     ▼
-R3: Comment Synthesis (dedup, filter, severity, nit budget)
+R3: Axis-Local Synthesis (dedup, filter, severity, per-axis budgets)
     │
     ▼
-R4: User Gate or deterministic autonomous rails
+R4: User Gate or deterministic autonomous rails → approved artifact + SHA-256
     │
     ▼
-R5: Authorized post via @pr-comment-writer, or local-only completion
+R5: Descriptor-only dispatch to @pr-comment-writer for file-input posting, or local-only completion
 ```
 
 ### Key Features
 
-- **Two parallel review children** — a holistic reviewer covering the architecture, correctness, and conventions dimensions plus a dedicated security reviewer, fanned into four result slots
+- **Two independent axes** — Standards checks repository rules and the Fowler baseline; Spec checks requirements. The security specialist also detects vulnerabilities without a spec. Axis is separate from dimension; four projected `pass_results` slots retain coverage status, while findings are never merged or reranked across axes
 - **Dedicated security agent** with OWASP Top 10 and CWE knowledge base
 - **Aggressive false-positive filtering** with confidence scores and nit budget enforcement
 - **Conventional Comments format** for consistent, actionable feedback
 - **Trusted configuration** from `.opencode/review-config.yaml` at the PR's verified immutable base SHA, with safe built-in fallback and visible provenance
-- **Delta re-reviews** — a hidden review marker records the reviewed commit, so a later run skips resolved findings, verifies prior blockers were addressed, and focuses on what changed; posts pin to the reviewed head SHA (`commit_id`) behind a pre-post drift guard
+- **Delta re-reviews** — a hidden review marker records the reviewed commit; R0 collects prior-review `dispositions`, R1 verifies them against the diff, and both axes use them to skip resolved findings, check prior blockers, and focus on verified changes; unavailable delta evidence falls back to a full review. Posts pin to the reviewed head SHA (`commit_id`) behind a pre-post drift guard
 - **Least-privilege detection** — untrusted PR content is analyzed only by mechanically read-only R2 reviewers; `@code-quality` remains on the implementation-validation path
 - **Interactive and autonomous modes** — preview before posting, or let it run hands-free
-- **Fail-closed posting** — failed/invalid reviews stay local; eligible posts go only through the structured, command-safe `@pr-comment-writer` boundary
+- **Artifact posting** — R4 persists approved `post-request.json` bytes and their SHA-256; R5 sends only the descriptor. `@pr-comment-writer` verifies digest, schema, current head and anchors before posting from the file; failed verification stays local
 - **Just-in-time context gathering** — no pre-built index needed, works on any repo
 
 ### Configuration
@@ -446,7 +422,9 @@ R5: Authorized post via @pr-comment-writer, or local-only completion
 ```yaml
 # .opencode/review-config.yaml at the PR's verified base SHA
 severity_threshold: "nitpick"
+# Independent per-axis caps; R3's dimension protection can exceed them.
 max_nits: 3
+max_minors: 10
 passes:
   architecture: true
   correctness: true
@@ -459,7 +437,28 @@ path_rules:
     skip_passes: ["conventions"]
 ```
 
-> 📖 **Detailed Documentation**: See [docs/CORVUS-REVIEW-SKILL-SET.md](./docs/CORVUS-REVIEW-SKILL-SET.md) for complete review workflow documentation, configuration reference, and Conventional Comments specification.
+> 📖 **Detailed Documentation**: See [docs/CORVUS-REVIEW-SKILL-SET.md](./docs/CORVUS-REVIEW-SKILL-SET.md) for the review pipeline map and links to the authoritative skills, configuration, schemas, and Conventional Comments specification.
+
+---
+
+## Upgrading from 0.9 to 0.10
+
+- **Models** — Distinct `task-planner` and `plan-reviewer` models are optional and preferred. Without distinct overrides, review proceeds with a visible same-model degraded warning; see [Cross-model plan review](#cross-model-plan-review-recommended) for both hosts' configuration.
+- **Plans** — Legacy `MASTER_PLAN.md` and task files remain read-only. Resume or follow-up runs task-planner's `AMEND_PLAN copy-forward` into a fresh `PLAN.md`, preserving requirements, history and remaining work. Its `DISCOVERY.md` companion persists discovery evidence and environment context; see [amendments](agent/task-planner.md#amend_plan) and [discovery](agent/task-planner.md#discovery-companion).
+- **Tests** — Replace the old flags using this mapping:
+
+| 0.9 `tests_enabled` | 0.9 `tests_deferred` | 0.9 `test_scope` | 0.10 `tests` |
+|---------------------|----------------------|------------------|--------------|
+| `true` | `true` | Any | `deferred` |
+| `false` | Any | Any | `none` |
+| `true` | `false` | Any | `deferred` |
+
+The per-phase test run is gone: deferred coverage is authored during implementation and executed at final validation; `none` neither authors nor runs tests. See [Tests policy](skill/corvus-phase-2/SKILL.md#tests).
+
+- **Review** — Finding IDs are `<dim>-<axis>-NNN` (`arch`, `logic`, `conv`, `sec`; `standards` or `spec`). Standards and Spec stay separate through synthesis; `max_nits` and `max_minors` apply per axis, with dimension-protection exceptions. Posting uses a persisted artifact plus SHA-256, not retyped review text. Prior-review `dispositions` carry evidenced fixed/declined/open/unknown states to both axes; see the [review reference](docs/CORVUS-REVIEW-SKILL-SET.md).
+- **Prompt tests** — The byte-pin test is removed. Contributors use [`prompt-budgets.json`](prompt-budgets.json) and [`src/__tests__/prompt-structure.test.ts`](src/__tests__/prompt-structure.test.ts) for budgets and structural contracts, alongside prose review.
+
+See [CHANGELOG](CHANGELOG.md#0100-beta0--2026-09-09) for breaking changes and review-round-1 fixes.
 
 ---
 
@@ -472,25 +471,31 @@ path_rules:
 │   ├── corvus-auto.md      # Autonomous implementation orchestrator
 │   ├── corvus-review.md    # PR review orchestrator
 │   ├── corvus-review-auto.md # Autonomous PR review orchestrator
-│   ├── security-reviewer.md  # Security analysis specialist
+│   ├── security-reviewer.md  # Spec review and independent security analysis
 │   ├── pr-context-gatherer.md # PR context gathering
-│   ├── pr-code-reviewer.md    # Read-only non-security PR detection
+│   ├── pr-code-reviewer.md    # Read-only Standards-axis PR detection
 │   ├── pr-comment-writer.md   # GitHub review posting
 │   └── ...                 # (8 more agents)
 ├── command/                # Custom slash commands (4 commands)
 ├── skill/                  # On-demand skills (18 skills)
 │   ├── corvus-phase-*/     # Corvus workflow phases (7)
+│   ├── corvus-phase-4/reference/ # Dispatch, fix-loop, and transport procedures
+│   ├── corvus-phase-7/remediation.md # Review-fix round policy
 │   ├── corvus-review-*/    # PR review phases (7)
+│   ├── corvus-review-extras/{config,interactive,schemas,state}.md # Shared references
 │   └── *.../               # Utilities (corvus-extras, frontend-design, deep-research, web-search)
 ├── src/                    # Plugin source code
 ├── docs/                   # Detailed documentation
+│   ├── decisions/          # Architecture decision records and convention
 │   ├── CORVUS-STATE-MACHINE.md
 │   └── CORVUS-REVIEW-SKILL-SET.md
 ├── AGENTS.md
+├── NOTICE                  # Third-party attribution
+├── prompt-budgets.json     # Repo-time structural prompt contract
 └── README.md
 ```
 
-See [AGENTS.md](./AGENTS.md) for delegation instructions and [docs/CORVUS-STATE-MACHINE.md](./docs/CORVUS-STATE-MACHINE.md) for detailed workflow documentation.
+See [AGENTS.md](./AGENTS.md) for delegation instructions and [docs/CORVUS-STATE-MACHINE.md](./docs/CORVUS-STATE-MACHINE.md) for the workflow diagram and phase-skill pointers.
 
 ---
 

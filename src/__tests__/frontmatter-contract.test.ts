@@ -26,13 +26,11 @@ import { createFakeContext, type CommandInvocation } from "./fake-context"
  * corpus-wide: unexpected keys, unknown permission actions, unresolved
  * placeholders. Drift is caught by the suite instead of by review.
  *
- * RELATIONSHIP TO `prompt-contracts.test.ts`: that file pins prompt TEXT and
- * frontmatter SHAPE with regexes over the raw markdown. This one goes through the
- * production parsers (`parse-frontmatter`, `load-commands`, `load-skills`,
- * `to-v2-permissions`), so it sees what the hosts see — a quoted YAML scalar, a
- * reordered block, or an alias-resolved value all pass a parser and fail a regex,
- * and only one of those two answers is the contract. The overlap is one assertion
- * (skill `name` == directory) and it is kept because the levels differ.
+ * RELATIONSHIP TO `prompt-structure.test.ts` + `prompt-budgets.json`: together
+ * they define the prompt contract for structure, frontmatter, and line budgets.
+ * This file checks the corpus through the production parsers
+ * (`parse-frontmatter`, `load-commands`, `load-skills`, `to-v2-permissions`),
+ * exercising the loader and permission-translation behavior seen by the hosts.
  *
  * PROCESS SPAWNING: exactly ONE test in this file (and in the whole suite) runs a
  * real shell — "every packaged command expands against a real shell". That is the

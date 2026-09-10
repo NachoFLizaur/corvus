@@ -1,0 +1,114 @@
+{
+  "version": 1,
+  "totalLines": 5000,
+  "mustNotPerFile": 5,
+  "budgetClasses": {
+    "orchestrator": 300,
+    "general": 200,
+    "task-planner": 250,
+    "plan-reviewer": 150,
+    "skill": 150,
+    "reference": 200
+  },
+  "enforcementClasses": {
+    "requirements": { "enforced": true },
+    "planner": { "enforced": true },
+    "planning-review": { "enforced": true },
+    "corvus": { "enforced": true },
+    "corvus-auto": { "enforced": true },
+    "execution": { "enforced": true },
+    "lifecycle": { "enforced": true },
+    "research": { "enforced": true },
+    "review-axes": { "enforced": true },
+    "review-pipeline": { "enforced": true },
+    "specialists": { "enforced": true },
+    "commands": { "enforced": true }
+  },
+  "frontmatter": {
+    "agent": {
+      "allowed": ["description", "mode", "temperature", "permission", "color"],
+      "required": ["description", "mode", "temperature", "permission"]
+    },
+    "command": {
+      "allowed": ["description", "agent", "model"],
+      "required": ["description"]
+    },
+    "skill": {
+      "allowed": ["name", "description", "license"],
+      "required": ["name", "description"]
+    },
+    "reference": { "allowed": [], "required": [] }
+  },
+  "files": {
+    "agent/requirements-analyst.md": { "class": "requirements", "budget": "general", "headings": ["Analysis Workflow", "Output Format"] },
+    "agent/task-planner.md": { "class": "planner", "budget": "task-planner", "headings": ["Workflow", "Plan Format"] },
+    "agent/plan-reviewer.md": { "class": "planning-review", "budget": "plan-reviewer", "headings": ["Output Format", "Iteration Contract"] },
+    "agent/corvus.md": { "class": "corvus", "budget": "orchestrator", "headings": ["Workflow Phases", "Phase Gates"] },
+    "agent/corvus-auto.md": { "class": "corvus-auto", "budget": "orchestrator", "headings": ["Workflow Phases", "Phase Gates"] },
+    "agent/researcher.md": { "class": "research", "budget": "general", "headings": ["Complexity Router", "Output Format"] },
+    "agent/pr-code-reviewer.md": { "class": "review-axes", "budget": "general", "headings": ["Review Workflow", "Report Format"] },
+    "agent/security-reviewer.md": { "class": "review-axes", "budget": "general", "headings": ["Review Workflow", "Report Format"] },
+    "agent/corvus-review.md": { "class": "review-pipeline", "budget": "orchestrator", "headings": ["Workflow", "Operating Rules"] },
+    "agent/corvus-review-auto.md": { "class": "review-pipeline", "budget": "orchestrator", "headings": ["Workflow", "Operating Rules"] },
+    "agent/pr-context-gatherer.md": { "class": "review-pipeline", "budget": "general", "headings": ["Context Gathering Workflow", "Output Format"] },
+    "agent/pr-comment-writer.md": { "class": "review-pipeline", "budget": "general", "headings": ["Trust and Capability Boundary", "Posting Workflow"] },
+    "agent/code-explorer.md": { "class": "specialists", "budget": "general", "headings": ["Three Search Modes", "Output Format"] },
+    "agent/code-implementer.md": { "class": "specialists", "budget": "general", "headings": ["Defect-Fix Protocol", "Delegated Mode"] },
+    "agent/code-quality.md": { "class": "specialists", "budget": "general", "headings": ["Core Responsibilities", "Final Validation (Corvus Phase 5a)"] },
+    "agent/ux-dx-quality.md": { "class": "specialists", "budget": "general", "headings": ["Assessment Modes", "Output Format"] },
+    "command/cleanup-subagents.md": { "class": "commands", "budget": "general", "headings": [] },
+    "command/git-commit.md": { "class": "commands", "budget": "general", "headings": [] },
+    "command/readme.md": { "class": "commands", "budget": "general", "headings": [] },
+    "command/summary.md": { "class": "commands", "budget": "general", "headings": [] },
+    "skill/corvus-phase-0/SKILL.md": { "class": "lifecycle", "budget": "skill", "headings": [] },
+    "skill/corvus-phase-1/SKILL.md": { "class": "lifecycle", "budget": "skill", "headings": [] },
+    "skill/corvus-phase-2/SKILL.md": { "class": "planning-review", "budget": "skill", "headings": [] },
+    "skill/corvus-phase-4/SKILL.md": { "class": "execution", "budget": "skill", "headings": [] },
+    "skill/corvus-phase-5/SKILL.md": { "class": "execution", "budget": "skill", "headings": [] },
+    "skill/corvus-phase-6/SKILL.md": { "class": "lifecycle", "budget": "skill", "headings": [] },
+    "skill/corvus-phase-7/SKILL.md": { "class": "lifecycle", "budget": "skill", "headings": [] },
+    "skill/corvus-extras/SKILL.md": { "class": "specialists", "budget": "skill", "headings": [] },
+    "skill/frontend-design/SKILL.md": { "class": "specialists", "budget": "skill", "headings": [] },
+    "skill/deep-research/SKILL.md": { "class": "research", "budget": "skill", "headings": [] },
+    "skill/web-search/SKILL.md": { "class": "research", "budget": "skill", "headings": [] },
+    "skill/corvus-review-r0/SKILL.md": { "class": "review-pipeline", "budget": "skill", "headings": [] },
+    "skill/corvus-review-r1/SKILL.md": { "class": "review-pipeline", "budget": "skill", "headings": [] },
+    "skill/corvus-review-r2/SKILL.md": { "class": "review-axes", "budget": "skill", "headings": [] },
+    "skill/corvus-review-r3/SKILL.md": { "class": "review-pipeline", "budget": "skill", "headings": [] },
+    "skill/corvus-review-r4/SKILL.md": { "class": "review-pipeline", "budget": "skill", "headings": [] },
+    "skill/corvus-review-r5/SKILL.md": { "class": "review-pipeline", "budget": "skill", "headings": [] },
+    "skill/corvus-review-extras/SKILL.md": { "class": "review-pipeline", "budget": "skill", "headings": [] }
+  },
+  "definitions": {
+    "plan-format": { "owner": "agent/task-planner.md", "heading": "Plan Format" },
+    "frontier": { "owner": "skill/corvus-phase-4/SKILL.md", "heading": "Frontier" },
+    "slice": { "owner": "skill/corvus-phase-4/SKILL.md", "heading": "Slice" },
+    "gate": { "owner": "skill/corvus-phase-4/SKILL.md", "heading": "Gate" },
+    "depth": { "owner": "agent/task-planner.md", "field": "Depth", "values": ["quick", "standard", "deep"] },
+    "tests": { "owner": "agent/task-planner.md", "field": "Tests", "values": ["deferred", "none"] },
+    "status": { "owner": "agent/task-planner.md", "field": "Status", "values": ["[ ] Planning", "[~] In Progress", "[x] Complete"] }
+  },
+  "sections": {
+    "plan-template": {
+      "maxLines": 150,
+      "owners": [{ "file": "agent/task-planner.md", "heading": "Plan Format" }],
+      "requiredHeadings": ["Intent", "User Requirements (Immutable)", "Acceptance Criteria", "Decisions", "Fog of War", "Tasks", "Gates", "Log"]
+    },
+    "review-machinery": {
+      "maxLines": 40,
+      "owners": [
+        { "file": "skill/corvus-phase-2/SKILL.md", "heading": "Phase 3.5: High Accuracy Plan Review" },
+        { "file": "agent/plan-reviewer.md", "heading": "Iteration Contract" }
+      ],
+      "requiredHeadings": []
+    }
+  },
+  "dispatches": {
+    "AMEND_PLAN": ["agent/task-planner.md", "skill/corvus-phase-4/SKILL.md", "skill/corvus-phase-5/SKILL.md", "skill/corvus-phase-7/SKILL.md", "agent/corvus.md", "agent/corvus-auto.md"],
+    "PLAN_FIX": ["agent/task-planner.md", "skill/corvus-phase-2/SKILL.md"],
+    "PROGRESS_UPDATE": ["agent/task-planner.md", "skill/corvus-phase-4/SKILL.md"],
+    "FAILURE_ANALYSIS": ["agent/task-planner.md", "skill/corvus-phase-4/SKILL.md"],
+    "SUCCESS_EXTRACTION": ["agent/task-planner.md", "skill/corvus-phase-6/SKILL.md"],
+    "REMEDIATION_LEDGER": ["skill/corvus-phase-7/SKILL.md", "agent/corvus.md", "agent/corvus-auto.md"]
+  }
+}

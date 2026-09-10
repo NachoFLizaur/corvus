@@ -3,144 +3,102 @@ name: corvus-phase-1
 description: Discovery phase - research and codebase exploration
 ---
 
-## Phase 1: DISCOVERY
+# Phase 1: Discovery
 
-**Goal**: Gather the requested context once and return it to the declared caller.
+Gather the requested context once and return it to the declared caller.
 
 ## Required Dispatch Envelope
 
 Every Phase 1 invocation includes this routing envelope:
 
 ```markdown
-**DISCOVERY_ORIGIN**: [PHASE_0A | DIRECT_CALLER]
-**RETURN_TARGET**: [PHASE_0B | original caller identity]
-**DISCOVERY_SCOPE**: [specific unresolved questions]
-**EXISTING_FINDINGS**: [accumulated research/codebase findings, or "none"]
+**DISCOVERY_ORIGIN**: <PHASE_0A or DIRECT_CALLER>
+**RETURN_TARGET**: <PHASE_0B or original caller identity>
+**DISCOVERY_SCOPE**: <specific unresolved questions>
+**EXISTING_FINDINGS**: <accumulated findings, or none>
+**Depth**: <selected effort and reason>
 ```
 
-Valid routes are fixed:
+Validate the route before dispatch: `PHASE_0A` → `PHASE_0B`; `DIRECT_CALLER` → original
+caller identity. Treat `EXISTING_FINDINGS` as completed work and investigate only the delta.
+<!--
+Routing oracle: the supplied origin and target, read before launching children. Missing or
+inconsistent fields hold discovery for correction; neither depth nor caller disables routing.
+-->
+Done when the target and unanswered scope are unambiguous.
 
-| `DISCOVERY_ORIGIN` | Required `RETURN_TARGET` | Meaning |
-|--------------------|--------------------------|---------|
-| `PHASE_0A` | `PHASE_0B` | Phase 0a requested discovery; completion must feed Requirements Analyst `POST_DISCOVERY` before selection or planning |
-| `DIRECT_CALLER` | Original caller identity | A user/caller requested discovery directly; completion returns findings only, with no implicit planning |
+## Discovery Breadth
 
-Treat `EXISTING_FINDINGS` as already completed work. Scope researcher and code-explorer only to unanswered items; do not repeat research or code exploration already supplied to Phase 0b or the direct caller.
+Discovery runs at every depth. Depth scales breadth, not whether this phase runs:
 
-### Mandatory Concurrent-Work Check
+| Depth | Scope and Children |
+|-------|--------------------|
+| quick | Targeted scope; code-explorer only unless external technology is involved. |
+| standard | Code-explorer and researcher; cover affected seams and external evidence. |
+| deep | Both, wider integration scope, plus an in-scope ADR scan of `docs/decisions/` and relevant `.corvus/tasks/learnings.md` entries. |
 
-When the project is a Git repository with a GitHub remote, the code-explorer brief
-must list open pull requests with:
+Launch researcher and code-explorer in parallel when both are selected; an external
+scope with no open questions returns an explicit no-new-research result. Pass applicable
+ADR constraints onward for planning and review; record an absent decisions/learnings file.
+Done when each unanswered item has an assigned investigator at the selected breadth.
+
+## Concurrent-Work Check
+
+Include this check in the code-explorer brief for a Git repository with a GitHub remote:
 
 ```bash
 gh pr list --state open --json number,title,headRefName,files --limit 20
 ```
 
-Intersect each pull request's changed files with the discovery file set. Report any
-overlap in discovery findings as **competing in-flight work**, including the PR
-number, title, head branch, and overlapping paths. Competing in-flight work must
-flow into Phase 0b and every later plan input; interactive Corvus must surface it
-to the user before planning. An open PR touching the same files invalidates
-planning assumptions and is a coordination fact the user is owed.
-
-Launch these subagents in parallel using the Task tool:
+Intersect returned PR files with discovered paths. Report **competing in-flight work**
+with PR number, title, head branch, and overlapping paths. Record command failures or
+listing limits as unresolved coverage, rather than claiming no overlap. Carry competing
+work through Phase 0b and later plan inputs; interactive corvus surfaces it before planning.
+Done when overlap evidence or an explicit coverage gap is included in the findings.
 
 ### 1a. External Research (researcher)
 
-Use when the task involves technologies, patterns, or best practices that benefit from external documentation.
-
 ```markdown
-**TASK**: Research best practices and documentation for [specific topic]
-
-**EXPECTED OUTCOME**:
-- Relevant documentation links
-- Best practice recommendations
-- Code examples from authoritative sources
-- Effort estimate (S/M/L/XL)
-
-**MUST DO**:
-- Use web-research MCP tools (`web-research_multi_search`, `web-research_fetch_pages`) for web research
-- Use complexity router: quick search for factual lookups, deep research for comparative/architectural questions
-- Follow three-tier fallback: MCP tools → webfetch → curl
-- Cite all sources with links
-- Focus on [specific technology/pattern]
-- Investigate only DISCOVERY_SCOPE gaps not answered by EXISTING_FINDINGS
-- Provide actionable recommendations
-- Include effort estimates
-
-**MUST NOT DO**:
-- Make changes to any files
-- Provide generic advice without evidence
-- Skip the fallback chain if MCP tools fail
-- Repeat research already present in EXISTING_FINDINGS
-
-**REPORT BACK**:
-- TL;DR (1-3 sentences)
-- Key findings with source citations
-- Recommended approach with rationale
-- Potential risks or gotchas
+**TASK**: Research <external questions in DISCOVERY_SCOPE> using your Complexity Router.
+**DISCOVERY_ORIGIN**: <forward the validated envelope value unchanged>
+**RETURN_TARGET**: <forward the validated envelope value unchanged>
+**CONTEXT**: <request, selected depth, EXISTING_FINDINGS, technologies and constraints>
+**SCOPE**: Read-only investigation of unanswered questions; your research workflow owns tools and fallback.
+**REPORT BACK**: Cited findings, recommendations with rationale, risks, and unresolved questions.
 ```
+
+Use [researcher](../../agent/researcher.md) for research mechanics rather than copying them.
+Done when cited evidence or explicit gaps cover the assigned external scope.
 
 ### 1b. Codebase Investigation (code-explorer)
 
-Always required to understand the target codebase.
-
 ```markdown
-**TASK**: Analyze codebase to understand [relevant area/feature]
-
-**EXPECTED OUTCOME**:
-- List of files that need modification
-- Existing patterns to follow
-- Dependencies and constraints
-- Entry points and data flow
-- Project environment details (venv, package manager, build tools)
-
-**MUST DO**:
-- Use parallel search (3+ tools simultaneously)
-- Provide file:line references for all findings
-- Rate pattern quality where relevant
-- Identify potential risks or blockers
-- Detect project environment (venv, package manager, scripts)
-- When the project is a Git repository with a GitHub remote, run `gh pr list --state open --json number,title,headRefName,files --limit 20` and intersect each PR's files with the discovery file set
-- Investigate only DISCOVERY_SCOPE gaps not answered by EXISTING_FINDINGS
-- Optionally flag entries in `.corvus/tasks/learnings.md` relevant to the explored area (when the file exists)
-
-**MUST NOT DO**:
-- Make any file modifications
-- Guess at implementations without evidence
-- Repeat code exploration already present in EXISTING_FINDINGS
-
-**CONTEXT**: 
-- Project path: [path]
-- Relevant directories: [list]
-- Looking for: [specific patterns/files]
-
-**REPORT BACK**:
-- Files to modify (with line references)
-- Files to create
-- Patterns to follow (with examples)
-- Dependencies to be aware of
-- Potential risks or blockers
-- Competing in-flight work (overlapping open PRs, or "none")
-- Project environment (venv path, package manager, available scripts)
+**TASK**: Investigate <codebase questions in DISCOVERY_SCOPE> without edits.
+**DISCOVERY_ORIGIN**: <forward the validated envelope value unchanged>
+**RETURN_TARGET**: <forward the validated envelope value unchanged>
+**CONTEXT**: <repository, selected depth, relevant areas, EXISTING_FINDINGS>
+**SCOPE**: <unanswered delta; include Concurrent-Work Check and depth-specific scans above>
+**REPORT BACK**: file:line evidence; affected paths and seams; entry points and consumers;
+patterns; dependencies; risks; project environment and scripts; competing in-flight work;
+applicable ADRs and process learnings; unresolved questions.
 ```
+
+Done when repository evidence or named blockers cover the assigned codebase scope.
 
 ## Completion Payload
 
 Return one payload to `RETURN_TARGET`:
 
 ```markdown
-**DISCOVERY_ORIGIN**: [unchanged from dispatch]
-**RETURN_TARGET**: [unchanged from dispatch]
-**NEW_FINDINGS**: [research/codebase findings produced by this invocation]
-**ACCUMULATED_FINDINGS**: [EXISTING_FINDINGS merged with NEW_FINDINGS, without duplicates]
-**COMPETING IN-FLIGHT WORK**: [overlapping open PRs with paths, or "none/not applicable"]
-**UNRESOLVED_SCOPE**: [remaining questions, or "none"]
+**DISCOVERY_ORIGIN**: <unchanged from dispatch>
+**RETURN_TARGET**: <unchanged from dispatch>
+**NEW_FINDINGS**: <findings from this invocation>
+**ACCUMULATED_FINDINGS**: <EXISTING_FINDINGS merged with NEW_FINDINGS, deduplicated>
+**COMPETING IN-FLIGHT WORK**: <overlapping PRs and paths, none, not applicable, or coverage gap>
+**UNRESOLVED_SCOPE**: <remaining questions, or none>
 ```
 
-| Origin | Completion action |
-|--------|-------------------|
-| `PHASE_0A` | Return `ACCUMULATED_FINDINGS` to Phase 0b, which invokes Requirements Analyst in `POST_DISCOVERY`. Do not select a plan or invoke task-planner from Phase 1. |
-| `DIRECT_CALLER` | Return the payload to the original caller and stop. The caller decides whether any later action, including planning, is appropriate. |
-
-**Exit Criteria**: Requested scope is answered or explicitly listed in `UNRESOLVED_SCOPE`, and the payload has been returned to the declared target. Phase 1 never invokes task-planner directly.
+For `PHASE_0A`, return `ACCUMULATED_FINDINGS` to Phase 0b for analyst `POST_DISCOVERY`.
+For `DIRECT_CALLER`, return the payload to the original caller and stop.
+Phase 1 never invokes task-planner; the caller owns subsequent workflow routing.
+Done when scope is answered or listed in `UNRESOLVED_SCOPE` and the payload reaches its target.
