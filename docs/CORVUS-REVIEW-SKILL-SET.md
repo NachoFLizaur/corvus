@@ -33,7 +33,7 @@ IDs are `<dim>-<axis>-NNN`: `dim` is `arch`, `logic`, `conv` or `sec`; `axis` is
 
 ## Posting by Artifact
 
-After authorization, R4 persists the approved API-ready JSON as `.corvus/reviews/<owner>__<repo>__pr<pr_number>/post-request.json` and computes its SHA-256. R5 revalidates and dispatches only the descriptor, including path and digest—not review text.
+`corvus_review_payload` measures R3's checkpoint-backed candidate and freezes the authorized R4 artifact; `corvus_review_verify` checks it at R5 and immediately before writer POST. Only the descriptor, not review text, crosses dispatch; [R0 recovery](../skill/corvus-review-r0/SKILL.md#post-follow-up) renews measurement and authorization.
 
 `pr-comment-writer` independently verifies the digest, closed schema, current head and inline anchors, then posts from the unchanged file. Verification failure stays local-only. See [Freeze at R4](../skill/corvus-review-extras/state.md#freeze-at-r4), [artifact schema](../skill/corvus-review-extras/schemas.md#post_request-and-post_result--r5writer), and [R5](../skill/corvus-review-r5/SKILL.md).
 

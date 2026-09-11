@@ -22,7 +22,16 @@
 #                        but INERT with --tarball: every one of those assertions
 #                        requires a host boot, which that mode forbids.
 #   --refs               evaluate sibling reference reads from registered agent
-#                        maps with the local host matcher (included in --full).
+#                        maps with the local host matcher, AND probe the two review
+#                        tools (`corvus_review_payload`, `corvus_review_verify`) on
+#                        both hosts via `scripts/probe-tools.ts` (included in
+#                        --full). The v2 protocol has no tool listing (`v2.command
+#                        .list`/`v2.skill.list`/`v2.mcp.list` exist; no tool group)
+#                        and `opencode2 debug` covers only agents/config/paths, so
+#                        the probe drives the BUILT `dist/server.js` setup() and the
+#                        `dist/index.js` v1 hook function with the registration
+#                        tests' host double, then runs measure → freeze → verify in
+#                        a throwaway workspace.
 #   --tarball            npm-specifier resolution EMULATION. Does NOT boot the
 #                        host: for an npm specifier the host runs ITS OWN
 #                        registry install and resolves the entry against that
@@ -104,7 +113,8 @@ Usage: bash scripts/smoke-v2.sh [--full] [--refs] [--tarball | --registry <spec>
   --full              also assert the whole packaged corpus is registered
                       (agents, commands, skills, default MCP server, and refs;
                       accepted but INERT with --tarball)
-  --refs              probe sibling reference reads (also INERT with --tarball)
+  --refs              probe sibling reference reads and both review tools on
+                      both hosts (also INERT with --tarball)
   --tarball           npm-specifier resolution emulation (no host boot)
   --registry <spec>   POST-PUBLISH ONLY real-host load of an npm specifier
   -h, --help          show this help
@@ -346,7 +356,10 @@ run_boot_mode() {
     assert_full_skill_corpus
     assert_full_mcp_registration
   fi
-  if ((REFS)); then assert_reference_readability; fi
+  if ((REFS)); then
+    assert_reference_readability
+    assert_review_tools
+  fi
 
   section "result"
   log "PASS: plugin '$PLUGIN_ID' loaded from '$entry' under opencode2 (mode: $MODE, full: $FULL)"
@@ -544,20 +557,43 @@ assert_full_mcp_registration() {
   assert_api_corpus "MCP servers" /api/mcp "$MCP_SERVER_NAME"
 }
 
-assert_reference_readability() {
-  section "--refs: sibling reference readability (local matcher, host-registered maps)"
+# The package root whose BUILT bundles the host actually loaded: this repo for the
+# local mode, the host's own npm install for --registry (derived from the logged
+# entrypoint, never assumed).
+loaded_install_root() {
   local installed_root="$REPO_ROOT"
   if [[ "$MODE" == "registry" ]]; then
     local entrypoints entrypoint
     entrypoints="$(find_loading_lines "$REGISTRY_SPEC" |
       sed -E 's/.*entrypoint="?([^" ]+)"?.*/\1/' | sed -E 's/\?.*$//' | sort -u)"
-    [[ -n "$entrypoints" && "$entrypoints" != *$'\n'* ]] || die "ambiguous installed root for refs probe"
+    [[ -n "$entrypoints" && "$entrypoints" != *$'\n'* ]] || die "ambiguous installed root for probe"
     entrypoint="$entrypoints"
-    [[ "$entrypoint" == */node_modules/"$PACKAGE_NAME"/dist/server.js ]] || die "unrecognized refs entrypoint"
+    [[ "$entrypoint" == */node_modules/"$PACKAGE_NAME"/dist/server.js ]] || die "unrecognized probe entrypoint"
     installed_root="${entrypoint%/dist/server.js}"
   fi
+  printf '%s' "$installed_root"
+}
+
+assert_reference_readability() {
+  section "--refs: sibling reference readability (local matcher, host-registered maps)"
+  local installed_root
+  installed_root="$(loaded_install_root)" || die "could not determine the loaded install root"
   run_capped "$CAP_SECS" bun run "$REPO_ROOT/scripts/probe-refs.ts" "$WORK/debug-agents.json" "$installed_root" ||
     die "reference-readability probe failed"
+}
+
+# Both review tools on both hosts. No host listing exists for plugin tools (see
+# the --refs note in the header), so the oracle is the loaded install root's own
+# built bundles driven through the registration tests' host double, plus a
+# functional measure → freeze → verify roundtrip in a throwaway workspace.
+assert_review_tools() {
+  section "--refs: review tools on both hosts (dist/server.js setup + dist/index.js hooks)"
+  local installed_root
+  installed_root="$(loaded_install_root)" || die "could not determine the loaded install root"
+  [[ -f "$installed_root/dist/server.js" && -f "$installed_root/dist/index.js" ]] ||
+    die "loaded install root $installed_root lacks dist/server.js or dist/index.js"
+  run_capped "$CAP_SECS" bun run "$REPO_ROOT/scripts/probe-tools.ts" "$installed_root" ||
+    die "review-tool probe failed"
 }
 
 # --tarball: emulate the host's npm-specifier entry resolution without booting

@@ -1,11 +1,11 @@
 import type { PluginModule } from "@opencode-ai/plugin"
 import type { Plugin } from "@opencode-ai/plugin-v2"
-import legacyPlugin from "./index"
 import { enforceProtected } from "./v2/enforce-protected"
 import { registerAgents } from "./v2/register-agents"
 import { registerCommands } from "./v2/register-commands"
 import { registerMcp } from "./v2/register-mcp"
 import { registerSkills } from "./v2/register-skills"
+import { registerTools } from "./v2/register-tools"
 import type { Cleanup, Registrar } from "./v2/types"
 
 /**
@@ -16,7 +16,7 @@ import type { Cleanup, Registrar } from "./v2/types"
  * `agent/*.md` corpus itself (`v2/enforce-protected.ts:134`), deliberately, since
  * a policy oracle taken from the user-writable draft could already carry a
  * widened policy. Agents therefore need not precede it for correctness. Commands,
- * skills, and MCP are likewise independent of everything else. The order below is
+ * skills, tools, and MCP are likewise independent of everything else. The order below is
  * frozen anyway so registration and unwind (LIFO) sequences stay reproducible
  * across runs.
  */
@@ -25,6 +25,7 @@ const REGISTRARS: readonly Registrar[] = [
   enforceProtected,
   registerCommands,
   registerSkills,
+  registerTools,
   registerMcp,
 ]
 
@@ -34,7 +35,8 @@ const REGISTRARS: readonly Registrar[] = [
  * OpenCode 1.18.30+ resolves `exports["./server"]` before `main` and requires
  * a callable `server` on a default object with `id`. The v2 host requires
  * `{ id, setup }`; each loader ignores the other handler. `server` reuses the
- * legacy hook function, and `dist/index.js` remains the root function entry.
+ * legacy hook function through a runtime import of the sibling `index.js`;
+ * v2 `setup` does not load it. `dist/index.js` remains the root function entry.
  * SDK imports here are TYPE-ONLY. A value import (for
  * example `Plugin.define`, which is an identity function) would turn the beta
  * SDK into a runtime dependency and break v1 hosts that do not ship it, so
@@ -59,7 +61,11 @@ const REGISTRARS: readonly Registrar[] = [
  */
 const plugin = {
   id: "corvus",
-  server: legacyPlugin,
+  server: async (...args: Parameters<PluginModule["server"]>) => {
+    const { default: legacyPlugin }: { default: PluginModule["server"] } =
+      await import(new URL("./index.js", import.meta.url).href)
+    return legacyPlugin(...args)
+  },
   setup: async (ctx: Plugin.Context): Promise<Plugin.Cleanup> => {
     const cleanups: Cleanup[] = []
 

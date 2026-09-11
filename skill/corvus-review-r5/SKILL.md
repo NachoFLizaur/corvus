@@ -24,7 +24,7 @@ You MUST NOT invoke the writer, run a GitHub mutation, or offer an alternate pos
 
 ## Dispatch One Artifact
 
-After revalidation, require R4's [POST_ARTIFACT](../corvus-review-extras/schemas.md#post_request-and-post_result--r5writer) to match current identity/head and the approved event, with authorization still referring to the exact final document used at R4. Rerun the fixed hash command; compare with R4's expected_sha256 rather than replacing it. Missing artifact, digest mismatch, changed authorization, or incomplete evidence ends local-only. Done when the original authorization still binds these persisted bytes.
+After revalidation, require R4's [POST_ARTIFACT](../corvus-review-extras/schemas.md#post_request-and-post_result--r5writer) to match current identity/head and the approved event, with authorization still referring to the exact final document used at R4. Call `corvus_review_verify` with `{op: "verify", artifactPath: <artifact_path>, expectedSha256: <expected_sha256>}` before dispatch, including each permitted re-dispatch; keep R4's expected_sha256 unchanged. Require `ok:true`, sha256Match true, canonical true, no violations, and available measurements. Missing artifact, digest mismatch, changed authorization, or incomplete evidence ends local-only via [Posting Validation Failures](../corvus-review-extras/state.md#posting-validation-failures). Done when the original authorization still binds these persisted bytes.
 
 Record the posting-window start with byte-exact `date -u +%Y-%m-%dT%H:%M:%SZ`. Retain artifact bytes and descriptor unchanged until recovery settles.
 
@@ -39,7 +39,7 @@ Dispatch literal `pr-comment-writer` with only this JSON object, substituting va
   "event": "<approved event>"
 }
 ```
-Include no review body text, comments, findings, TASK block, or extra controls in the dispatch. The writer reads and independently hashes the artifact, validates its closed schema/current head/anchors, and posts directly from that file without retyping content. Done when one authorized artifact descriptor has been dispatched.
+Include no review body text, comments, findings, TASK block, or extra controls in the dispatch. The writer reads the artifact, validates its current head/anchors and semantic controls, calls `corvus_review_verify` immediately before POST, and posts directly from that file without retyping content. Done when one authorized artifact descriptor has been dispatched.
 
 ## Reconcile Writer Transport
 

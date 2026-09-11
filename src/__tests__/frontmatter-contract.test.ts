@@ -112,6 +112,8 @@ const KNOWN_PERMISSION_ACTIONS: readonly string[] = [
   "lsp",
   "web-research_multi_search",
   "web-research_fetch_pages",
+  "corvus_review_payload",
+  "corvus_review_verify",
 ]
 
 /**

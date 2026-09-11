@@ -417,6 +417,8 @@ R5: Descriptor-only dispatch to @pr-comment-writer for file-input posting, or lo
 - **Artifact posting** — R4 persists approved `post-request.json` bytes and their SHA-256; R5 sends only the descriptor. `@pr-comment-writer` verifies digest, schema, current head and anchors before posting from the file; failed verification stays local
 - **Just-in-time context gathering** — no pre-built index needed, works on any repo
 
+Measurement and freezing are plugin tools rather than shell commands: `corvus_review_payload` measures R3's candidate against the posting ceilings and, after R4 authorization, freezes the canonical `post-request.json` with a byte-equal read-back and SHA-256; `corvus_review_verify` re-checks that file at R5 and inside `@pr-comment-writer` immediately before each POST. Both review orchestrators may call both tools, the writer may call verify only, and detection agents call neither. If the review stops local-only — a missing question tool on a headless host, a budget violation, or a tool that is not exposed — the checkpoint is kept and the mode stays interactive; say `post` in a session that has the question tool to resume: R0 revalidates head, base and config, skips R1/R2 when the head is unchanged, re-measures, asks for authorization again and posts. Use `@corvus-review-auto` deliberately when you want posting without a question tool.
+
 ### Configuration
 
 ```yaml

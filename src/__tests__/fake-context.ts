@@ -14,10 +14,10 @@ import type { Rule, SetupContext } from "../v2/types"
  * assignment would destroy.
  *
  * FIDELITY BOUNDARY: `ctx` is cast to `SetupContext` because the real
- * `Plugin.Context` carries 23 members and this fake implements eight of them.
+ * `Plugin.Context` carries more domains than this fake implements.
  * The cast is the ONLY place fidelity is asserted rather than checked, and it is
  * deliberately narrow: everything the registrars actually touch (`location`,
- * `agent.transform`, `command.transform`, `skill.transform`, `mcp.transform`,
+ * `agent.transform`, `command.transform`, `skill.transform`, `mcp.transform`, `tool.transform`,
  * `permission.hook`, `session.hook`, `session.switchAgent`,
  * `session.switchModel`, `session.prompt`, `shell.hook`) is implemented with
  * types DERIVED from `SetupContext`, so an upstream rename breaks compilation
@@ -72,6 +72,9 @@ export type SkillDefinition = ReturnType<SkillDraft["list"]>[number]
 type McpDraft = Parameters<Parameters<SetupContext["mcp"]["transform"]>[0]>[0]
 /** Likewise the mutable server config `get`/`list` hand back. */
 export type McpServerConfig = NonNullable<ReturnType<McpDraft["get"]>>
+
+type ToolDraft = Parameters<Parameters<SetupContext["tool"]["transform"]>[0]>[0]
+export type ToolDefinition = ReturnType<ToolDraft["list"]>[number]
 
 /** The handle every `transform`/`hook` resolves to. */
 type Registration = Awaited<ReturnType<SetupContext["agent"]["transform"]>>
@@ -213,6 +216,7 @@ export interface FakeContext {
   readonly skills: Map<string, SkillDefinition>
   /** Servers written through `mcp.transform`, each a deep clone of what was set. */
   readonly mcp: Map<string, McpServerConfig>
+  readonly tools: Map<string, ToolDefinition>
   /** Every `session.switchAgent`/`switchModel`/`prompt` call, in order. */
   readonly sessionCalls: SessionCall[]
   /** Mutable host state that is not a draft. */
@@ -227,11 +231,12 @@ export interface FakeContext {
   context(input: ContextInput): Promise<SessionContextInput>
 }
 
-export function createFakeContext(): FakeContext {
+export function createFakeContext(directory = FAKE_DIRECTORY): FakeContext {
   const agents = new Map<string, DraftAgent>()
   const commands = new Map<string, CommandDefinition>()
   const skills = new Map<string, SkillDefinition>()
   const mcp = new Map<string, McpServerConfig>()
+  const tools = new Map<string, ToolDefinition>()
   const sessionCalls: SessionCall[] = []
   const state: { defaultAgent: string | undefined } = { defaultAgent: undefined }
   const registrations: FakeRegistration[] = []
@@ -346,10 +351,28 @@ export function createFakeContext(): FakeContext {
     },
   }
 
+  const toolDraft: ToolDraft = {
+    list: () => [...tools.values()],
+    get: (id) => tools.get(id),
+    namespace: () => { throw new Error("Corvus tool fake does not support namespaces") },
+    add: (tool) => {
+      const id = tool.name
+      tools.set(id, { ...tool, id, options: tool.options && { ...tool.options } })
+    },
+    update: (id, update) => {
+      const current = tools.get(id)
+      if (!current) return
+      const tool = { ...current, options: current.options && { ...current.options } }
+      update(tool)
+      tools.set(id, { ...tool, id, name: current.name })
+    },
+    remove: (id) => { tools.delete(id) },
+  }
+
   const ctx = {
     location: {
-      directory: FAKE_DIRECTORY,
-      project: { id: "prj_fake", directory: FAKE_DIRECTORY, canonical: FAKE_DIRECTORY },
+      directory,
+      project: { id: "prj_fake", directory, canonical: directory },
     },
     agent: { transform: (callback: (draft: AgentDraft) => void) => recordTransform("agent.transform", agentDraft, callback) },
     command: {
@@ -357,6 +380,7 @@ export function createFakeContext(): FakeContext {
     },
     skill: { transform: (callback: (draft: SkillDraft) => void) => recordTransform("skill.transform", skillDraft, callback) },
     mcp: { transform: (callback: (draft: McpDraft) => void) => recordTransform("mcp.transform", mcpDraft, callback) },
+    tool: { transform: (callback: (draft: ToolDraft) => void) => recordTransform("tool.transform", toolDraft, callback) },
     permission: { hook: (name: unknown, callback: unknown) => recordHook("permission.hook", name, callback) },
     session: {
       hook: (name: unknown, callback: unknown) => recordHook("session.hook", name, callback),
@@ -379,6 +403,7 @@ export function createFakeContext(): FakeContext {
     commands,
     skills,
     mcp,
+    tools,
     sessionCalls,
     state,
     registrations,

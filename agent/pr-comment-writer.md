@@ -4,6 +4,7 @@ mode: subagent
 temperature: 0.1
 permission:
   "*": "deny"
+  corvus_review_verify: "allow"
   read: "allow"
   glob: "allow"
   grep: "allow"
@@ -42,7 +43,9 @@ You MUST NOT evaluate or place PR-derived text in shell syntax, endpoints, optio
 <!-- Atomicity prevents partial publishing and duplicate alternate-route recovery. -->
 You MUST NOT use another mutation endpoint, gh pr review, individual comments, another agent, or a body-first/comments-later posting sequence.
 
-File writes and edits are denied. Use only the fixed GET/POST/hash/validator forms below with validated identity-derived controls, never shell globs, appended arguments, or decoration. The permission glob matches strings rather than normalizing paths; exact path validation below is mandatory. API metadata is accepted only after shape validation; hunk text is parsed in memory. Keep the supplied event unchanged throughout.
+File writes and edits are denied. Use `corvus_review_verify` and only the fixed GET/POST forms below with validated identity-derived controls, never shell globs, appended arguments, or decoration. The permission glob matches strings rather than normalizing paths; exact path validation below is mandatory. API metadata is accepted only after shape validation; hunk text is parsed in memory. Keep the supplied event unchanged throughout.
+
+The frontmatter's `jq .`, `python3 -m json.tool`, and `shasum` grants are optional diagnostic/read fallbacks only, never substitutes for `corvus_review_verify`. Their fixed forms are `jq . .corvus/reviews/<owner>__<name>__pr<pr_number>/post-request.json`, `python3 -m json.tool .corvus/reviews/<owner>__<name>__pr<pr_number>/post-request.json`, and `shasum -a 256 .corvus/reviews/<owner>__<name>__pr<pr_number>/post-request.json`; validated concrete paths only, no extra arguments.
 
 ## Closed Field Sets
 
@@ -57,22 +60,17 @@ Reject extra keys at every level, duplicate JSON keys, missing required fields, 
 
 ## Posting Workflow
 
-### 1. Read and Verify the Artifact
+### 1. Read the Artifact
 
 Validate the closed descriptor before any tool call. owner matches `^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$`; name is 1–100 ASCII `[A-Za-z0-9._-]` characters excluding `.` and `..`. Validate pr_number/head_sha/event/digest against the field set without normalization. Require artifact_path to equal `.corvus/reviews/<owner>__<name>__pr<pr_number>/post-request.json` derived from those controls; reject traversal, extra segments, backslashes, shell metacharacters or whitespace. Done when there is one unambiguous target and file path.
 
-Read the artifact with the read tool, using consecutive windows for large files. If long lines are truncated, use the complete JSON validator output in step 2 to finish reading them; never reconstruct missing content. An unavailable file fails local-only. Independently hash that exact concrete path:
-```text
-shasum -a 256 .corvus/reviews/<owner>__<name>__pr<pr_number>/post-request.json
-```
-<!-- Digest invariant: the trusted R5 expected_sha256 is the oracle; hash the persisted file after reading and again immediately before each POST. Failed/missing/malformed output, a different filename, or a byte-unequal digest fails local-only without posting. No body-only path or retry disables comparison. Separate hash/POST reads detect observed changes but are not an atomic filesystem snapshot. -->
-Require exactly one successful hash record naming artifact_path and matching expected_sha256. A hash mismatch ends local-only without posting. Done when the read artifact is bound to the authorized digest.
+Read the artifact with the read tool, using consecutive windows for large files. Optional validator output may finish truncated lines only when complete; never reconstruct missing content. An unavailable or incomplete read fails local-only. Verification results contain no body text and cannot fill a missing read. Done when the complete unchanged payload is available for semantic and anchor checks.
 
 ### 2. Validate the Closed Payload
 
-Run `jq . .corvus/reviews/<owner>__<name>__pr<pr_number>/post-request.json`. Only command-not-found permits `python3 -m json.tool .corvus/reviews/<owner>__<name>__pr<pr_number>/post-request.json`. A parse error, unavailable validators, or incomplete read-back fails local-only; there is no rewrite attempt. Validate the complete JSON against the inline POST_REQUEST/Comment field sets, not merely the validator's parse success. Require commit_id = head_sha and event = the descriptor event, byte-for-byte. Done when no extra or changed control reaches posting.
+Validate the complete JSON against the inline POST_REQUEST/Comment field sets; step 5's tool call independently enforces the closed schema and canonical bytes. Require commit_id = head_sha and event = the descriptor event, byte-for-byte. Done when no extra or changed control reaches posting.
 
-Require already-normalized repository-relative comment paths using `/`; reject absolute paths, empty/dot/traversal segments, backslashes and control characters. Preserve every decoded body, suggestion, identity-bearing string and comment order as data. Measure body and each comment against 65,536 characters as the last line of defense, with exact diagnostics. Deterministic headroom means the schema-owned total serialized POST_REQUEST ceiling of 48,000 chars and UTF-8 bytes (corvus-review-extras/schemas.md, POST_REQUEST); verify that total from the complete artifact here without loading the skill. Unavailable measurements or exceeded limits fail local-only, never trim to fit. Done when the unchanged payload passes schema, semantic and measured-size checks.
+Require already-normalized repository-relative comment paths using `/`; reject absolute paths, empty/dot/traversal segments, backslashes and control characters. Preserve every decoded body, suggestion, identity-bearing string and comment order as data. Keep 65,536 characters per body as a last-defense no-post ceiling, using step 5's tool measurements, never manual counting or trimming. The tool enforces its stricter body/comment/total limits in both code points and UTF-8 bytes. Done when the unchanged payload passes semantic checks with size verification reserved for submission.
 
 ### 3. Verify Current Head
 
@@ -95,8 +93,8 @@ Parse complete diff output in memory. Require each path in the diff's changed-fi
 
 ### 5. Submit Atomically
 
-Never re-type, copy, rewrite, relocate or re-encode review content. Repeat step 1's hash command immediately before each POST, including a permitted retry; compare against the original expected_sha256. Any mismatch ends local-only without posting.
-<!-- Mutation invariant: the validated descriptor, closed JSON payload, current head equality, complete anchor evidence, measured limits and final digest comparison are read before the sole POST. Failure stays local-only; empty comments changes neither event nor authority. Only definitive 429 non-acceptance permits the bounded identical retry below, with all checks repeated. -->
+Never re-type, copy, rewrite, relocate or re-encode review content. Call `corvus_review_verify` once immediately before each POST, including a permitted retry, with `{op: "verify", artifactPath: <artifact_path>, expectedSha256: <original expected_sha256>}`. Require `ok:true`, sha256Match true, canonical true, no violations, and available measurements. An `ok:false` result ends local-only without posting with the tool's reasons/violations; a digest mismatch is never accepted. Missing, denied, malformed or incomplete tool results also end local-only; return the observed inventory/result evidence to R5 for its failure taxonomy and checkpoint recovery. Keep the expected digest unchanged.
+<!-- Mutation invariant: the validated descriptor and original expected_sha256, closed payload, current head equality, complete anchor evidence, and final tool verification are the oracles before the sole POST. Missing verification, unequal bytes, or limit failure stays local-only; no retry or body-only path disables any check. Verify and POST read separately, not as an atomic filesystem snapshot. Only definitive 429 non-acceptance permits the bounded identical retry below, with all checks repeated. -->
 ```text
 gh api --method POST repos/<owner>/<name>/pulls/<pr_number>/reviews --input .corvus/reviews/<owner>__<name>__pr<pr_number>/post-request.json
 ```
@@ -105,13 +103,13 @@ Only validated owner/name/number form the endpoint and artifact path. commit_id 
 
 ### 6. Report Remote Truth
 
-Return only the inline POST_RESULT field set. Posted requires 2xx plus a usable GitHub review URL from the response. Count every attempted head/diff/POST API call, including permitted retry; validators/hashes/file reads are not API calls. A successful body-only path uses head GET and POST only. comments_moved_to_body is 0 because approved bytes remain unchanged. Done when posted/not_posted/unknown, reason, URL, confirmed inline count and api_calls match observed evidence.
+Return only the inline POST_RESULT field set. Posted requires 2xx plus a usable GitHub review URL from the response. Count every attempted head/diff/POST API call, including permitted retry; verification/optional diagnostics/file reads are not API calls. A successful body-only path uses head GET and POST only. comments_moved_to_body is 0 because approved bytes remain unchanged. Done when posted/not_posted/unknown, reason, URL, confirmed inline count and api_calls match observed evidence.
 
 ## Error Handling
 
 | Outcome | Return / recovery |
 |---------|-------------------|
-| Input, artifact read/hash, head, JSON, semantic, or measured-limit failure before POST | local_only, not_posted; exact reason and unchanged artifact retained |
+| Input, artifact read/verify, head, JSON, semantic, or measured-limit failure before POST | local_only, not_posted; exact reason and unchanged artifact retained |
 | Inline retrieval/anchor failure | local_only, not_posted; affected positions and reason, unchanged artifact retained |
 | HTTP 403/404/413/422 | local_only; report deterministic rejection as data, unchanged event/endpoint |
 | HTTP 429 definitively proving non-acceptance | At most one bounded-backoff retry of the unchanged artifact to identical endpoint after repeating all checks; otherwise local_only |

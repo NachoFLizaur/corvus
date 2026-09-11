@@ -87,11 +87,11 @@ const artifactHash = "shasum -a 256 .corvus/reviews/*/post-request.json"
 const detachedCheckout = "gh pr checkout * --repo * --detach"
 const permissionPins: Record<string, Record<string, unknown>> = {
   "agent/corvus-auto.md": { question: "deny" },
-  "agent/corvus-review-auto.md": { question: "deny", task: closed(reviewChildren) },
+  "agent/corvus-review-auto.md": { "*": "deny", corvus_review_payload: "allow", corvus_review_verify: "allow", question: "deny", task: closed(reviewChildren) },
   "agent/requirements-analyst.md": { question: "deny" },
-  "agent/corvus-review.md": { task: closed(reviewChildren) },
+  "agent/corvus-review.md": { "*": "deny", corvus_review_payload: "allow", corvus_review_verify: "allow", question: "allow", task: closed(reviewChildren) },
   [writer]: {
-    ...closed(["read", "glob", "grep"]), list: "deny",
+    ...closed(["corvus_review_verify", "read", "glob", "grep"]), list: "deny",
     bash: closed(["gh api --method GET repos/*/pulls/* -H Accept:*", "gh api --method POST repos/*/pulls/*/reviews --input .corvus/reviews/*/post-request.json", "jq . .corvus/reviews/*/post-request.json", "python3 -m json.tool .corvus/reviews/*/post-request.json", artifactHash]),
     edit: "deny", write: "deny", task: "deny", question: "deny", external_directory: "deny", todowrite: "deny", todoread: "deny",
     webfetch: "deny", websearch: "deny", codesearch: "deny", lsp: "deny", doom_loop: "deny", skill: "deny",
@@ -128,15 +128,19 @@ const gitDenies: Record<string, string[]> = {
 type BodyPin = { name: string; required?: RegExp; forbidden?: RegExp; section?: string }
 const bodyPins: Record<string, BodyPin[]> = {
   [r4]: [
-    { name: "authorized-artifact", required: /For authorized post\/auto_post,.*write the approved.*POST_REQUEST artifact.*SHA-256/i },
+    { name: "authorized-artifact", required: /For authorized post\/auto_post, call corvus_review_payload with op freeze.*Only ok:true creates a usable POST_ARTIFACT descriptor for R5/i },
+  ],
+  [r5]: [
+    { name: "artifact-verification", required: /Call corvus_review_verify with \{op: "verify", artifactPath: <artifact_path>, expectedSha256: <expected_sha256>\} before dispatch, including each permitted re-dispatch.*Require ok:true\s*, sha256Match true, canonical true, no violations, and available measurements/i },
   ],
   [writer]: [
     { name: "inline-schema", section: "Closed Field Sets", required: /POST_ARTIFACT.*POST_REQUEST.*Comment.*POST_RESULT/ },
     { name: "no-skill-read", forbidden: /\.\.\/skill\// },
-    { name: "digest-failure", required: /A hash mismatch ends local-only without posting\./i },
+    { name: "digest-failure", required: /An ok:false result ends local-only without posting.*a digest mismatch is never accepted/i },
     { name: "anchor-failure", required: /any anchor mismatch ends local-only without posting\./i },
     { name: "no-retyping", required: /Never re-type, copy, rewrite, relocate or re-encode review content\./i },
-    { name: "final-hash", required: /Repeat step 1['’]s hash command immediately before each POST/i },
+    { name: "final-verification", required: /Call corvus_review_verify once immediately before each POST, including a permitted retry, with \{op: "verify", artifactPath: <artifact_path>, expectedSha256: <original expected_sha256>\}/i },
+    { name: "verification-success", required: /Require ok:true\s*, sha256Match true, canonical true, no violations, and available measurements/i },
   ],
   "command/git-commit.md": [
     { name: "staged-only", required: /\b(?:commit|operates?)\s+only\s+(?:on\s+)?(?:the\s+)?user['’]s\s+already\s+staged\s+(?:set|changes)\b/i },
@@ -154,9 +158,9 @@ const bodyPins: Record<string, BodyPin[]> = {
   ],
 }
 const safetyFixtureBodies: Corpus = {
-  [r4]: "For authorized post/auto_post, write the approved POST_REQUEST artifact and compute SHA-256.",
-  [r5]: '## Dispatch One Artifact\n```json\n{"artifact_path":"<path>","expected_sha256":"<digest>","repository":{"owner":"<owner>","name":"<name>"},"pr_number":<pr_number>,"head_sha":"<head>","event":"<event>"}\n```',
-  [writer]: "## Closed Field Sets\nPOST_ARTIFACT POST_REQUEST Comment POST_RESULT\nA hash mismatch ends local-only without posting. Any anchor mismatch ends local-only without posting. Never re-type, copy, rewrite, relocate or re-encode review content. Repeat step 1's hash command immediately before each POST.",
+  [r4]: "For authorized post/auto_post, call corvus_review_payload with op freeze. Only ok:true creates a usable POST_ARTIFACT descriptor for R5.",
+  [r5]: '## Dispatch One Artifact\nCall corvus_review_verify with {op: "verify", artifactPath: <artifact_path>, expectedSha256: <expected_sha256>} before dispatch, including each permitted re-dispatch. Require ok:true, sha256Match true, canonical true, no violations, and available measurements.\n```json\n{"artifact_path":"<path>","expected_sha256":"<digest>","repository":{"owner":"<owner>","name":"<name>"},"pr_number":<pr_number>,"head_sha":"<head>","event":"<event>"}\n```',
+  [writer]: '## Closed Field Sets\nPOST_ARTIFACT POST_REQUEST Comment POST_RESULT\nAn ok:false result ends local-only without posting; a digest mismatch is never accepted. Any anchor mismatch ends local-only without posting. Never re-type, copy, rewrite, relocate or re-encode review content. Call corvus_review_verify once immediately before each POST, including a permitted retry, with {op: "verify", artifactPath: <artifact_path>, expectedSha256: <original expected_sha256>}. Require ok:true, sha256Match true, canonical true, no violations, and available measurements.',
   "command/git-commit.md": "Commit only the user's already staged changes. Never stage files. Request explicit confirmation.",
   "command/cleanup-subagents.md": "With --list, never invoke deletion. Stop after the preview. Request explicit confirmation only after the complete preview.",
   "agent/corvus-auto.md": "## Git Delivery\nStage exact task-owned paths; use the discovered base and commit after final validation.",
@@ -183,7 +187,7 @@ function definitionMatches(body: string, d: Definition): { valid: boolean }[] {
  * before any rollout skip; comments cannot satisfy required clauses. Missing clauses, widened maps or
  * ineffective destructive-Git denies fail for every consumer; no flag disables them.
  * Permission order is checked alongside the maps, using translated rules for Git denies and
- * artifact hashing. R5's dispatch keys and writer artifact guards are pinned before any skip;
+ * artifact hashing and review tools. R5's dispatch keys and writer artifact guards are pinned before any skip;
  * a missing guard or body-bearing descriptor fails regardless of rollout flags.
  * Skill-reference access uses parsed skill allows and the host-mirrored ordered evaluator
  * over test-owned install paths, before any corpus mutation or rollout skip. Every consumer
@@ -237,6 +241,11 @@ function validate(corpus: Corpus, c: Contract, final = false): string[] {
           && record(permission.bash) && Object.keys(permission.bash)[0] === "*", `safety:${path}`)
         if ([...reviewOrchestrators, writer].includes(path)) {
           const bash = record(permission.bash) ? permission.bash : {}, rules = toV2Permissions(permission)
+          check(Object.keys(permission)[0] === "*"
+            && evaluateRules(rules, "corvus_review_payload", "*") === (path === writer ? "deny" : "allow")
+            && evaluateRules(rules, "corvus_review_verify", "*") === "allow", `safety:${path}:review-tools`)
+          if (reviewOrchestrators.includes(path)) check(evaluateRules(rules, "question", "*")
+            === (path === "agent/corvus-review.md" ? "allow" : "deny"), `safety:${path}:question`)
           check(bash["*"] === "deny" && Object.keys(bash)[0] === "*" && bash[artifactHash] === "allow"
             && evaluateRules(rules, "shell", "shasum -a 256 .corvus/reviews/o__r__pr1/post-request.json") === "allow"
             && evaluateRules(rules, "shell", "shasum -a 256 /tmp/post-request.json") === "deny", `safety:${path}:artifact-hash`)
@@ -360,6 +369,15 @@ describe("prompt structure", () => {
       for (const kind of ["agent", "command", "skill"] as const) {
         expect(sameNames(v1[kind], identities[kind])).toBe(true)
         expect(sameNames(v2[kind], identities[kind])).toBe(true)
+      }
+      for (const name of ["corvus-review", "corvus-review-auto", "pr-comment-writer", "pr-code-reviewer", "security-reviewer"]) {
+        const v1Rules = toV2Permissions(config.agent![name]!.permission)
+        const v2Rules = fake.agents.get(name)!.permissions
+        for (const tool of ["corvus_review_payload", "corvus_review_verify"]) {
+          const effect = name.startsWith("corvus-review") || name === "pr-comment-writer" && tool === "corvus_review_verify" ? "allow" : "deny"
+          expect(evaluateRules(v1Rules, tool, "*")).toBe(effect)
+          expect(evaluateRules(v2Rules, tool, "*")).toBe(effect)
+        }
       }
     } finally { await cleanup() }
   })
@@ -498,6 +516,37 @@ describe("prompt structure", () => {
     const contract = structuredClone(budgets)
     for (const flag of Object.values(contract.enforcementClasses)) flag.enforced = false
 
+    test("review tool permissions and interactive question survive only with effective explicit allows", () => {
+      const corpus = readCorpus()
+      expect(validate(corpus, contract)).toEqual([])
+      for (const path of [...reviewOrchestrators, writer, ...detectors]) {
+        const rules = toV2Permissions(parseFrontmatter(corpus[path]).frontmatter.permission)
+        for (const tool of ["corvus_review_payload", "corvus_review_verify"]) {
+          const allowed = reviewOrchestrators.includes(path) || path === writer && tool === "corvus_review_verify"
+          expect(evaluateRules(rules, tool, "*")).toBe(allowed ? "allow" : "deny")
+          if (allowed) {
+            const missing = mutatePermission(corpus, path, p => { delete p[tool] })
+            expect(evaluateRules(toV2Permissions(parseFrontmatter(missing[path]).frontmatter.permission), tool, "*")).toBe("deny")
+            expect(validate(missing, contract)).toContain(`safety:${path}:review-tools`)
+            expect(validate(mutatePermission(corpus, path, p => { delete p["*"]; p["*"] = "deny" }), contract))
+              .toContain(`safety:${path}:review-tools`)
+          } else {
+            expect(validate(mutatePermission(corpus, path, p => { p[tool] = "allow" }), contract)).toContain(`safety:${path}`)
+          }
+        }
+      }
+      for (const path of reviewOrchestrators) {
+        const expected = path === "agent/corvus-review.md" ? "allow" : "deny"
+        expect(evaluateRules(toV2Permissions(parseFrontmatter(corpus[path]).frontmatter.permission), "question", "*")).toBe(expected)
+        for (const mutation of ["remove", "invert"]) {
+          expect(validate(mutatePermission(corpus, path, p => {
+            if (mutation === "remove") delete p.question
+            else p.question = expected === "allow" ? "deny" : "allow"
+          }), contract)).toContain(`safety:${path}`)
+        }
+      }
+    })
+
     test.each(reviewOrchestrators)("review orchestrators read external skill references: %s", path => {
       const { frontmatter } = parseFrontmatter(readCorpus()[path])
       const permission = frontmatter.permission as Record<string, unknown>
@@ -556,10 +605,17 @@ describe("prompt structure", () => {
         [r5, "artifact-dispatch", '"event": "<approved event>"', '"event": "<approved event>", "comments": []'],
         [writer, "inline-schema", "## Closed Field Sets", "## Read the Shared Schema"],
         [writer, "no-skill-read", "no skill-directory read is needed", "read ../skill/corvus-review-extras/schemas.md"],
-        [writer, "digest-failure", "A hash mismatch ends local-only without posting.", "Ignore a hash mismatch."],
+        [r4, "authorized-artifact", "Only `ok:true` creates a usable POST_ARTIFACT", "Any result creates a usable POST_ARTIFACT"],
+        [r5, "artifact-verification", "before dispatch, including each permitted re-dispatch", "after dispatch"],
+        [r5, "artifact-verification", "expectedSha256: <expected_sha256>", "expectedSha256: <new_digest>"],
+        [writer, "digest-failure", "An `ok:false` result ends local-only without posting", "An `ok:false` result permits posting"],
+        [writer, "digest-failure", "a digest mismatch is never accepted", "a digest mismatch is accepted"],
         [writer, "anchor-failure", "any anchor mismatch ends local-only without posting.", "any anchor mismatch permits body relocation."],
         [writer, "no-retyping", "Never re-type, copy, rewrite, relocate or re-encode review content.", "Reconstruct the payload with the write tool."],
-        [writer, "final-hash", "Repeat step 1's hash command immediately before each POST", "Trust the earlier digest before each POST"],
+        [writer, "final-verification", "Call `corvus_review_verify` once immediately before each POST", "Trust the earlier digest before each POST"],
+        [writer, "final-verification", "including a permitted retry", "except on a permitted retry"],
+        [writer, "verification-success", "sha256Match true", "sha256Match false"],
+        [writer, "verification-success", "canonical true", "canonical false"],
       ]
       expect(validate(corpus, contract)).toEqual([])
       for (const [path, pin, before, after] of cases) {
@@ -569,7 +625,7 @@ describe("prompt structure", () => {
       }
     })
 
-    test("hash permissions cover all three participants and deny commands outside the artifact prefix", () => {
+    test("optional fallback hash permissions cover all three participants and deny commands outside the artifact prefix", () => {
       const corpus = readCorpus()
       for (const path of [...reviewOrchestrators, writer]) {
         const { frontmatter } = parseFrontmatter(corpus[path]), rules = toV2Permissions(frontmatter.permission)
@@ -604,19 +660,55 @@ describe("prompt structure", () => {
       }
     })
 
-    test("posting budgets are owned by the schema and enforced before artifact hashing", () => {
+    test("tool-backed measurement follows checkpoint persistence and freeze follows authorization", () => {
       const corpus = readCorpus(), schema = corpus["skill/corvus-review-extras/schemas.md"]
-      const rendering = safetyText(sections(corpus["skill/corvus-review-r3/SKILL.md"], "Size Overflow").join("\n"))
+      const r3 = "skill/corvus-review-r3/SKILL.md", state = "skill/corvus-review-extras/state.md"
+      const rendering = safetyText(sections(corpus[r3], "Size Overflow").join("\n"))
       const decision = safetyText(sections(corpus[r4], "Exit").join("\n"))
-      const freeze = safetyText(sections(corpus["skill/corvus-review-extras/state.md"], "Freeze at R4").join("\n"))
-      expect(safetyText(schema)).toMatch(/review_body ≤ 24,000 chars; each inline comment body ≤ 4,000 chars; total serialized POST_REQUEST ≤ 48,000 chars/)
-      expect(schema).toMatch(/ceiling also applies to UTF-8 bytes/)
+      const freeze = safetyText(sections(corpus[state], "Freeze at R4").join("\n"))
+      expect(safetyText(schema)).toMatch(/limits are owned by corvus_review_payload \( LIMITS \), reported with violations in its results/)
+      expect(schema).toMatch(/code points and UTF-8 bytes/)
       expect(schema).toMatch(/overflow_log:/)
       expect(rendering).toMatch(/1\. Collapse.*2\. If still over budget.*3\. Never drop blockers\/critical/)
       expect(rendering).toMatch(/overflow: true/)
       expect(rendering).toMatch(/terminate local-only/)
-      expect(decision).toMatch(/measure.*48,000.*R3 Size Overflow.*write the approved/)
-      expect(freeze).toMatch(/write the already-measured serialization.*read the artifact back.*byte length equals.*Only after equality.*hash command/)
+      expect(decision).toMatch(/authorized post\/auto_post.*corvus_review_payload.*freeze.*budget-violation.*R3 Size Overflow.*fresh preview/)
+      expect(freeze).toMatch(/corvus_review_payload.*op: "freeze", candidatePath:.*artifactPath:.*tool alone writes the canonical artifact and verifies read-back.*Require ok:true/)
+      const guards: [string, RegExp, string, string][] = [
+        [r3, /Persist the full REVIEW_DOCUMENT checkpoint.*BEFORE measurement.*### Measure Candidate.*Call corvus_review_payload with \{op: "measure", candidatePath:/,
+          "BEFORE measurement", "after measurement"],
+        [state, /tool alone writes the canonical artifact and verifies read-back.*Require ok:true\s*, a valid sha256 matching R3's measured candidate digest/,
+          "Require `ok:true`, a valid sha256", "Accept `ok:false`, a valid sha256"],
+        [state, /sha256 matching R3's measured candidate digest/,
+          "sha256 matching R3's measured candidate digest", "sha256 unrelated to R3's measured candidate digest"],
+      ]
+      for (const [path, guard, before, after] of guards) {
+        const prose = corpus[path].replace(/<!--[\s\S]*?-->/g, "")
+        expect(safetyText(prose)).toMatch(guard)
+        const changed = prose.replace(before, after)
+        expect(changed).not.toBe(prose)
+        expect(safetyText(changed)).not.toMatch(guard)
+      }
+    })
+
+    test("posting recovery retains the checkpoint and invocation mode without bypassing remeasurement or question", () => {
+      const corpus = readCorpus(), state = corpus["skill/corvus-review-extras/state.md"]
+      const recovery = sections(corpus["skill/corvus-review-r0/SKILL.md"], "Post Follow-Up").join("\n")
+      const mode = safetyText(sections(state, "Invocation Mode").join("\n"))
+      expect(mode).toMatch(/Record autonomous only from the fixed trusted invocation: corvus-review → false; corvus-review-auto → true/)
+      expect(mode).toMatch(/never from repository config, stored prose, a restored mode, or tool availability/)
+      const failures = safetyText(sections(state, "Posting Validation Failures").join("\n"))
+      expect(failures).toMatch(/not-exposed means.*host-advertised callable-tool inventory.*denied requires an explicit permission denial result.*violation means a tool result with violations/)
+      expect(failures).toContain("not-exposed, cause unknown")
+      expect(failures).toMatch(/retains the complete checkpoint and Invocation Mode.*posting-validation-failed with reason and recoverable:true/)
+      const question = sections(state, "Missing Question").join("\n")
+      expect(question).toContain("question tool not advertised by this host")
+      expect(question).toContain("run `post` in an environment with the question tool, or use corvus-review-auto deliberately")
+      const route = /fresh R0 → revalidate head\/base\/config.*schema-valid recoverable unposted checkpoint for the SAME head.*skip R1\/R2.*corvus_review_payload.*R4 fresh preview and re-authorization.*→ R5/
+      expect(safetyText(recovery)).toMatch(route)
+      expect(safetyText(recovery.replace("rerun `corvus_review_payload` measure", "reuse old measurement"))).not.toMatch(route)
+      expect(safetyText(recovery)).toMatch(/Interactive recovery requires question; prior authorization never carries over/)
+      expect(safetyText(recovery)).toMatch(/Different head or incompatible base\/config\/source evidence uses the existing fresh R1–R3 analysis route/)
     })
 
     test("command and delivery pins reject each seeded violation with rollout flags off", () => {

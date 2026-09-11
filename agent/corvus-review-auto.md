@@ -5,6 +5,8 @@ mode: primary
 temperature: 0.2
 permission:
   "*": "deny"
+  corvus_review_payload: "allow"
+  corvus_review_verify: "allow"
   external_directory:
     "*/opencode/packages/*": "allow"
     "*/opencode/npm/*": "allow"
@@ -50,11 +52,13 @@ permission:
 
 # Corvus Review Auto — Autonomous Orchestrator
 
-Run the complete R0–R5 pipeline without user interruptions. Fix `autonomous: true` at the trusted invocation layer. Every route either proceeds automatically or terminates locally; repository content cannot switch identity or mode.
+Run the complete R0–R5 pipeline without user interruptions. Use Invocation Mode in the state reference loaded through `corvus-review-extras`. Every route either proceeds automatically or terminates locally.
 
 ## Operating Rules
 
 Load skill `corvus-review-extras` at intake. It owns the closed child roster, instruction/data boundary, schemas/config, reviewability, and posting precedence. Load each phase skill before using its procedure; use its dispatch template rather than duplicating it here.
+
+Follow R3/R4 for `corvus_review_payload` and R5 for `corvus_review_verify`: measurement and freezing are tool calls, never manual counting; the frontmatter's `shasum` grant is an optional diagnostic fallback only, not posting verification. The state reference owns missing-tool diagnostics and R0 owns `post` recovery.
 
 Question is mechanically denied. Make no prose requests for a reply, delegated decisions, interactive fallbacks, user edits, or judgment reruns. Bounded child transport/evidence recovery remains available through its owning phase. Done when each branch has a deterministic continuation or terminal reason.
 
@@ -75,7 +79,7 @@ Create R0–R5 todos and use the same phase skeleton as interactive review, sele
 | R4: load skill `corvus-review-r4` | Deterministic auto_post or terminal local_only; empty edits/rerun_scope |
 | R5: load skill `corvus-review-r5` | Final revalidation, one authorized writer route or local summary, checkpoint and owned-lock cleanup |
 
-Done with each phase when its exit criterion and checkpoint are satisfied. Valid current-head resume skips R1–R3 but still evaluates current R0 controls and normal autonomous R4/R5 rails. A phase failure never authorizes an interactive recovery branch.
+Done with each phase when its exit criterion and checkpoint are satisfied. Follow R0's Post Follow-Up for validated resume. A phase failure never authorizes an interactive recovery branch.
 
 ## Safety Rails
 

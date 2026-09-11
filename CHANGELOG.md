@@ -5,6 +5,28 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.10.0-beta.3 — 2026-09-10
+
+### Added
+
+- Two plugin tools registered on both hosts (v1 `tool` hooks and v2 `tool.transform` with `codemode: false`), confined to files under the reviewed workspace's `.corvus/reviews/`:
+  - `corvus_review_payload` — `measure` a candidate `POST_REQUEST` file (code points and UTF-8 bytes for the body, each inline comment and the whole canonical serialization against the 24,000 / 4,000 / 48,000 ceilings, violations with the exceeded unit) or `freeze` it into the canonical artifact (UTF-8 JSON, two-space indent, LF, no BOM, final LF) with byte-equal read-back and the SHA-256; results carry measurements and diagnostics, never review text. Callable by `corvus-review` and `corvus-review-auto` only.
+  - `corvus_review_verify` — read-only check of a frozen artifact against its expected digest: closed schema, duplicate keys, invalid UTF-8, canonical bytes, budgets and SHA-256. Callable by both review orchestrators and `pr-comment-writer` (immediately before each POST); detection agents allow neither tool.
+- `scripts/probe-tools.ts` and `smoke-v2.sh --refs/--full` assert both tools on both hosts from the built bundles and run a measure → freeze → verify roundtrip.
+
+### Fixed
+
+- Interactive review no longer stops local-only at R3/R4 for lack of a permitted byte-exact measurement, serialization and read-back path; the tools above provide it under the orchestrators' closed-deny permission maps.
+- A host that does not advertise the question tool now yields a precise diagnostic (`question tool not advertised by this host`, citing the inventory), a resumable local-only checkpoint, and the invocation mode kept interactive — never recorded as autonomous — with the recovery path told to the user.
+- `post` recovery is defined: fresh R0 → revalidate head, base and config → restore only a schema-valid checkpoint for the same head → skip R1/R2 when the head is unchanged → rerun measurement → re-authorize via question → R5.
+- The `mode` field records `autonomous` only from the fixed autonomous invocation value; repository content and child output cannot switch it.
+- R3 persists the complete `REVIEW_DOCUMENT` checkpoint before measurement, so a measurement failure (tool absent, denied or budget violation) always leaves a resumable checkpoint.
+
+### Changed
+
+- The comment writer's and orchestrators' `shasum`/`jq`/`python3 -m json.tool` shell grants are optional diagnostic fallbacks; posting verification is the tool call.
+- The schemas reference points at the tool-owned `LIMITS` for posting-size ceilings instead of restating them.
+
 ## 0.10.0-beta.2 — 2026-09-10
 
 ### Fixed

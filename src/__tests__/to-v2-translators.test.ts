@@ -111,17 +111,19 @@ describe("toV2Agent field mapping", () => {
 
 describe("toV2Permissions", () => {
   test("turns a scalar effect into one rule scoped to `*`", () => {
-    expect(toV2Permissions({ read: "allow", edit: "deny", doom_loop: "ask" })).toEqual([
+    expect(toV2Permissions({ read: "allow", edit: "deny", doom_loop: "ask", corvus_review_payload: "deny", corvus_review_verify: "allow" })).toEqual([
       { action: "read", resource: "*", effect: "allow" },
       { action: "edit", resource: "*", effect: "deny" },
       { action: "doom_loop", resource: "*", effect: "ask" },
+      { action: "corvus_review_payload", resource: "*", effect: "deny" },
+      { action: "corvus_review_verify", resource: "*", effect: "allow" },
     ])
   })
 
   test("turns a resource map into one rule per resource in frontmatter order", () => {
     const rules = toV2Permissions(corpus["pr-comment-writer"].permission)
 
-    // `agent/pr-comment-writer.md:11-17`: a `*` deny followed by five allowlisted
+    // `agent/pr-comment-writer.md:12-18`: a `*` deny followed by five allowlisted
     // commands. Order is the whole precedence model (last match wins), so the
     // deny MUST come first and the allows MUST keep their authored sequence.
     expect(rules.filter((rule) => rule.action === "shell")).toEqual([
@@ -136,8 +138,8 @@ describe("toV2Permissions", () => {
       { action: "shell", resource: "python3 -m json.tool .corvus/reviews/*/post-request.json", effect: "allow" },
       { action: "shell", resource: "shasum -a 256 .corvus/reviews/*/post-request.json", effect: "allow" },
     ])
-    // T15: 25 + one hash rule - two payload edit/write allows = 24; both denies remain.
-    expect(rules).toHaveLength(24)
+    // T27: 24 existing rules + one verify tool allow = 25; the shell rules are unchanged.
+    expect(rules).toHaveLength(25)
   })
 
   test("renames v1 actions onto their v2 tool names, collapsing write and patch", () => {
@@ -150,7 +152,7 @@ describe("toV2Permissions", () => {
 
     // Already-v2 names and actions with no v2 tool pass through, so the rename is
     // idempotent and safe to re-apply at hook time.
-    for (const action of ["shell", "subagent", "edit", "read", "lsp", "doom_loop"])
+    for (const action of ["shell", "subagent", "edit", "read", "lsp", "doom_loop", "corvus_review_payload", "corvus_review_verify"])
       expect(renameAction(action)).toBe(action)
   })
 

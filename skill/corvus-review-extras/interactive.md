@@ -6,6 +6,8 @@ Load only after [R4](../corvus-review-r4/SKILL.md) selects interactive mode and 
 
 Show the complete review_body, action_reasoning, exact notices, and separate Standards/Spec totals, key concerns, and inline previews. Display finding ID and axis/dimension with path/range. If previews are shortened, show up to ten per axis and disclose each omitted count; make the full group available before approval. Done when neither axis is hidden by the other's size or severity.
 
+Before a question call, apply [Missing Question](state.md#missing-question) if the host does not advertise the tool; preserve the preview/checkpoint without authorizing a post.
+
 Use question() with Post Review, Edit Comments, Save Locally, and Re-run Review buttons. Post describes the constrained action and total inline count. Post emits decision post only for this final preview; Save Locally emits local_only and `This review was NOT posted to GitHub.` Done when the user has explicitly selected a route.
 
 ## Edit Within Axis Groups

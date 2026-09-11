@@ -55,6 +55,8 @@ describe("enforceProtected permission boundary", () => {
       ["edit", "deny"],
       ["subagent", "deny"],
       ["webfetch", "deny"],
+      ["corvus_review_payload", "deny"],
+      ["corvus_review_verify", "deny"],
     ]
 
     for (const agent of ["pr-code-reviewer", "security-reviewer"])
@@ -145,6 +147,10 @@ describe("enforceProtected permission boundary", () => {
     const artifact = ".corvus/reviews/o__r__pr1/post-request.json"
     const read = await fake.evaluate({ agent: "pr-comment-writer", action: "read", resources: [artifact], effect: "allow" })
     expect(read.effect).toBe("allow")
+    for (const [action, effect] of [["corvus_review_verify", "allow"], ["corvus_review_payload", "deny"]] as const) {
+      const decision = await fake.evaluate({ agent: "pr-comment-writer", action, resources: [artifact], effect: "allow" })
+      expect({ action, effect: decision.effect }).toEqual({ action, effect })
+    }
     for (const action of ["write", "edit", "patch"]) for (const path of [artifact, ".corvus/review-payload.json", "src/index.ts"]) {
       const decision = await fake.evaluate({ agent: "pr-comment-writer", action, resources: [path], effect: "allow" })
       expect({ action, path, effect: decision.effect }).toEqual({ action, path, effect: "deny" })
@@ -177,7 +183,7 @@ describe("enforceProtected permission boundary", () => {
 
     // `read` is authored `allow` for every protected agent, so this is the exact
     // case where a naive "apply corvus's decision" hook would loosen a host `ask`.
-    const actions = ["read", "glob", "grep", "shell", "edit", "subagent", "webfetch", "list", "skill", "bash", "write"]
+    const actions = ["read", "glob", "grep", "shell", "edit", "subagent", "webfetch", "list", "skill", "bash", "write", "corvus_review_payload", "corvus_review_verify"]
 
     for (const agent of PROTECTED_AGENTS)
       for (const action of actions) {

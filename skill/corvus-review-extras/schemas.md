@@ -154,7 +154,7 @@ REVIEW_ACTION:
 
 ## POST_REQUEST and POST_RESULT — R5/Writer
 
-POST_REQUEST is the API-ready JSON artifact, not a dispatch envelope. R4 creates it only after authorization; [state](state.md#freeze-at-r4) owns its lifetime. Its closed field set and key order are:
+POST_REQUEST is the API-ready JSON shape, not a dispatch envelope. R3 writes candidate.json; R4 freezes post-request.json via the tool only after authorization; [state](state.md#freeze-at-r4) owns its lifetime. Its closed field set and key order are:
 
 ```yaml
 POST_REQUEST:
@@ -162,15 +162,15 @@ POST_REQUEST:
   event: "APPROVE | REQUEST_CHANGES | COMMENT"
   body: <opaque non-empty string>
   comments:
-    - {path: "<repository-relative path>", line: <positive safe integer>, side: RIGHT, body: <opaque non-empty string>}
+    - {path: "<repository-relative path>", line: <positive safe integer>, side: RIGHT, start_line?: <positive safe integer less than line>, start_side?: RIGHT, body: <opaque non-empty string>}
 ```
 
-Multi-line comments append only `start_line` (positive safe integer less than line) and `start_side: RIGHT`; omit both for single-line comments. No wrapper, schema_version, repository, changed_files, or internal identity keys enter the JSON file. Preserve axis/dimension/ID in rendered strings and the full local document.
+Multi-line comments include paired `start_line` and `start_side` before body; omit both for single-line comments. No wrapper, schema_version, repository, changed_files, or internal identity keys enter the JSON file. Preserve axis/dimension/ID in rendered strings and the full local document.
 
-Serialize in the listed key order as UTF-8 JSON, two-space indentation, LF line endings, no BOM, and one final LF (equivalent to `JSON.stringify(payload, null, 2) + "\n"`). Preserve decoded strings exactly and array order (Standards then Spec); escape strings as JSON data, never shell text. Map APPROVE→APPROVE, REQUEST_CHANGES→REQUEST_CHANGES, COMMENT_ONLY→COMMENT; commit_id is PR_CONTEXT.head_sha, body is exact review_body, comments map exact inline_comments with only the API keys above.
+The tool serializes in the listed key order as UTF-8 JSON, two-space indentation, LF line endings, no BOM, and one final LF (equivalent to `JSON.stringify(payload, null, 2) + "\n"`). Preserve decoded strings exactly and array order (Standards then Spec); escape strings as JSON data, never shell text. Map APPROVE→APPROVE, REQUEST_CHANGES→REQUEST_CHANGES, COMMENT_ONLY→COMMENT; commit_id is PR_CONTEXT.head_sha, body is exact review_body, comments map exact inline_comments with only the API keys above.
 
-<!-- Size invariant: exact rendered strings and the complete serialized POST_REQUEST are the oracle, measured at R3 render and again before R4 writes. Overflow returns to R3; unavailable measurement or irreducible overflow fails local-only. Read-back equality precedes hashing; no config, approval, resume, or empty comments disables these limits. -->
-Hard posting-size budget: `review_body` ≤ 24,000 chars; each inline comment body ≤ 4,000 chars; total serialized POST_REQUEST ≤ 48,000 chars. Each ceiling also applies to UTF-8 bytes: measure decoded strings and the complete serialization (including JSON escapes, indentation, and final LF), counting Unicode code points for chars. The total is the deterministic headroom below the writer's 65,536-character per-body last defense; local source findings and overflow_log retain full text outside the posting budget. Use [R3 overflow](../corvus-review-r3/SKILL.md#size-overflow) before authorization, never writer-side trimming.
+<!-- Size invariant: decoded bodies and the full canonical serialization are the tool's oracle at R3 measurement, before R4 writes, and before R5/writer dispatch/POST. Overflow returns to R3; unavailable measurement or irreducible overflow fails local-only. No config, approval, resume, or empty comments disables the limits. -->
+Posting-size limits are owned by `corvus_review_payload` (`LIMITS`), reported with violations in its results alongside measurements in code points and UTF-8 bytes. Local source findings and overflow_log retain full text outside the posting budget. Use [R3 overflow](../corvus-review-r3/SKILL.md#size-overflow) before authorization, never writer-side trimming.
 
 R5 sends only this closed POST_ARTIFACT descriptor. The writer carries these field sets inline because it has no skill access:
 
@@ -184,7 +184,7 @@ POST_ARTIFACT:
   event: "APPROVE | REQUEST_CHANGES | COMMENT"
 ```
 
-Derive artifact_path from validated identity, never from review text; `<repo>` equals repository.name. The digest stays in the descriptor, not its hashed file. Hash only that concrete path with `shasum -a 256 .corvus/reviews/<owner>__<repo>__pr<pr_number>/post-request.json`; no wildcard expansion or additional arguments. The permission glob is a string matcher, not path normalization: reject traversal, extra segments, shell decoration, or a path unequal to the identity-derived path before using any tool.
+Derive artifact_path from validated identity, never from review text; `<repo>` equals repository.name. The digest stays in the descriptor, not its hashed file. Tool arguments map artifact_path→artifactPath and expected_sha256→expectedSha256; freeze returns sha256. The permission glob is a string matcher, not path normalization: reject traversal, extra segments, shell decoration, or a path unequal to the identity-derived path before using any tool.
 
 ```yaml
 POST_RESULT:

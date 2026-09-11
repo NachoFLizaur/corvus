@@ -73,7 +73,11 @@ Use only the verified base SHA at this fixed endpoint:
 gh api --method GET "repos/<owner>/<repo>/contents/.opencode/review-config.yaml?ref=<base_sha>" -H "Accept: application/vnd.github.raw+json"
 ```
 
-Apply [configuration loading](../corvus-review-extras/config.md#loading-and-provenance): defaults, valid base values, then explicit trusted invocation values. The selected orchestrator fixes autonomous at that last layer. Preserve provenance/fallback warnings and the verified absence memo. Done when config_provenance.base_sha matches base_sha or a trust failure has terminated locally.
+Apply [configuration loading](../corvus-review-extras/config.md#loading-and-provenance): defaults, valid base values, then explicit trusted invocation values, subject to [Invocation Mode](../corvus-review-extras/state.md#invocation-mode). Preserve provenance/fallback warnings and the verified absence memo. Done when config_provenance.base_sha matches base_sha or a trust failure has terminated locally.
+
+## Post Follow-Up
+
+A `post` or follow-up request starts fresh R0 → revalidate head/base/config and finish current triage plus checkpoint reconciliation → restore only a schema-valid recoverable unposted checkpoint for the SAME head with compatible base/config/source evidence → skip R1/R2 and restore R3 synthesis → rerun `corvus_review_payload` measure via [R3 Measure Candidate](../corvus-review-r3/SKILL.md#measure-candidate) → R4 fresh preview and re-authorization in the current invocation mode → R5. Interactive recovery requires question; prior authorization never carries over. Different head or incompatible base/config/source evidence uses the existing fresh R1–R3 analysis route in [Resume at R0](../corvus-review-extras/state.md#resume-at-r0). Done when recovery either renews every posting check or starts fresh analysis, preserving the old checkpoint.
 
 ## Triage and Exit
 
@@ -91,4 +95,4 @@ Set all flags independently; capture values and evidence in rail_inputs even whe
 
 For rate-limited intake reads, wait and retry once; exhausted or ambiguous required identity/config reads terminate failed/local-only. Optional prior-review evidence gaps stay explicit limitations. Done when every input is accounted for without cap-driven short-circuiting.
 
-Present PR identity/author/branches, base/head SHA, change counts, CI, state/self-review, triage implications, enabled dimensions, thresholds/budgets, mode/default action, and prominent provenance warnings. Validate PR_CONTEXT against the shared schema, including facts, rail_inputs, lock ownership, and any current-head resumed document. Done when R1 can consume valid context, a validated resume enters R4, or a terminal reason and lock cleanup are reported. Emit `[R0 COMPLETE]` with the selected route.
+Present PR identity/author/branches, base/head SHA, change counts, CI, state/self-review, triage implications, enabled dimensions, thresholds/budgets, mode/default action, and prominent provenance warnings. Validate PR_CONTEXT against the shared schema, including facts, rail_inputs, lock ownership, and any current-head resumed document. Done when R1 can consume valid context, a validated resume enters R3 measurement, or a terminal reason and lock cleanup are reported. Emit `[R0 COMPLETE]` with the selected route.

@@ -1,8 +1,10 @@
 import { existsSync } from "node:fs"
 import type { Plugin } from "@opencode-ai/plugin"
+import { z } from "zod"
 import { agentDir, commandDir, skillDir } from "./paths"
 import { loadAgents } from "./load-agents"
 import { loadCommands } from "./load-commands"
+import { createReviewToolExecutors } from "./review-payload"
 
 /**
  * Extended config type that includes the `skills` field.
@@ -88,8 +90,29 @@ const enforceProtectedAgents = (
  * Registers agents, commands, and skills from the corvus package
  * into OpenCode's configuration via the config hook.
  */
-const plugin: Plugin = async (_input) => {
+const plugin: Plugin = async (input) => {
+  const review = createReviewToolExecutors(input.directory || input.worktree)
   return {
+    tool: {
+      corvus_review_payload: {
+        description: "Measure or freeze a review candidate under .corvus/reviews. Paths are relative to the session directory or absolute; freeze requires artifactPath.",
+        args: {
+          op: z.enum(["measure", "freeze"]),
+          candidatePath: z.string().min(1),
+          artifactPath: z.string().min(1).optional(),
+        },
+        execute: async (args) => review.payload(args),
+      },
+      corvus_review_verify: {
+        description: "Verify a frozen review artifact and its expected SHA-256 under .corvus/reviews without writing. Paths are session-relative or absolute.",
+        args: {
+          op: z.literal("verify"),
+          artifactPath: z.string().min(1),
+          expectedSha256: z.string().regex(/^[a-f0-9]{64}$/),
+        },
+        execute: async (args) => review.verify(args),
+      },
+    },
     config: async (config) => {
       // Load and register agents
       if (existsSync(agentDir)) {
