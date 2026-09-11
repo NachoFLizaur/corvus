@@ -27,11 +27,13 @@ A requirement breach belongs to Spec; an independently evidenced vulnerability b
 
 `axis_results` preserves Standards and Spec separately. The four `pass_results` slots (`architecture`, `correctness`, `conventions`, `security`) project contribution statuses for coverage, not additional findings. Successful axis findings survive a sibling error; [schemas](../skill/corvus-review-extras/schemas.md#review_findings--r2) owns the projection rules.
 
-Findings are never merged or reranked across axes. Synthesis, budgets, edits and presentation stay axis-local; [R3](../skill/corvus-review-r3/SKILL.md) owns exact-copy deduplication and filtering.
+Findings are never merged or reranked across axes. Synthesis, selection, edits and presentation stay axis-local; [R3](../skill/corvus-review-r3/SKILL.md) owns exact-copy deduplication and filtering.
 
 IDs are `<dim>-<axis>-NNN`: `dim` is `arch`, `logic`, `conv` or `sec`; `axis` is `standards` or `spec` (for example, `logic-spec-001`). See [Finding](../skill/corvus-review-extras/schemas.md#finding) and [Conventional Comments](../skill/corvus-review-extras/SKILL.md#conventional-comments).
 
 ## Posting by Artifact
+
+The real-host [release gate](../README.md#release-gates) exercises artifact creation, verification, and denied writer dispatch on v1/v2 without changing the packaged prompts.
 
 `corvus_review_payload` measures R3's checkpoint-backed candidate and freezes the authorized R4 artifact; `corvus_review_verify` checks it at R5 and immediately before writer POST. Only the descriptor, not review text, crosses dispatch; [R0 recovery](../skill/corvus-review-r0/SKILL.md#post-follow-up) renews measurement and authorization.
 
@@ -39,8 +41,12 @@ IDs are `<dim>-<axis>-NNN`: `dim` is `arch`, `logic`, `conv` or `sec`; `axis` is
 
 ## Configuration, Prior Reviews and Resume
 
-- [Configuration](../skill/corvus-review-extras/config.md) owns defaults, validation and verified-base-SHA loading. `max_nits` and `max_minors` apply independently per axis; [dimension protection](../skill/corvus-review-r3/SKILL.md#budgets-and-ordering-within-each-axis) can exceed the caps. `passes` still names dimensions, not axes.
+- [Configuration](../skill/corvus-review-extras/config.md) owns defaults, validation and verified-base-SHA loading; [R3 allocation](../skill/corvus-review-r3/SKILL.md#budgets-and-ordering-within-each-axis) owns cap enforcement. `passes` still names dimensions, not axes.
 - [Prior-review evidence](../skill/corvus-review-r0/SKILL.md#prior-review-evidence): R0 produces `dispositions`; R1's gatherer verifies/enriches them against the diff and supplies both R2 children. No prior findings yields explicit empty arrays; retrieval gaps remain uncertainty. [Schemas](../skill/corvus-review-extras/schemas.md#pr_context--r0) defines the fields.
 - [State and resume](../skill/corvus-review-extras/state.md) owns locks, complete checkpoints, exact-head resume, series knowledge and completion. A valid unposted checkpoint resumes at R4 under current controls; it does not restore posting authorization.
 - [Interactive decisions](../skill/corvus-review-extras/interactive.md) owns preview, edits and dimension-scoped reruns. Autonomous routing stays in [R4](../skill/corvus-review-r4/SKILL.md#autonomous-route).
 - [Shared contracts](../skill/corvus-review-extras/SKILL.md) owns trust boundaries, reviewability, action caps and failure ownership; the linked phase skills own recovery details.
+
+## Convergence and calibration
+
+[Convergence and Continuation](../skill/corvus-review-extras/SKILL.md#convergence-and-continuation) separates document counts from verdict `converged`, the human-approval recommendation, R4's local-only default, optional `post_converged_summary`, and trusted `force_delta` admission at R0. Follow [config](../skill/corvus-review-extras/config.md) for shared cap defaults, [R3](../skill/corvus-review-r3/SKILL.md) for proportional allocation and review-fix/delta polish filtering, and [R2](../skill/corvus-review-r2/SKILL.md) for delta scope and Fowler calibration. [Finding origin](../skill/corvus-review-extras/schemas.md#finding) comes from gatherer lineage; [state](../skill/corvus-review-extras/state.md) persists convergence independently of posting, preserving the invocation's mode.

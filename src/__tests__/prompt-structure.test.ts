@@ -70,8 +70,12 @@ function sections(text: string, title: string): string[] {
 const substantive = (section: string) => lines(section).slice(1).some(line => line.trim() && !/^\s*(?:#|<!--|```|~~~)/.test(line))
 const reviewChildren = ["pr-context-gatherer", "researcher", "pr-code-reviewer", "security-reviewer", "pr-comment-writer"]
 const closed = (names: string[]) => ({ "*": "deny", ...Object.fromEntries(names.map(name => [name, "allow"])) })
-const writer = "agent/pr-comment-writer.md", r4 = "skill/corvus-review-r4/SKILL.md", r5 = "skill/corvus-review-r5/SKILL.md"
+const writer = "agent/pr-comment-writer.md", r2 = "skill/corvus-review-r2/SKILL.md", r4 = "skill/corvus-review-r4/SKILL.md", r5 = "skill/corvus-review-r5/SKILL.md"
 const reviewOrchestrators = ["agent/corvus-review.md", "agent/corvus-review-auto.md"]
+const reviewStatePolicy = closed([".corvus/reviews/**", "**/.corvus/reviews/**", ".corvus/reviews/*/.lock", "**/.corvus/reviews/*/.lock"])
+const reviewStateResources = [".corvus/reviews/x/lock.yaml", ".corvus/reviews/x/.lock",
+  `.corvus/reviews/x/${"a".repeat(40)}/REVIEW_DOCUMENT.md`, ".corvus/reviews/x/candidate.json", ".corvus/reviews/x/review-input.json"]
+const reviewStateDenied = ["src/foo.ts", ".corvus/tasks/x/PLAN.md"]
 const externalSkillReferences = [
   "/cache/opencode/packages/corvus-ai@0.10.0-beta.1/node_modules/corvus-ai/skill/corvus-review-extras/schemas.md",
   "/home/user/.cache/opencode/packages/corvus-ai@0.10.0-beta.2/node_modules/corvus-ai/skill/corvus-review-extras/config.md",
@@ -87,9 +91,9 @@ const artifactHash = "shasum -a 256 .corvus/reviews/*/post-request.json"
 const detachedCheckout = "gh pr checkout * --repo * --detach"
 const permissionPins: Record<string, Record<string, unknown>> = {
   "agent/corvus-auto.md": { question: "deny" },
-  "agent/corvus-review-auto.md": { "*": "deny", corvus_review_payload: "allow", corvus_review_verify: "allow", question: "deny", task: closed(reviewChildren) },
+  "agent/corvus-review-auto.md": { "*": "deny", corvus_review_payload: "allow", corvus_review_verify: "allow", question: "deny", task: closed(reviewChildren), edit: reviewStatePolicy, write: reviewStatePolicy },
   "agent/requirements-analyst.md": { question: "deny" },
-  "agent/corvus-review.md": { "*": "deny", corvus_review_payload: "allow", corvus_review_verify: "allow", question: "allow", task: closed(reviewChildren) },
+  "agent/corvus-review.md": { "*": "deny", corvus_review_payload: "allow", corvus_review_verify: "allow", question: "allow", task: closed(reviewChildren), edit: reviewStatePolicy, write: reviewStatePolicy },
   [writer]: {
     ...closed(["corvus_review_verify", "read", "glob", "grep"]), list: "deny",
     bash: closed(["gh api --method GET repos/*/pulls/* -H Accept:*", "gh api --method POST repos/*/pulls/*/reviews --input .corvus/reviews/*/post-request.json", "jq . .corvus/reviews/*/post-request.json", "python3 -m json.tool .corvus/reviews/*/post-request.json", artifactHash]),
@@ -127,6 +131,11 @@ const gitDenies: Record<string, string[]> = {
 }
 type BodyPin = { name: string; required?: RegExp; forbidden?: RegExp; section?: string }
 const bodyPins: Record<string, BodyPin[]> = {
+  [r2]: [
+    { name: "evidence-file", section: "Evidence Envelope", required: /<review_root>\/review-input\.json/ },
+    { name: "dispatch-cap", section: "Evidence Envelope", required: /each complete dispatch prompt is ≤ (?:12,000|12000) characters/i },
+    { name: "compaction", section: "Evidence Envelope", required: /compaction ladder.*drop pasted hunks → drop file summaries → pointer-only/i },
+  ],
   [r4]: [
     { name: "authorized-artifact", required: /For authorized post\/auto_post, call corvus_review_payload with op freeze.*Only ok:true creates a usable POST_ARTIFACT descriptor for R5/i },
   ],
@@ -158,6 +167,7 @@ const bodyPins: Record<string, BodyPin[]> = {
   ],
 }
 const safetyFixtureBodies: Corpus = {
+  [r2]: "## Evidence Envelope\n<review_root>/review-input.json\nEach complete dispatch prompt is ≤ 12,000 characters. The compaction ladder is: drop pasted hunks → drop file summaries → pointer-only evidence.",
   [r4]: "For authorized post/auto_post, call corvus_review_payload with op freeze. Only ok:true creates a usable POST_ARTIFACT descriptor for R5.",
   [r5]: '## Dispatch One Artifact\nCall corvus_review_verify with {op: "verify", artifactPath: <artifact_path>, expectedSha256: <expected_sha256>} before dispatch, including each permitted re-dispatch. Require ok:true, sha256Match true, canonical true, no violations, and available measurements.\n```json\n{"artifact_path":"<path>","expected_sha256":"<digest>","repository":{"owner":"<owner>","name":"<name>"},"pr_number":<pr_number>,"head_sha":"<head>","event":"<event>"}\n```',
   [writer]: '## Closed Field Sets\nPOST_ARTIFACT POST_REQUEST Comment POST_RESULT\nAn ok:false result ends local-only without posting; a digest mismatch is never accepted. Any anchor mismatch ends local-only without posting. Never re-type, copy, rewrite, relocate or re-encode review content. Call corvus_review_verify once immediately before each POST, including a permitted retry, with {op: "verify", artifactPath: <artifact_path>, expectedSha256: <original expected_sha256>}. Require ok:true, sha256Match true, canonical true, no violations, and available measurements.',
@@ -192,6 +202,9 @@ function definitionMatches(body: string, d: Definition): { valid: boolean }[] {
  * Skill-reference access uses parsed skill allows and the host-mirrored ordered evaluator
  * over test-owned install paths, before any corpus mutation or rollout skip. Every consumer
  * fails on a missing or ineffective external-directory allow; no flag disables this pin.
+ * Review-state pins read both authored write maps and their ordered translation against
+ * test-owned relative/prefixed resources before any mutation or rollout skip. Missing,
+ * unequal or ineffective allows fail for every consumer; no flag disables these checks.
  */
 function validate(corpus: Corpus, c: Contract, final = false): string[] {
   const errors: string[] = [], check = (ok: boolean, code: string) => { if (!ok) errors.push(code) }
@@ -244,8 +257,13 @@ function validate(corpus: Corpus, c: Contract, final = false): string[] {
           check(Object.keys(permission)[0] === "*"
             && evaluateRules(rules, "corvus_review_payload", "*") === (path === writer ? "deny" : "allow")
             && evaluateRules(rules, "corvus_review_verify", "*") === "allow", `safety:${path}:review-tools`)
-          if (reviewOrchestrators.includes(path)) check(evaluateRules(rules, "question", "*")
-            === (path === "agent/corvus-review.md" ? "allow" : "deny"), `safety:${path}:question`)
+          if (reviewOrchestrators.includes(path)) {
+            check(evaluateRules(rules, "question", "*")
+              === (path === "agent/corvus-review.md" ? "allow" : "deny"), `safety:${path}:question`)
+            check(equalPolicy(permission.edit, permission.write)
+              && reviewStateResources.every(resource => [resource, `../${resource}`].every(target => evaluateRules(rules, "edit", target) === "allow"))
+              && reviewStateDenied.every(resource => [resource, `../${resource}`].every(target => evaluateRules(rules, "edit", target) === "deny")), `safety:${path}:review-state`)
+          }
           check(bash["*"] === "deny" && Object.keys(bash)[0] === "*" && bash[artifactHash] === "allow"
             && evaluateRules(rules, "shell", "shasum -a 256 .corvus/reviews/o__r__pr1/post-request.json") === "allow"
             && evaluateRules(rules, "shell", "shasum -a 256 /tmp/post-request.json") === "deny", `safety:${path}:artifact-hash`)
@@ -373,6 +391,9 @@ describe("prompt structure", () => {
       for (const name of ["corvus-review", "corvus-review-auto", "pr-comment-writer", "pr-code-reviewer", "security-reviewer"]) {
         const v1Rules = toV2Permissions(config.agent![name]!.permission)
         const v2Rules = fake.agents.get(name)!.permissions
+        if (detectors.includes(`agent/${name}.md`)) for (const rules of [v1Rules, v2Rules]) {
+          expect(evaluateRules(rules, "read", ".corvus/reviews/x/review-input.json")).toBe("allow")
+        }
         for (const tool of ["corvus_review_payload", "corvus_review_verify"]) {
           const effect = name.startsWith("corvus-review") || name === "pr-comment-writer" && tool === "corvus_review_verify" ? "allow" : "deny"
           expect(evaluateRules(v1Rules, tool, "*")).toBe(effect)
@@ -496,6 +517,12 @@ describe("prompt structure", () => {
         expect(validate(corpus, contract)).not.toContain(`dispatch:${owner}:${token}`)
       }
     }
+    const { corpus, contract } = fixture()
+    for (const [token, pin] of [["review-input.json", "evidence-file"], ["12,000", "dispatch-cap"], ["compaction ladder", "compaction"]]) {
+      const changed = corpus[r2].replace(token, "removed")
+      expect(changed).not.toBe(corpus[r2])
+      expect(validate({ ...corpus, [r2]: changed }, contract)).toContain(`safety:${r2}:${pin}`)
+    }
   })
   test("capability widening and eager command mutations fail before rollout", () => {
     for (const path of [...Object.keys(permissionPins), ...detectors]) {
@@ -515,6 +542,62 @@ describe("prompt structure", () => {
   describe("safety", () => {
     const contract = structuredClone(budgets)
     for (const flag of Object.values(contract.enforcementClasses)) flag.enforced = false
+
+    test.each(reviewOrchestrators)("review-state writes retain exact equal maps and prefixed access: %s", path => {
+      const corpus = readCorpus(), { permission } = parseFrontmatter(corpus[path]).frontmatter
+      if (!record(permission)) throw new Error("Missing permission map")
+      expect(permission.edit).toEqual(permission.write)
+      for (const action of ["edit", "write"]) {
+        const policy = permission[action]
+        if (!record(policy)) throw new Error(`Missing ${action} map`)
+        expect(Object.entries(policy)).toEqual(Object.entries(reviewStatePolicy))
+        const rules = toV2Permissions({ [action]: policy })
+        for (const resource of reviewStateResources) for (const target of [resource, `../${resource}`]) {
+          expect(evaluateRules(rules, "edit", target)).toBe("allow")
+        }
+        for (const resource of reviewStateDenied) for (const target of [resource, `../${resource}`]) {
+          expect(evaluateRules(rules, "edit", target)).toBe("deny")
+        }
+      }
+      const unprefixed = mutatePermission(corpus, path, p => {
+        for (const action of ["edit", "write"]) p[action] = Object.fromEntries(Object.entries(reviewStatePolicy).filter(([key]) => !key.startsWith("**/")))
+      })
+      const rules = toV2Permissions(parseFrontmatter(unprefixed[path]).frontmatter.permission)
+      for (const resource of reviewStateResources) {
+        expect(evaluateRules(rules, "edit", resource)).toBe("allow")
+        expect(evaluateRules(rules, "edit", `../${resource}`)).toBe("deny")
+      }
+      expect(validate(unprefixed, contract)).toContain(`safety:${path}:review-state`)
+      // The mirror expands each * to .*, so ** accepts ../ and does not exclude dotfiles.
+      // Explicit .lock keys cover dot-sensitive harnesses; their matching cannot be emulated here.
+      for (const action of ["edit", "write"]) {
+        const missingLegacy = mutatePermission(corpus, path, p => {
+          p[action] = Object.fromEntries(Object.entries(reviewStatePolicy).filter(([key]) => !key.endsWith("/.lock")))
+        })
+        expect(validate(missingLegacy, contract)).toContain(`safety:${path}`)
+        const reordered = mutatePermission(corpus, path, p => {
+          p[action] = { ...Object.fromEntries(Object.entries(reviewStatePolicy).slice(1)), "*": "deny" }
+        })
+        const policy = parseFrontmatter(reordered[path]).frontmatter.permission as Record<string, unknown>
+        expect(evaluateRules(toV2Permissions({ [action]: policy[action] }), "edit", reviewStateResources[0])).toBe("deny")
+      }
+    })
+
+    test("lock acquisition checks both names and denial terminates with evidence and recovery", () => {
+      const lock = sections(readCorpus()["skill/corvus-review-extras/state.md"], "Namespace and Lock")[0]
+      expect(lock).toContain("lock_path = <review_root>/lock.yaml")
+      expect(lock).toContain("legacy_lock_path = <review_root>/.lock")
+      const instructions = safetyText(lock.replace(/<!--[\s\S]*?-->/g, ""))
+      expect(instructions).toMatch(/Read BOTH lock_path \(\s*lock\.yaml\s*\) and legacy_lock_path \(\s*\.lock\s*\)/)
+      expect(instructions).toMatch(/less than two hours old is fresh.*future active timestamps as fresh/)
+      expect(instructions).toMatch(/Either lock fresh \(including legacy \.lock\s*\).*autonomous mode terminates local-only/)
+      expect(instructions).toMatch(/After acquiring lock\.yaml\s*, delete a stale legacy \.lock.*age ≥2h.*rereading.*same stale mapping/)
+      const denial = safetyText(sections(lock, "Lock Permission Denial")[0])
+      expect(denial).toMatch(/stop local-only without an alternate path or unlocked continuation/)
+      for (const field of ["attempted path", "resolved path/resource", "session/workspace root", "verbatim denial text", "unverified"])
+        expect(denial).toContain(field)
+      expect(denial).toContain("correct the permission/root mismatch and rerun R0 — existing state preserved")
+    })
 
     test("review tool permissions and interactive question survive only with effective explicit allows", () => {
       const corpus = readCorpus()
@@ -657,6 +740,64 @@ describe("prompt structure", () => {
         const beforeRules = toV2Permissions(parseFrontmatter(missing[path]).frontmatter.permission)
         expect(evaluateRules(beforeRules, "shell", "gh pr checkout 12 --repo o/r --detach")).toBe("deny")
         expect(validate(missing, contract)).toContain(`safety:${path}:detached-checkout`)
+      }
+    })
+
+    test("review calibration pins reject removal and pre-calibration policies", () => {
+      const corpus = readCorpus(), extras = "skill/corvus-review-extras/"
+      const cases: [string, string, RegExp, string, string][] = [
+        [`${extras}config.md`, "Defaults and Validation", /max_nits: 3\b/, "max_nits: 3", "max_nits: 4"],
+        [`${extras}config.md`, "Defaults and Validation", /max_minors: 6\b/, "max_minors: 6", "max_minors: 10"],
+        [`${extras}config.md`, "Defaults and Validation", /hard totals across both axes/, "hard totals across both axes", "independent allowances"],
+        [`${extras}config.md`, "Defaults and Validation", /post_converged_summary \| false \| Boolean/, "post_converged_summary", "removed_summary"],
+        [`${extras}config.md`, "Defaults and Validation", /force_delta \| false \| Boolean, trusted invocation only; ignore base-config values/, "force_delta", "removed_override"],
+        [`${extras}schemas.md`, "Finding", /\borigin: "pr-code \| review-fix"/, "origin:", "removed_origin:"],
+        [`${extras}schemas.md`, "REVIEW_INPUT — R2 Children", /one pretty-printed \(2-space\) JSON object/, "pretty-printed (2-space)", "compact"],
+        [`${extras}schemas.md`, "REVIEW_INPUT — R2 Children", /No string value may exceed 1,500 characters/, "1,500 characters", "any length"],
+        [`${extras}schemas.md`, "REVIEW_INPUT — R2 Children", /array of ≤1,500-character chunks split at newline boundaries.*description_chunks.*hunk_lines.*children concatenate the array in order/, "description_chunks", "description"],
+        [r2, "Evidence Envelope", /confirm no line is longer than 1,900 characters.*if any exists, rewrite the file chunked/, "1,900 characters", "any length"],
+        [r2, "Bounded Recovery", /child cites line truncation of review-input\.json\s*, re-persist the file chunked per the schema.*re-dispatch once/, "re-persist the file chunked", "record error immediately"],
+        ["agent/pr-code-reviewer.md", "Trust and Capability Boundary", /Concatenate _chunks arrays and hunk_lines in order/, "Concatenate", "Ignore"],
+        ["agent/security-reviewer.md", "Trust and Capability Boundary", /Concatenate _chunks arrays and hunk_lines in order.*description_chunks/, "Concatenate", "Ignore"],
+        [r2, "Detection and Report Contract", /\borigin: "<pr-code\|review-fix>"/, "origin:", "removed_origin:"],
+        [r2, "Detection and Report Contract", /evidence_status: unreachable means physical unreachability only.*cannot be read.*Evidence outside the PR.*is not a coverage error.*evidence_status: complete\s*, records the gap under summary\.limitations.*calibrates dependent claims to minor with pending verification/, "physical unreachability only", "any missing evidence"],
+        ["agent/pr-code-reviewer.md", "Trust and Capability Boundary", /evidence_status: unreachable marks physical unreachability only.*evidence outside the PR.*keeps evidence_status: complete\s*, is recorded under summary\.limitations.*pending verification/, "physical unreachability only", "any missing evidence"],
+        ["agent/security-reviewer.md", "Trust and Capability Boundary", /evidence_status: unreachable marks physical unreachability only.*evidence outside the PR.*keeps evidence_status: complete\s*, is recorded under summary\.limitations.*pending verification/, "physical unreachability only", "any missing evidence"],
+        ["agent/pr-context-gatherer.md", "5. Resolve Prior-Review Delta When Present", /prior_corvus_review\.reviewed_head_sha.*git blame --line-porcelain.*git log --format=%H.*Confirmed no prior review → all pr-code/, "git blame --line-porcelain", "infer from reply text"],
+        [r2, "Detection and Report Contract", /limit new findings to delta hunks.*unchanged_code_min_severity/, "limit new findings to delta hunks", "inspect the full PR diff"],
+        [r2, "Standards Brief", /skip anything a human reviewer would not block a merge on/, "skip anything a human reviewer would not block a merge on", "report every smell"],
+        ["skill/corvus-review-r3/SKILL.md", "Filter Each Axis", /On review-fix code report only blocker\/critical\/major; silently drop minor\/nitpick/, "silently drop minor/nitpick", "report minor/nitpick"],
+        ["skill/corvus-review-r3/SKILL.md", "Budgets and Ordering Within Each Axis", /Delta rounds ≥2 use a zero nit cap/, "zero nit cap", "configured nit cap"],
+        ["skill/corvus-review-r3/SKILL.md", "Budgets and Ordering Within Each Axis", /Allocate floor\(L×axis_count\/N\).*largest fractional remainder.*no dimension-protection restoration/, "no dimension-protection restoration", "dimension-protection restoration beyond the cap"],
+        [`${extras}SKILL.md`, "Convergence and Continuation", /verdict converged exactly when two consecutive rounds.*zero retained unsuppressed blocker\/critical\/major.*full coverage/, "verdict `converged`", "verdict `not_converged`"],
+        [`${extras}SKILL.md`, "Convergence and Continuation", /Minors, nitpicks, dispositions and posted status do not enter this predicate/, "Minors, nitpicks, dispositions and posted status do not enter this predicate", "Minor findings and unresolved dispositions prevent convergence"],
+        [`${extras}SKILL.md`, "Convergence and Continuation", /Converged — no blocking findings in two consecutive rounds; recommend human approval\./, "recommend human approval", "approve automatically"],
+        [`${extras}SKILL.md`, "Convergence and Continuation", /R4 defaults to local_only\s*; only post_converged_summary: true permits a one-line summary/, "R4 defaults to `local_only`", "R4 defaults to `auto_post`"],
+        [`${extras}SKILL.md`, "Convergence and Continuation", /At R0, before another delta review.*round is ≥5.*refuse locally.*explicit trusted invocation force_delta: true/, "force_delta: true", "force_delta: false"],
+        [`${extras}state.md`, "Resume at R0", /Apply shared Convergence and Continuation before admitting another delta at R0/, "before admitting another delta", "after admitting another delta"],
+        [`${extras}state.md`, "Complete at R5", /including local-only, persist series_converged from the validated shared verdict.*without clearing convergence/, "including local-only", "only when posted"],
+      ]
+      for (const [path, section, guard, before, after] of cases) {
+        const prose = sections(corpus[path], section).join("\n").replace(/<!--[\s\S]*?-->/g, "")
+        expect(safetyText(prose)).toMatch(guard)
+        const changed = prose.replace(before, after)
+        expect(changed).not.toBe(prose)
+        expect(safetyText(changed)).not.toMatch(guard)
+      }
+    })
+
+    test("calibration consumers retain shared authority and obsolete policies stay absent", () => {
+      const corpus = readCorpus(), extras = "skill/corvus-review-extras/"
+      for (const path of [r4, r5, ...reviewOrchestrators]) {
+        const prose = corpus[path].replace(/<!--[\s\S]*?-->/g, "")
+        expect(prose).toContain("Convergence and Continuation")
+        expect(prose.replaceAll("Convergence and Continuation", "removed authority"))
+          .not.toContain("Convergence and Continuation")
+      }
+      const legacy = /convergence is not claimed|applies per axis|effective total = 2×|Protection can exceed limits/i
+      for (const path of [`${extras}SKILL.md`, `${extras}config.md`, `${extras}state.md`, "skill/corvus-review-r3/SKILL.md"]) {
+        expect(corpus[path]).not.toMatch(legacy)
+        expect(corpus[path] + "\nProtection can exceed limits").toMatch(legacy)
       }
     })
 

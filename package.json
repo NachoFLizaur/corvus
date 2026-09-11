@@ -1,6 +1,6 @@
 {
   "name": "corvus-ai",
-  "version": "0.10.0-beta.3",
+  "version": "0.10.0-beta.4",
   "description": "Corvus AI agent suite for OpenCode — multi-agent orchestration with specialized agents, commands, and skills",
   "type": "module",
   "main": "dist/index.js",
@@ -37,6 +37,7 @@
     "build": "bun build src/index.ts src/server.ts --outdir dist --target node && bun x tsc --emitDeclarationOnly --outDir dist",
     "typecheck": "bun x tsc --noEmit",
     "test": "bun test",
+    "smoke:review": "bash scripts/smoke-review.sh",
     "prepublishOnly": "bun run build"
   },
   "keywords": [

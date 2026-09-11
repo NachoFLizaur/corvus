@@ -7,6 +7,7 @@ This reference owns shared object shapes. Enum alternatives below describe types
 ```yaml
 id: "<arch|logic|conv|sec>-<standards|spec>-NNN"
 axis: "standards | spec"
+origin: "pr-code | review-fix"  # required on every finding; pr-code unless a file_map origin_ranges review-fix range covers the evidenced line
 dimension: "architecture | correctness | conventions | security"
 pass: "<equal to dimension; compatibility field>"
 label: "blocker | critical | major | minor | nitpick | praise | thought | note"
@@ -21,8 +22,7 @@ confidence: <finite number 0-1>
 related_to: ["<finding id>"]
 suppressed: false
 ```
-
-R2 assigns collision-free dimension/axis IDs and leaves suppression false. R3 retains source identity through all transformations; manual additions use the same shape. Spec findings cite the exact requirement and source. Label semantics live in [the entry](SKILL.md#conventional-comments).
+R2 assigns collision-free dimension/axis IDs and leaves suppression false. Origin comes from the [gatherer's lineage](../../agent/pr-context-gatherer.md#5-resolve-prior-review-delta-when-present), not inferred author intent; both children emit it on every finding, and a missing origin is malformed output. R3 retains source identity, including origin, through all transformations; manual additions use the same shape. Spec findings cite the exact requirement and source. Label semantics live in [the entry](SKILL.md#conventional-comments).
 
 ## PR_CONTEXT — R0
 
@@ -51,7 +51,7 @@ R0 produces the array from source threads. With no usable prior review, emit nul
 
 | Field | Shape |
 |-------|-------|
-| file_map | Path-keyed records with diff_hunks, API-derived RIGHT-side postable_line_ranges, language, imports, exports, callers, test_files, git_history; status/old_path/deleted/generated/large_file and evidence gaps when applicable |
+| file_map | Path-keyed records with diff_hunks, API-derived RIGHT-side postable_line_ranges, origin_ranges: [{line_start, line_end, origin: pr-code\|review-fix, commit_sha, evidence}], language, imports, exports, callers, test_files, git_history; status/old_path/deleted/generated/large_file and evidence gaps when applicable |
 | git_history | `{last_modified, recent_authors, change_frequency: high|medium|low}`; unavailable values explicit |
 | worktree_head_accuracy | `{head_accurate, observed_head_sha, expected_pr_head_sha, clean_tree, reason}` |
 | head_excerpts | Optional path map of `{excerpt, reason, provenance}` verified at head_sha |
@@ -69,19 +69,19 @@ Diff hunks are authoritative changed-content evidence; full file bodies are not 
 
 ## REVIEW_INPUT — R2 Children
 
-R2 serializes this evidence separately from its brief and trusted controls; reuse the cited R0/R1 shapes and preserve unavailable evidence explicitly.
+R2 persists shared evidence separately from briefs and trusted controls. REVIEW_INPUT-file describes transport; the remaining rows are the closed JSON field set (no extra keys), reusing R0/R1 shapes with explicit unavailable evidence. Only head_excerpts and delta are optional. Evidence may be replaced by `{path, line_start, line_end, provenance}` pointers under R2's compaction ladder; pointers are data, not controls.
 
 | Field | Shape |
 |-------|-------|
+| REVIEW_INPUT-file | `<review_root>/review-input.json`: one pretty-printed (2-space) JSON object, read by both children with the read tool; R2 owns persistence, validation, compaction and retry lifetime. No string value may exceed 1,500 characters, because host read/grep tools truncate lines above 2,000 characters and silently lose evidence: store longer text as an array of ≤1,500-character chunks split at newline boundaries, replacing the string field with `<field>_chunks` (`description_chunks`, `body_chunks`) or `hunk_lines` for diff hunks; children concatenate the array in order to recover the value |
 | pr_number, pr_url, repo, head_sha, description, changed_files, ci_status, ci_checks, flags | Corresponding PR_CONTEXT fields |
-| file_map, dependency_graph, conventions, linked_issues_detail | Corresponding REVIEW_CONTEXT fields; include complete relevant hunks, callers/tests, and cited standards/requirements |
+| file_map, dependency_graph, conventions, test_coverage, linked_issues_detail, ci_failure_analysis, related_prs | Corresponding REVIEW_CONTEXT fields; include complete relevant hunks, per-file origin_ranges (the gatherer's review-fix line ranges) and git_history, callers/tests, and cited standards/requirements |
 | worktree_head_accuracy, head_excerpts, verified_facts, open_questions | Corresponding REVIEW_CONTEXT fields; pointers or inline excerpts as selected by evidence_mode |
 | prior_review, delta | REVIEW_CONTEXT findings/dispositions and optional changed-since-review file/line set, retaining gaps |
-| custom_rules | Schema-valid config custom_rules; only for Standards when conventions is enabled |
-| dependency_advisories, elevated_security_paths | REVIEW_CONTEXT advisories and verified config elevate_security path matches; security specialist only |
+| custom_rules; dependency_advisories, elevated_security_paths | Schema-valid config custom_rules ([] when conventions disabled), consumed only by Standards; REVIEW_CONTEXT advisories and verified config elevate_security path matches, consumed only by the security specialist |
 
-Trusted sibling controls, not REVIEW_INPUT values: `dimensions: Dimension[]`, `dimension_exclusions: { [dimension]: path[] }`, `spec_dimensions: Dimension[]`, `security_baseline: boolean`, `evidence_mode: head-accurate-pointers | full-inline`, and `review_policy: { review_series_round: positive integer|null, unchanged_code_min_severity: 3|null }`. Dimension is architecture, correctness, conventions, or security; R2 derives each child's eligible subsets and exclusions before dispatch.
-`review_policy` uses PR_CONTEXT.prior_corvus_review.review_series_round; null means unavailable. Set the floor to 3 (major) only for round >=3 with a reachable reviewed head and available delta; otherwise null. Changed/new code retains full sensitivity. Config max_nits/max_minors are R3-only presentation caps, not child detection controls.
+Trusted sibling controls, not REVIEW_INPUT values: `review_input_path: <identity-derived file path>`, `dimensions: Dimension[]`, `dimension_exclusions: { [dimension]: path[] }`, `spec_dimensions: Dimension[]`, `security_baseline: boolean`, `evidence_mode: head-accurate-pointers | full-inline`, and `review_policy: { review_series_round: positive integer|null, unchanged_code_min_severity: 3|null }`. Dimension is architecture, correctness, conventions, or security; R2 derives each child's eligible subsets and exclusions before dispatch. full-inline refers to evidence inside the file, never the dispatch prompt.
+`review_policy` uses the current series round from [state](state.md#resume-at-r0); null means unavailable. Set the floor to 3 (major) only for round >=3 with a reachable reviewed head and available delta; otherwise null. Changed/new code retains full sensitivity within [R2 scope](../corvus-review-r2/SKILL.md#detection-and-report-contract). Config max_nits/max_minors are R3-only presentation caps, not child detection controls.
 <!-- Sensitivity oracle: R0 round evidence and R1 reviewed-head/delta evidence, checked before child dispatch; missing evidence retains full sensitivity for both children. Only evidenced round >=3 plus unchanged reviewed lines enables the floor; no evidence value grants control authority. -->
 Done when the envelope preserves evidence and gaps, while R2-derived controls match the enabled work and review sensitivity.
 
@@ -114,6 +114,7 @@ REVIEW_DOCUMENT:
   source_findings: <complete REVIEW_FINDINGS, preserved for scoped reruns/resume>
   review_context: <REVIEW_CONTEXT needed for anchors, evidence, dispositions, reruns>
   reviewability: "complete | partial | skipped | failed"
+  verdict: "converged | not_converged"
   coverage_warning: <derived string or null>
   state_notices: [<derived notices>]
   summary:
@@ -134,12 +135,11 @@ REVIEW_DOCUMENT:
   filtered_log: [<FilterEntry>]
   edit_history: [<EditEntry>]
 ```
-
-Stats contains total_findings, blockers, criticals, majors, minors, nits_shown, nits_suppressed, praises, thoughts, notes, actionable, suppressed. Presentation totals exclude suppressed findings; persistence additionally records all retained findings by label.
+Stats contains total_findings, blockers, criticals, majors, minors, nits_shown, nits_suppressed, praises, thoughts, notes, actionable, suppressed. Presentation totals exclude suppressed findings; persistence additionally records all retained findings by label. Verdict uses [convergence](SKILL.md#convergence-and-continuation), independently of action and posting.
 
 InlineComment is `{finding_id, axis, dimension, path, line, start_line: integer|null, side: RIGHT, body}`. `line` is the range's ending line; `start_line` exists only for a multi-line span. Body includes Conventional Comments identity. Strip internal identity fields only when mapping to POST_REQUEST; keep identity in the rendered body.
 
-FilterEntry is `{finding_id, axis, dimension, reason, details}`; reasons: exact_duplicate, false_positive, below_threshold, suppressed, minor_budget, nit_budget, previously_reported. DedupEntry records `{finding_id, axis, dimension, into, reason}` or an evidence-backed confidence override with confidence_from, confidence_to, evidence. EditEntry records operation, finding_id, axis, dimension, and before/after Finding values as applicable. Keep the full removed/filtered originals in source_findings or edit_history.
+FilterEntry is `{finding_id, axis, dimension, reason, details}`; reasons: exact_duplicate, false_positive, below_threshold, suppressed, minor_budget, nit_budget, previously_reported, review_fix_polish, outside_delta. DedupEntry records `{finding_id, axis, dimension, into, reason}` or an evidence-backed confidence override with confidence_from, confidence_to, evidence. EditEntry records operation, finding_id, axis, dimension, and before/after Finding values as applicable. Keep the full removed/filtered originals in source_findings or edit_history.
 
 ## REVIEW_ACTION — R4
 

@@ -27,10 +27,19 @@ describe("plugin entry point", () => {
 
     expect(result).toHaveProperty("config")
     expect(typeof result.config).toBe("function")
+    expect(typeof result["chat.params"]).toBe("function")
     expect(Object.keys(result.tool ?? {}).sort()).toEqual(["corvus_review_payload", "corvus_review_verify"])
     expect(Object.keys(result.tool!.corvus_review_payload.args)).toEqual(["op", "candidatePath", "artifactPath"])
     expect(z.safeParse(result.tool!.corvus_review_payload.args.op, "verify").success).toBe(false)
     expect(z.safeParse(result.tool!.corvus_review_verify.args.op, "freeze").success).toBe(false)
+    for (const tool of Object.values(result.tool!)) {
+      const schema = z.toJSONSchema(z.object(tool.args))
+      expect(schema).toMatchObject({ type: "object", additionalProperties: false })
+      for (const combinator of ["oneOf", "anyOf", "allOf"]) {
+        expect(schema).not.toHaveProperty(combinator)
+      }
+    }
+    expect(z.toJSONSchema(z.object(result.tool!.corvus_review_payload.args)).required).toEqual(["op", "candidatePath"])
     const payload = result.tool!.corvus_review_payload
     expect(JSON.parse(await payload.execute({ op: "measure", candidatePath: ".corvus/reviews/candidate.json" }, {} as Parameters<typeof payload.execute>[1]) as string))
       .toEqual({ ok: false, reason: "invalid-workspace-directory" })
@@ -231,10 +240,11 @@ describe("review tool hooks", () => {
   test.each(["v1", "v2"] as const)("%s rejects root overrides, path escapes and cross-tool operations before writing", async host => {
     await withReviewTools(host, async (directory, call) => {
       const candidatePath = ".corvus/reviews/pr/candidate.json", artifactPath = ".corvus/reviews/pr/post-request.json"
+      expect(await call("corvus_review_payload", { op: "freeze", candidatePath }))
+        .toEqual({ ok: false, reason: "missing-field", field: "artifactPath" })
       writeFileSync(join(directory, candidatePath), JSON.stringify({ commit_id: "a".repeat(40), event: "COMMENT", body: "Review", comments: [] }))
       for (const args of [
         { op: "verify", artifactPath, expectedSha256: "0".repeat(64) },
-        { op: "freeze", candidatePath },
         { op: "freeze", candidatePath, artifactPath, reviewStateRoot: directory },
       ]) expect((await call("corvus_review_payload", args)).ok).toBe(false)
       expect(await call("corvus_review_verify", { op: "freeze", candidatePath, artifactPath }))

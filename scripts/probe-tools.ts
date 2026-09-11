@@ -2,6 +2,7 @@ import { createHash } from "node:crypto"
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
+import { z } from "zod"
 import { createFakeContext } from "../src/__tests__/fake-context"
 
 /**
@@ -38,6 +39,20 @@ const parse = (value: unknown): Record<string, unknown> => {
 }
 
 type Call = (name: (typeof TOOLS)[number], args: Record<string, unknown>) => Promise<Record<string, unknown>>
+
+/**
+ * The built tools' registered JSON schemas (v1 after Zod conversion) are the
+ * oracle, checked before each host's functional probe writes candidate files.
+ * A missing object schema or root combinator aborts the gate for either host;
+ * nested schemas are not restricted here, and no flag disables this check.
+ */
+function checkToolSchema(host: string, name: string, schema: unknown): void {
+  check(schema !== null && typeof schema === "object" && !Array.isArray(schema)
+    && "type" in schema && schema.type === "object", `${host}: ${name} input schema is an object`)
+  for (const combinator of ["oneOf", "anyOf", "allOf"]) {
+    check(!Object.hasOwn(schema as object, combinator), `${host}: ${name} input schema has no top-level ${combinator}`)
+  }
+}
 
 async function functionalProbe(host: string, workspace: string, call: Call): Promise<void> {
   const relative = ".corvus/reviews/probe"
@@ -100,6 +115,7 @@ export async function probeTools(installRoot: string): Promise<string[]> {
       const tool = fake.tools.get(name)!
       check(JSON.stringify(tool.options) === JSON.stringify({ codemode: false }), `v2: ${name} options codemode:false`)
       check(typeof tool.execute === "function", `v2: ${name} has execute`)
+      checkToolSchema("v2", name, tool.input)
     }
     fake.replay()
     check(fake.tools.size === 2, "v2: reload replay leaves exactly two tools (upsert, no duplicates)")
@@ -118,6 +134,7 @@ export async function probeTools(installRoot: string): Promise<string[]> {
     for (const name of TOOLS) {
       const tool = hooks.tool[name]
       check(typeof tool.execute === "function" && tool.args && typeof tool.args.op === "object", `v1: ${name} has execute and zod args`)
+      checkToolSchema("v1", name, z.toJSONSchema(z.object(tool.args)))
     }
     rmSync(join(workspace, ".corvus"), { recursive: true, force: true })
     await functionalProbe("v1", workspace, async (name, args) => parse(await hooks.tool[name].execute(args, {})))

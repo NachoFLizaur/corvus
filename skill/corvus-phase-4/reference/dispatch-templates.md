@@ -2,6 +2,9 @@
 
 ## Prepare Dispatch Inputs
 
+<!-- Dispatch invariant: child terminal results and the owning recovery outcome are read before phase advancement or turn end; missing results hold progress or terminate locally after bounded recovery. No mode or tool acknowledgement disables this requirement. -->
+Dispatch children in the FOREGROUND. Never select background/async mode; if the tool exposes `background`, set it `false`. Two parallel calls in one message are fine — parallel is not background. A session id or `status: running` acknowledgement is not a child result. Do not end the turn or advance a phase until every required child has returned a terminal result or the phase's bounded recovery has terminated locally.
+
 Read the approved PLAN.md and current repository instructions before filling a template.
 Use [ownership resolution](#ownership-resolution) for per-task write allowlists. Resolve
 authorized checks from the environment, narrowed by caller policy and

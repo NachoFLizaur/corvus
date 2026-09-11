@@ -37,7 +37,7 @@ Discovery runs at every depth. Depth scales breadth, not whether this phase runs
 | standard | Code-explorer and researcher; cover affected seams and external evidence. |
 | deep | Both, wider integration scope, plus an in-scope ADR scan of `docs/decisions/` and relevant `.corvus/tasks/learnings.md` entries. |
 
-Launch researcher and code-explorer in parallel when both are selected; an external
+Launch researcher and code-explorer in parallel, foreground per [Prepare Dispatch Inputs](../corvus-phase-4/reference/dispatch-templates.md#prepare-dispatch-inputs), when both are selected; an external
 scope with no open questions returns an explicit no-new-research result. Pass applicable
 ADR constraints onward for planning and review; record an absent decisions/learnings file.
 Done when each unanswered item has an assigned investigator at the selected breadth.

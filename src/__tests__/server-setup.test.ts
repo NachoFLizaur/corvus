@@ -6,8 +6,8 @@ import type { SetupContext } from "../v2/types"
 import { createFakeContext, type FakeContext } from "./fake-context"
 
 /**
- * The whole v2 entry: `plugin.setup(ctx)` composing all six registrars
- * (tasks 03, 07, 08, 10, 11, T27).
+ * The whole v2 entry: `plugin.setup(ctx)` composing all seven registrars
+ * (tasks 03, 07, 08, 10, 11, T27, T30).
  *
  * The v2 setup tests import `src/` and need no host at runtime. The v1 hook
  * comparison imports `dist/index.js`, so run the build first. Entry SHAPE
@@ -29,6 +29,7 @@ const REGISTRATION_ORDER = [
   "command.transform",
   "skill.transform",
   "tool.transform",
+  "session.hook",
   "mcp.transform",
 ]
 
@@ -124,9 +125,15 @@ describe("plugin.setup", () => {
     for (const tool of fake.tools.values()) {
       expect(tool.options).toEqual({ codemode: false })
       expect(tool.input).toMatchObject({ type: "object", additionalProperties: false })
+      for (const combinator of ["oneOf", "anyOf", "allOf"]) {
+        expect(tool.input).not.toHaveProperty(combinator)
+      }
       expect(tool.input).not.toHaveProperty("properties.reviewStateRoot")
     }
-    expect(fake.tools.get("corvus_review_payload")!.input).toMatchObject({ properties: { op: { enum: ["measure", "freeze"] } } })
+    expect(fake.tools.get("corvus_review_payload")!.input).toMatchObject({
+      properties: { op: { enum: ["measure", "freeze"] } },
+      required: ["op", "candidatePath"],
+    })
     expect(fake.tools.get("corvus_review_verify")!.input).toMatchObject({ properties: { op: { const: "verify" } } })
 
     expect(fake.registrations.map((registration) => registration.kind)).toEqual(REGISTRATION_ORDER)

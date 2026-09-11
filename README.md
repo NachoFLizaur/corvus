@@ -194,6 +194,8 @@ Your configuration wins on both hosts, by different mechanisms.
 
 These rules apply to the OpenCode configuration Corvus is given by the host. A repository-local `.opencode/opencode.jsonc` is user-local state, not a Corvus package input or a source of plugin defaults.
 
+For Corvus agents only, the plugin preserves any hook-visible output budget (normally already seeded on v1), otherwise sets the smaller of the model output limit and 32,000 tokens; v2 exposes the agent ID but only a model reference, so it falls back to 32,000 without a model-limit clamp and can replace a larger unobservable route/model generation default.
+
 ### Customizing Models
 
 Corvus agents work with whichever model you've set up as default in opencode, but you can assign specific models per agent in your OpenCode config if you wish to.
@@ -395,7 +397,7 @@ R2: Two-Axis Review [parallel]
         → separate axis results; four projected dimension-status slots
     │
     ▼
-R3: Axis-Local Synthesis (dedup, filter, severity, per-axis budgets)
+R3: Axis-Local Synthesis (dedup, filter, severity, shared caps)
     │
     ▼
 R4: User Gate or deterministic autonomous rails → approved artifact + SHA-256
@@ -424,9 +426,9 @@ Measurement and freezing are plugin tools rather than shell commands: `corvus_re
 ```yaml
 # .opencode/review-config.yaml at the PR's verified base SHA
 severity_threshold: "nitpick"
-# Independent per-axis caps; R3's dimension protection can exceed them.
+# See the review config reference for cap allocation and validation.
 max_nits: 3
-max_minors: 10
+max_minors: 6
 passes:
   architecture: true
   correctness: true
@@ -440,6 +442,10 @@ path_rules:
 ```
 
 > 📖 **Detailed Documentation**: See [docs/CORVUS-REVIEW-SKILL-SET.md](./docs/CORVUS-REVIEW-SKILL-SET.md) for the review pipeline map and links to the authoritative skills, configuration, schemas, and Conventional Comments specification.
+
+### Convergence and calibration
+
+Review rounds distinguish document counts from the `converged` verdict and human-approval recommendation; [Convergence and Continuation](skill/corvus-review-extras/SKILL.md#convergence-and-continuation) owns the predicate, local-only default, optional `post_converged_summary`, and trusted `force_delta` continuation control. [Configuration](skill/corvus-review-extras/config.md) owns shared nit/minor totals, [R3](skill/corvus-review-r3/SKILL.md) owns allocation and review-fix/delta polish filtering, and [R2](skill/corvus-review-r2/SKILL.md) owns delta scope and the merge-blocking Fowler baseline. [Finding origin](skill/corvus-review-extras/schemas.md#finding) is lineage evidence, not inferred fix intent; [state](skill/corvus-review-extras/state.md) retains local and posted outcomes without changing invocation mode.
 
 ---
 
@@ -457,7 +463,7 @@ path_rules:
 
 The per-phase test run is gone: deferred coverage is authored during implementation and executed at final validation; `none` neither authors nor runs tests. See [Tests policy](skill/corvus-phase-2/SKILL.md#tests).
 
-- **Review** — Finding IDs are `<dim>-<axis>-NNN` (`arch`, `logic`, `conv`, `sec`; `standards` or `spec`). Standards and Spec stay separate through synthesis; `max_nits` and `max_minors` apply per axis, with dimension-protection exceptions. Posting uses a persisted artifact plus SHA-256, not retyped review text. Prior-review `dispositions` carry evidenced fixed/declined/open/unknown states to both axes; see the [review reference](docs/CORVUS-REVIEW-SKILL-SET.md).
+- **Review** — Finding IDs are `<dim>-<axis>-NNN` (`arch`, `logic`, `conv`, `sec`; `standards` or `spec`). Standards and Spec stay separate through synthesis; see [Convergence and calibration](#convergence-and-calibration) for finding caps and series policy. Posting uses a persisted artifact plus SHA-256, not retyped review text. Prior-review `dispositions` carry evidenced fixed/declined/open/unknown states to both axes; see the [review reference](docs/CORVUS-REVIEW-SKILL-SET.md).
 - **Prompt tests** — The byte-pin test is removed. Contributors use [`prompt-budgets.json`](prompt-budgets.json) and [`src/__tests__/prompt-structure.test.ts`](src/__tests__/prompt-structure.test.ts) for budgets and structural contracts, alongside prose review.
 
 See [CHANGELOG](CHANGELOG.md#0100-beta0--2026-09-09) for breaking changes and review-round-1 fixes.
@@ -518,6 +524,10 @@ bun x tsc --noEmit
 # Run tests (build first; build.test.ts consumes dist/)
 bun test
 ```
+
+### Release Gates
+
+After building, run `bun run smoke:review --host v2`, then `bun run smoke:review --host v1`. This paid, real-model gate packs the working tree, clones PR #8 by default, isolates host state, and requires review artifacts plus measure → freeze → verify and a denied writer dispatch. It uses Bedrock/GitHub authentication without logging credentials; a host permission override and read-only `gh` shim block posting through those routes, not arbitrary network clients. Options: `--pr <url>`, `--model <id>` (default `amazon-bedrock/global.openai.gpt-6-astra`), `--timeout-min <minutes>` (default 40), and `--keep`. Failures always retain logs/artifacts and private sandbox auth; do not upload the whole sandbox. Exit codes: 0 pass, 3 host/plugin/auth, 4 fixture/GitHub read, 5 incomplete review/unexpected denial, 6 posting barrier breach, 124 timeout.
 
 ### Safe Local Development
 

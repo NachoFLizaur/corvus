@@ -3,12 +3,11 @@
 R0 fetches `.opencode/review-config.yaml` at the verified immutable base SHA. This is the sole config schema and loading contract.
 
 ## Defaults and Validation
-
 | Field | Default | Accepted values |
 |-------|---------|-----------------|
 | severity_threshold | `nitpick` | blocker, critical, major, minor, nitpick |
-| max_nits | `3` | Non-negative integer |
-| max_minors | `10` | Positive integer |
+| post_converged_summary | `false` | Boolean; see [convergence](SKILL.md#convergence-and-continuation) |
+| force_delta | `false` | Boolean, trusted invocation only; ignore base-config values with a warning |
 | passes | All four true | Boolean architecture, correctness, conventions, security keys |
 | path_rules | `[]` | Rules below |
 | custom_rules | `[]` | Rules below |
@@ -21,7 +20,7 @@ R0 fetches `.opencode/review-config.yaml` at the verified immutable base SHA. Th
 | safety_rail_threshold | `30` | Non-negative integer; inline volume rail in either mode |
 | confidence_floor | `0.7` | Finite number in [0, 1] |
 
-Each of `max_nits` and `max_minors` applies per axis (effective total = 2× the configured value across Standards and Spec, before dimension-protection restorations). See [R3's budgets](../corvus-review-r3/SKILL.md#budgets-and-ordering-within-each-axis), which can exceed these caps.
+Defaults are hard totals across both axes: `max_nits: 3` (non-negative integer) and `max_minors: 6` (positive integer), allocated by [R3's budgets](../corvus-review-r3/SKILL.md#budgets-and-ordering-within-each-axis).
 
 `passes` toggles dimensions, not axis names or agent identities. A disabled dimension disables both its axes. With a spec, the specialist still runs eligible Spec work when security is disabled; without a spec, enabled independent security still runs. [R2](../corvus-review-r2/SKILL.md) owns dispatch/exclusion mapping.
 

@@ -5,6 +5,38 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.10.0-beta.4 — 2026-09-11
+
+### Added
+
+- Corvus-only output-generation budget on both hosts: any hook-visible value is preserved (v1 is normally seeded), otherwise the smaller of the model output limit and 32,000 tokens is set — v1 through chat params, v2 through the session context hook. This removes the 4,096-token truncation of R2 dispatches observed on OpenCode 2.
+- R2 dispatch contract: the assembled `REVIEW_INPUT` is persisted once per R1 assembly to `<review_root>/review-input.json`, pretty-printed with long values chunked (`description_chunks`, `hunk_lines`; no string over 1,500 characters, no line over 1,900) so the host read tool never truncates it; both children read the file and receive pointer briefs capped at 12,000 characters per dispatch, with a compaction ladder (drop hunks → drop file summaries → pointer-only) and a two-retry recovery for malformed parent tool calls.
+- Review calibration: `max_nits` (3) and `max_minors` (6) are hard totals across both axes; every finding carries `origin: pr-code | review-fix` from gatherer-derived ranges; a verified delta limits new findings to delta hunks with an `unchanged_code_min_severity` floor; a shared `converged` verdict (two consecutive rounds with zero retained blocker/critical/major and full coverage) defaults R4 to `local_only`, `post_converged_summary` opts into a one-line summary, and `force_delta` (trusted invocation only) admits a delta review past round 5.
+- Statically unverifiable evidence rule: `evidence_status: unreachable` now means physical unreachability only — a PR file, hunk, or line named in `review-input.json` cannot be read. Evidence outside the PR (runtime behavior, upstream/host internals, external systems, executed integration) completes the dimension with the gap recorded under `summary.limitations` and dependent claims calibrated to minor with `pending verification`, instead of projecting a coverage error that made autonomous R4 rail to `local_only` on every PR touching host behavior. Pinned in the structural test with negative controls.
+- `smoke:review` end-to-end gate (`scripts/smoke-review.sh --host v1|v2`) against a real host: isolated XDG state, Bedrock-only auth seeding, `amazon-bedrock/global.openai.gpt-6-astra` as the default model, a read-only `gh` shim with an audit log, a host-resolved writer-deny barrier, and `scripts/check-review-artifacts.ts` scoring 17 checks — JSONL, foreground dispatch, plugin load, agent identity, provider/auth, fixture identity, artifacts, metadata, lock release, `review-input.json` line lengths, measure → freeze → verify chain, SHA-256 equality, built `verify()`, writer denied (including the v1 not-exposed acceptance path when the host omits the writer from its task inventory), GitHub barrier, and unexpected denials — with top-level cost/duration recording.
+
+### Fixed
+
+- Both review orchestrators now carry identical ordered edit/write allows for root-relative and prefixed review-state resources, with explicit legacy dotfile lock patterns for dot-sensitive matchers; unrelated source and task paths remain denied.
+- Lock permission denial still stops the review, but now reports the attempted and harness-resolved paths, session/workspace root, and exact denial with a rerun-R0 recovery instruction; existing review state is preserved and matcher behavior is labeled unverified.
+- The v2 review payload tool now uses a flat object input schema accepted by Anthropic; freeze still requires `artifactPath` at execution. Registration tests and the built-tool probe check both tools on both hosts for unsupported top-level schema combinators.
+- Children are dispatched in the foreground only (`background:false`); the parent waits for each terminal child result before advancing a phase, instead of ending its turn at R1 when the host subagent tool advertised async mode.
+- Review shell discipline: one shared fixed-command rule replaces parent improvisation (no compound, piped, or decorated commands; no interpreters for JSON validation — the read tool verifies `review-input.json`), and the gatherer recovery has a one-re-dispatch ceiling.
+
+### Changed
+
+- The review lock is now `lock.yaml`, matching its YAML mapping content. Acquisition checks both names, honors a fresh legacy `.lock`, and removes a confirmed stale legacy lock after acquiring the new lock.
+
+### Validation
+
+- OpenCode 1 gate (v1): three retained autonomous reviews of `NachoFLizaur/corvus#8` — MioD3H 16/16 PASS, yl4O8L 17/17 PASS (writer-denied attested through the v1 not-exposed path), EQBdgp 16/17 with the single failing check being the checker's requirement of a `completion.yaml` file that the run expressed equivalently in `decision.yaml`/`meta.yaml` (ledger R8-11, open; the review itself completed R5 local-only with 4/4 projections completed and a verified frozen artifact). 15–21 minutes and $13.5–$16.2 per review across parent and four children; 0 `length` finish reasons; 0 unexpected denials; 0 forwarded GitHub mutations.
+- OpenCode 2 gate (v2): deferred to 0.10.0-beta.5. v2 users stay on 0.10.0-beta.3.
+
+### Known Limitations
+
+- On OpenCode 2 the plugin cannot observe the route/model output default, so Corvus agents receive 32,000 output tokens unless a hook-visible value is already set; a larger hidden default is replaced.
+- The smoke gate's v1 not-exposed acceptance reads `completion.yaml`; a run that records the same terminal evidence only in `decision.yaml`/`meta.yaml` scores `writer denied: FAIL` although no writer dispatch or mutation occurred (R8-11).
+
 ## 0.10.0-beta.3 — 2026-09-10
 
 ### Added

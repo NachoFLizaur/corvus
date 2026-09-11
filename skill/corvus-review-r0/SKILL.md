@@ -37,6 +37,9 @@ gh pr diff <number> --repo <owner/repo> --name-only
 ```
 Done when the file inventory is complete or its limitation is explicit.
 
+<!-- Gatherer boundary: read the report's completeness and provenance before recovery or R2 dispatch; missing evidence stays a gap and unavailable context ends local-only. The single re-dispatch ceiling applies in both modes; no child report authorizes parent gathering. -->
+The parent never runs `git status`, `git diff`, or `gh api …/files`: worktree cleanliness and changed-content evidence belong to `pr-context-gatherer`. A truncated or failed gatherer report gets one bounded re-dispatch to that same child for only the missing remainder, preserving completed evidence; this ceiling supersedes R1's mode-specific gatherer retry counts. After that, use R1's evidence gate with explicit gaps or terminate locally if context is unavailable, never improvise gatherer commands in the parent. Done when evidence is gatherer-sourced and recovery is accounted for.
+
 ## Establish State and Gather Rail Inputs
 
 Acquire the lock using [review state](../corvus-review-extras/state.md#namespace-and-lock) before inspecting checkpoints. That procedure owns the only R0 question call: interactive fresh-lock override. Follow its current-head resume/reconciliation branch after the marker scan below, but finish current config and triage before acting on any checkpoint.

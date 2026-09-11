@@ -3,6 +3,7 @@ import type { Plugin } from "@opencode-ai/plugin-v2"
 import { enforceProtected } from "./v2/enforce-protected"
 import { registerAgents } from "./v2/register-agents"
 import { registerCommands } from "./v2/register-commands"
+import { registerHooks } from "./v2/register-hooks"
 import { registerMcp } from "./v2/register-mcp"
 import { registerSkills } from "./v2/register-skills"
 import { registerTools } from "./v2/register-tools"
@@ -16,7 +17,7 @@ import type { Cleanup, Registrar } from "./v2/types"
  * `agent/*.md` corpus itself (`v2/enforce-protected.ts:134`), deliberately, since
  * a policy oracle taken from the user-writable draft could already carry a
  * widened policy. Agents therefore need not precede it for correctness. Commands,
- * skills, tools, and MCP are likewise independent of everything else. The order below is
+ * skills, tools, hooks, and MCP are likewise independent of everything else. The order below is
  * frozen anyway so registration and unwind (LIFO) sequences stay reproducible
  * across runs.
  */
@@ -26,6 +27,7 @@ const REGISTRARS: readonly Registrar[] = [
   registerCommands,
   registerSkills,
   registerTools,
+  registerHooks,
   registerMcp,
 ]
 

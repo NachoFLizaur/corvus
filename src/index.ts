@@ -4,6 +4,7 @@ import { z } from "zod"
 import { agentDir, commandDir, skillDir } from "./paths"
 import { loadAgents } from "./load-agents"
 import { loadCommands } from "./load-commands"
+import { resolveOutputBudget } from "./output-budget"
 import { createReviewToolExecutors } from "./review-payload"
 
 /**
@@ -92,7 +93,19 @@ const enforceProtectedAgents = (
  */
 const plugin: Plugin = async (input) => {
   const review = createReviewToolExecutors(input.directory || input.worktree)
+  const corvusAgents = new Set(existsSync(agentDir) ? Object.keys(loadAgents(agentDir)) : [])
   return {
+    /**
+     * Scope oracle: packaged names read at plugin initialization, never user config.
+     * Read the hook-visible budget before mutation; non-Corvus agents and defined
+     * values bypass this default. v1 normally seeds the value, so this is a no-op;
+     * only an unset value uses resolveOutputBudget's limit/fallback rule.
+     */
+    "chat.params": async (input, output) => {
+      if (!corvusAgents.has(input.agent) || output.maxOutputTokens !== undefined) return
+      const budget = resolveOutputBudget({ current: output.maxOutputTokens, modelLimit: input.model.limit.output })
+      if (budget !== undefined) output.maxOutputTokens = budget
+    },
     tool: {
       corvus_review_payload: {
         description: "Measure or freeze a review candidate under .corvus/reviews. Paths are relative to the session directory or absolute; freeze requires artifactPath.",

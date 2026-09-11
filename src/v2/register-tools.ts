@@ -25,10 +25,6 @@ export const registerTools: Registrar = async (ctx) => {
         },
         required: ["op", "candidatePath"],
         additionalProperties: false,
-        oneOf: [
-          { properties: { op: { const: "measure" } }, not: { required: ["artifactPath"] } },
-          { properties: { op: { const: "freeze" } }, required: ["artifactPath"] },
-        ],
       },
       options: { codemode: false },
       execute: async (args: unknown) => ({ content: review.payload(args) }),

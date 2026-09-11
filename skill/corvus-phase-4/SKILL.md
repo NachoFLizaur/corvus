@@ -47,7 +47,7 @@ serializes dispatch. Grouping and depth never disable these checks.
    Use one code-implementer per task or small groups of 1–5; prefer smaller groups for sizeable tasks.
    Buffer task → dispatch → paths, overlap evidence, and serialization order for 4c's `## Log`.
    Done when each dispatch has explicit ownership and its concurrency is safe.
-3. Send the [dispatch templates](reference/dispatch-templates.md), with per-task authorized
+3. Send the [dispatch templates](reference/dispatch-templates.md), following their Prepare Dispatch Inputs foreground rule, with per-task authorized
    checks and provenance. Collect conforming reports, apply [production-gap escalation](#production-gap-escalation),
    and verify claimed artifacts on disk;
    recompute the frontier from evidenced completions until the phase is implemented.

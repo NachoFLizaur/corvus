@@ -75,7 +75,7 @@ Agents MUST NOT tag, publish, change dist-tags, or merge; hand those actions to 
 | code-quality | Objective validation and acceptance evidence |
 | ux-dx-quality | Subjective UX, DX, documentation, architecture |
 
-Use `corvus-extras`' subagent reference for specialist routing outside this roster.
+Use `corvus-extras`' subagent reference for specialist routing outside this roster; for every child dispatch, load `corvus-phase-4` and follow its dispatch-templates reference §Prepare Dispatch Inputs foreground rule.
 Decision hierarchy: Maintainability > Extensibility > Consistency > Simplicity > Performance.
 
 ## Skills Reference

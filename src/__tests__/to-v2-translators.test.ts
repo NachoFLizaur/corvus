@@ -110,6 +110,28 @@ describe("toV2Agent field mapping", () => {
 })
 
 describe("toV2Permissions", () => {
+  test("real corvus-review keeps both edit/write allow sequences after their denies", () => {
+    const rules = toV2Permissions(corpus["corvus-review"].permission)
+    const block: ReturnType<typeof toV2Permissions> = [
+      { action: "edit", resource: "*", effect: "deny" },
+      { action: "edit", resource: ".corvus/reviews/**", effect: "allow" },
+      { action: "edit", resource: "**/.corvus/reviews/**", effect: "allow" },
+      { action: "edit", resource: ".corvus/reviews/*/.lock", effect: "allow" },
+      { action: "edit", resource: "**/.corvus/reviews/*/.lock", effect: "allow" },
+    ]
+    expect(rules[0]).toEqual({ action: "*", resource: "*", effect: "deny" })
+    expect(rules.filter(rule => rule.action === "edit")).toEqual([...block, ...block])
+    expect(rules.some(rule => rule.action === "write")).toBe(false)
+    for (const resource of [".corvus/reviews/x/lock.yaml", ".corvus/reviews/x/.lock",
+      `.corvus/reviews/x/${"a".repeat(40)}/REVIEW_DOCUMENT.md`, ".corvus/reviews/x/candidate.json"]) {
+      for (const target of [resource, `../${resource}`]) expect(evaluateRules(rules, "edit", target)).toBe("allow")
+    }
+    for (const resource of ["src/foo.ts", ".corvus/tasks/x/PLAN.md"]) expect(evaluateRules(rules, "edit", resource)).toBe("deny")
+    // Reproduce an incomplete migration: the later legacy write block cancels prefixed allows.
+    const staleWrite = toV2Permissions({ ...corpus["corvus-review"].permission, write: { "*": "deny", ".corvus/reviews/**": "allow" } })
+    expect(evaluateRules(staleWrite, "edit", "../.corvus/reviews/x/lock.yaml")).toBe("deny")
+  })
+
   test("turns a scalar effect into one rule scoped to `*`", () => {
     expect(toV2Permissions({ read: "allow", edit: "deny", doom_loop: "ask", corvus_review_payload: "deny", corvus_review_verify: "allow" })).toEqual([
       { action: "read", resource: "*", effect: "allow" },
