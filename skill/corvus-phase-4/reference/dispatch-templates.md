@@ -5,29 +5,13 @@
 <!-- Dispatch invariant: child terminal results and the owning recovery outcome are read before phase advancement or turn end; missing results hold progress or terminate locally after bounded recovery. No mode or tool acknowledgement disables this requirement. -->
 Dispatch children in the FOREGROUND. Never select background/async mode; if the tool exposes `background`, set it `false`. Two parallel calls in one message are fine — parallel is not background. A session id or `status: running` acknowledgement is not a child result. Do not end the turn or advance a phase until every required child has returned a terminal result or the phase's bounded recovery has terminated locally.
 
-Read the approved PLAN.md and current repository instructions before filling a template.
-Use [ownership resolution](#ownership-resolution) for per-task write allowlists. Resolve
-authorized checks from the environment, narrowed by caller policy and
-[Tests](../../corvus-phase-2/SKILL.md#tests). Keep commands in dispatch payloads rather
-than storing an environment snapshot in the plan.
+Read approved PLAN.md and current repository instructions; use [ownership resolution](#ownership-resolution) for per-task write allowlists and resolve environment-derived checks under caller policy and [Tests](../../corvus-phase-2/SKILL.md#tests). Commands belong in dispatches, not the plan.
 
-Cite every dispatch-authored factual premise inline with this session's command output
-or `file:line`; send uncited premises as questions to verify. Check mechanical premises
-directly. Security-relevant or durable analytical claims require a call-path trace or
-failing-test demonstration permitted by the active policy. For derived constants, give
-the governing property and require derivation; pin a literal only for a sourced external requirement.
+Cite dispatch-authored premises inline with session output or `file:line`; send uncited premises as verification questions. Apply [Evidence and Preservation](../../../agent/code-implementer.md#evidence-and-preservation) to premise verification. For derived constants, supply the governing property and require derivation; pin literals only for sourced external requirements.
 
-When reasoning about current, previous, outgoing, or baseline state, discover the default
-branch and compute `git merge-base HEAD <default-branch>`. Supply the full SHA and its
-provenance; branch HEAD is not the baseline. Use that SHA for every baseline comparison
-and preserve it through fixes.
-<!--
-Provenance oracle: session-read sources and the computed merge base, checked before dispatch.
-Unverified claims become questions; an unavailable required baseline blocks comparison.
-Only a dispatch with no baseline reasoning may mark the SHA not applicable.
--->
-Done when inputs are grounded, ownership is disjoint across concurrent dispatches, and
-each task has an explicit validation allowlist, including policy-based omissions.
+For current/previous/outgoing/baseline reasoning, discover the default branch and compute `git merge-base HEAD <default-branch>`; supply its full SHA and provenance, not branch HEAD, for every baseline comparison and fix.
+<!-- Provenance oracle: session-read sources and the computed merge base, checked before dispatch. Unverified claims become questions; an unavailable required baseline blocks comparison. Only a dispatch with no baseline reasoning may mark the SHA not applicable. -->
+Done when inputs are grounded, concurrent ownership is disjoint, and every task has a validation allowlist with policy omissions.
 
 ## Ownership Resolution
 
@@ -47,8 +31,7 @@ overlap matrix listing shared paths or explicit disjointness; unresolved ownersh
 Report candidates only; the orchestrator derives write allowlists and schedules dispatches.
 ```
 
-Done when every wave task has evidenced candidates and each pair has an overlap result;
-report missing evidence as unresolved, not as permission to write.
+Done when every wave task has evidenced candidates and each pair has an overlap result; missing evidence remains unresolved, not permission to write.
 
 ## Implementer Payload
 
@@ -73,16 +56,12 @@ done-when evidence; every authorized command with actual output; policy-based om
 issues and resolutions; deviations with reasons and preservation evidence; remaining work.
 ```
 
-Read the task context before editing; implement and validate each task against its own
-contract, without pooling file or command permissions. The implementer's delegated
-two-attempt rule applies per task; report failures and keep blocked dependents pending.
-Done when every assigned task has a conforming report and every claimed artifact is
-verified on disk, or the caller has a precise failure to route.
+Apply code-implementer's Delegated Mode per task, including its two-attempt failure rule and dependent blocking; never pool file or command permissions.
+Done when each task has a conforming report and disk-verified artifacts, or a precise failure to route.
 
 ## Acceptance Check Payload
 
-Send to code-quality for the whole phase, including every frontier batch and fix.
-Fold phase metadata into this payload rather than issuing a separate extraction pass.
+Send to code-quality for the whole phase, including every frontier batch and fix; fold phase metadata into this payload, without a separate extraction pass.
 
 ```markdown
 **TASK**: Validate Phase <N> against every task's done-when and applicable acceptance criteria.
@@ -102,9 +81,5 @@ omissions; regressions; task attribution for every failure; failing-task-only fi
 finding origins and any unresolved evidence gaps.
 ```
 
-Verify acceptance through file inspection, code review, and authorized command evidence.
-Account for actual 4a checks rather than assuming generic commands ran. Policy omissions
-are not failures; missing authorized output or unsupported acceptance claims are gaps.
-Review regressions and prose accuracy; re-derive configurable invariants at minimum,
-shipped default, and maximum. Evidence from defaults alone leaves those invariants open.
+Apply code-quality's Phase-Level Validation and Evidence Rules to acceptance, regressions, prose accuracy, and configurable-invariant boundaries; evidence from defaults alone leaves those invariants open.
 Done when the whole phase has an evidenced verdict with actionable task attribution.

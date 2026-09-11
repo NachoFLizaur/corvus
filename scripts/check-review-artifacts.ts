@@ -18,6 +18,8 @@ const record = (value: unknown): RecordValue => value !== null && typeof value =
   ? value as RecordValue : {}
 /** Host read tools truncate lines above 2,000 characters; the schema chunks values at 1,500, leaving JSON framing headroom. */
 export const REVIEW_INPUT_LINE_LIMIT = 1900
+/** The prompt's preferred per-call serialized-argument size (state.md Persist at R3 step 1). Advisory: reported, never a gate failure. */
+export const CHECKPOINT_WRITE_ARGUMENT_BUDGET = 20000
 const text = (value: unknown): string => typeof value === "string" ? value : ""
 const json = (value: string): RecordValue => record(JSON.parse(value))
 const read = (path: string): string => readFileSync(path, "utf8")
@@ -159,6 +161,36 @@ export async function checkReviewArtifacts(input: Inputs) {
   const required = [`${input.head}/REVIEW_DOCUMENT.md`, `${input.head}/meta.yaml`, "verified_facts.yaml", "candidate.json", "post-request.json"]
   const missing = validIdentity ? required.filter(path => !existsSync(join(root, path)) || !statSync(join(root, path)).isFile()) : required
   add("artifacts", missing.length === 0, 5, missing.length ? `missing: ${missing.join(", ")}` : "all five artifacts present")
+  /**
+   * Checkpoint oracle: stopped-host write/edit/apply_patch results and document bytes,
+   * read after shutdown without mutating evidence. Serialized argument size is advisory
+   * (the prompt's engineering budget against truncation, not a provider limit): the gate
+   * reports the maximum and the over-budget count as information and never fails on size,
+   * because a write that succeeded and read back complete is a success regardless of
+   * size. It fails closed for an absent/empty/unreadable document, or for a write-family
+   * error with no later successful same-target retry. No flag or host selection
+   * disables this check.
+   */
+  const writes = tools.filter(tool => ["write", "edit", "apply_patch"].includes(tool.name))
+    .map(tool => ({ tool, chars: JSON.stringify(tool.state.input)?.length ?? 0 }))
+  const overBudget = writes.filter(write => write.chars > CHECKPOINT_WRITE_ARGUMENT_BUDGET)
+  const maxWriteChars = writes.reduce((max, write) => Math.max(max, write.chars), 0)
+  const target = (tool: Tool) => text(tool.input.filePath) || text(tool.input.path)
+  const failedWrites = writes.filter(write => write.tool.state.status === "error")
+  const unrecovered = failedWrites.filter(failed => !writes.some(later => later.tool.index > failed.tool.index
+    && later.tool.parentID === failed.tool.parentID && later.tool.state.status === "completed"
+    && (!target(failed.tool) || !target(later.tool) || target(later.tool) === target(failed.tool))))
+  let checkpointOK = false
+  let checkpointDetail = "missing/empty REVIEW_DOCUMENT.md"
+  try {
+    const path = join(root, input.head, "REVIEW_DOCUMENT.md")
+    checkpointOK = validIdentity && existsSync(path) && statSync(path).isFile() && read(path).trim().length > 0
+    if (checkpointOK) checkpointDetail = "non-empty REVIEW_DOCUMENT.md"
+  } catch { checkpointDetail = "unreadable REVIEW_DOCUMENT.md" }
+  add("checkpoint writes", checkpointOK && unrecovered.length === 0, 5,
+    `${writes.length} write/edit/apply_patch calls; max serialized args ${maxWriteChars} chars (advisory budget ${CHECKPOINT_WRITE_ARGUMENT_BUDGET}; ${overBudget.length} over, informational); ${checkpointDetail}`
+    + (failedWrites.length ? `; ${failedWrites.length - unrecovered.length} write error(s) recovered by a later successful write` : "")
+    + (unrecovered.length ? `; ${unrecovered.length} write error(s) without a successful retry: ${unrecovered.map(({ tool, chars }) => `${tool.name} event ${tool.index} (${chars} chars)`).join(", ")}` : ""))
   let metadata: RecordValue = {}
   let metaError = ""
   try { if (validIdentity) metadata = yaml(join(root, input.head, "meta.yaml")) } catch { metaError = "missing/invalid meta.yaml" }
@@ -248,25 +280,38 @@ export async function checkReviewArtifacts(input: Inputs) {
   /**
    * V1 not-exposed path: when the host's task inventory omits pr-comment-writer,
    * no dispatch can be denied, so the barrier is attested instead by zero writer
-   * dispatch attempts, the persisted local-only outcome (meta.yaml + completion.yaml:
+   * dispatch attempts, the persisted local-only outcome (completion/decision/meta:
    * posted=false, remote_state=not_posted, api_calls=0, capability diagnostic
    * classified not-exposed), the host-resolved writer-deny rule (agents.json), and
-   * zero forwarded gh mutations. Any missing/malformed piece fails closed; a v2 run
-   * or any dispatch attempt still requires ordered denial evidence.
+   * zero forwarded gh mutations. Read after shutdown without mutating evidence;
+   * missing fields everywhere, malformed YAML or conflicting values fail closed for
+   * release consumers. Only terminal status/reason diagnoses substitute for an absent
+   * structured classification. No flag disables the barrier; a v2 run or any dispatch
+   * attempt still requires ordered denial evidence.
    */
   let notExposed = ""
   if (input.host === "v1" && attempts.length === 0 && validIdentity && verified) {
     try {
-      const completion = yaml(join(root, input.head, "completion.yaml"))
-      const postResult = record(completion.POST_RESULT ?? completion.post_result)
-      const diagnostic = record(completion.capability_diagnostic)
-      const classification = text(diagnostic.classification)
+      const states = [metadata, ...["completion.yaml", "decision.yaml"]
+        .map(name => join(root, input.head, name)).filter(path => existsSync(path)).map(yaml)]
+      const sources = states.flatMap(state => [state, record(state.completion)])
+        .flatMap(state => [state, record(state.POST_RESULT), record(state.post_result), record(state.capability_diagnostic)])
+      const values = (key: string) => sources.filter(source => Object.hasOwn(source, key)).map(source => source[key])
+      const agrees = (key: string, expected: unknown) => {
+        const found = values(key)
+        return found.length > 0 && found.every(value => value === expected)
+      }
+      const classifications = values("classification")
+      const classification = classifications.length > 0
+        ? classifications.every(value => /^not-exposed(?:$|[,;: ])/.test(text(value))) ? text(classifications[0]) : ""
+        : sources.filter(source => ["posting-validation-failed", "local_only"].includes(text(source.status)))
+          .map(source => /^(?:R5 writer capability|pr-comment-writer) (not-exposed(?:, cause unknown)?)(?=[:;.]|$)/.exec(text(source.reason))?.[1])
+          .find(Boolean) || ""
       const checks: Array<[string, boolean]> = [
         ["meta.yaml posted=false", metadata.posted === false],
-        ["meta.yaml remote_state=not_posted", metadata.remote_state === "not_posted"],
-        ["completion.yaml POST_RESULT.remote_state=not_posted", postResult.remote_state === "not_posted"],
-        ["completion.yaml POST_RESULT.api_calls=0", postResult.api_calls === 0],
-        ["completion.yaml capability_diagnostic.classification not-exposed", classification.startsWith("not-exposed")],
+        ["terminal remote_state=not_posted", agrees("remote_state", "not_posted")],
+        ["terminal api_calls=0", agrees("api_calls", 0)],
+        ["terminal capability classification not-exposed", Boolean(classification)],
         ["agents.json writer deny rule", Boolean(input.agents) && writerDenyRule(json(read(input.agents!)))],
         ["gh audit forwarded mutations=0", existsSync(input.audit) && unsafe === 0],
       ]
@@ -312,10 +357,18 @@ export function artifactTree(directory: string, prefix = ""): string[] {
   })
 }
 
+function printSmokeResult(rows: Row[], exitCode: number) {
+  console.log(`SMOKE_RESULT ${JSON.stringify({
+    checks: rows.map(row => ({ ...row, status: row.ok ? "PASS" : "FAIL" })),
+    passed: rows.filter(row => row.ok).length, total: rows.length, exitCode,
+  })}`)
+}
+
 if (import.meta.main) {
   const [fixture, owner, repo, pr, head, jsonl, hostlog, audit] = process.argv.slice(2)
   if (!audit) {
     console.error("Usage: check-review-artifacts.ts <fixture> <owner> <repo> <pr> <head_sha> <jsonl> <hostlog> <gh-audit> [--host v1|v2] [--agents PATH] [--install PATH]")
+    printSmokeResult([{ check: "arguments", ok: false, code: 3, detail: "missing required arguments" }], 3)
     process.exit(3)
   }
   try {
@@ -331,9 +384,11 @@ if (import.meta.main) {
     console.log("Artifact tree (.corvus/reviews):")
     console.log(artifactTree(join(fixture, ".corvus/reviews")).join("\n") || "(absent)")
     console.log(`Exit code: ${result.exitCode}`)
+    printSmokeResult(result.rows, result.exitCode)
     process.exitCode = result.exitCode
   } catch (error) {
     console.error(`FAIL: checker could not read evidence: ${String(error)}`)
+    printSmokeResult([{ check: "checker", ok: false, code: 5, detail: String(error) }], 5)
     process.exitCode = 5
   }
 }

@@ -21,12 +21,7 @@ omitting required evidence or widening permissions.
 
 For cross-package changes, use the runner's verified cache-defeating option so the full
 suite actually executes. Label a cached replay `CACHED REPLAY`; it is not fresh gate evidence.
-<!--
-Final-evidence oracle: selected Tests policy, current project instructions, final workspace
-bytes, and actual check output, read before the verdict. Missing required output, stale
-evidence, cached replay in place of a fresh run, or unmet criteria hold completion. None
-selects acceptance evidence; it never disables the gate. Later edits invalidate affected evidence.
--->
+<!-- Final-evidence oracle: selected Tests policy, current project instructions, final workspace bytes, and actual check output, read before the verdict. Missing required output, stale evidence, cached replay in place of a fresh run, or unmet criteria hold completion. None selects acceptance evidence; it never disables the gate. Later edits invalidate affected evidence. -->
 
 ```markdown
 **TASK**: Perform Phase 5a final objective validation for <feature>.
@@ -85,12 +80,7 @@ Accept these verdicts, using ux-dx-quality's scoring thresholds:
 - `CRITICAL_ISSUES`: dispatch task-planner `AMEND_PLAN add-fix-tasks` per corvus-phase-7 §AMEND_PLAN Dispatch with plan path, phase,
   task lines, and the 5b gate-report pointer; Phase 4, then rerun both 5a and 5b.
 
-<!--
-Subjective oracle: tagged plan tasks and the complete scored report, read before advancing.
-Missing/malformed status or required sections block completion. Unmet immutable acceptance
-criteria, security failures, or critical usability failures force the critical-issues path
-regardless of score. Only absence of tagged tasks disables this review, never its consumer checks.
--->
+<!-- Subjective oracle: tagged plan tasks and the complete scored report, read before advancing. Missing/malformed status or required sections block completion. Unmet immutable acceptance criteria, security failures, or critical usability failures force the critical-issues path regardless of score. Only absence of tagged tasks disables this review, never its consumer checks. -->
 Apply [child transport recovery](../corvus-phase-4/reference/transport-retry.md) to malformed
 or missing child reports in either step; exhausted 5b recovery remains fail-closed and
 escalates the contract error. Record final evidence for the Phase 6 handoff; that phase

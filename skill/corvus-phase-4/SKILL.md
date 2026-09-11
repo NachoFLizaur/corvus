@@ -30,11 +30,7 @@ task's done-when with evidence; PASS → 4c; FAIL → the fix loop.
 
 ## 4a: Dispatch The Current Frontier
 
-<!--
-Dispatch oracle: current plan, verified completions, and explorer ownership evidence, read
-before each launch. Missing predecessors or unresolved ownership hold the task; overlap
-serializes dispatch. Grouping and depth never disable these checks.
--->
+<!-- Dispatch oracle: current plan, verified completions, and explorer ownership evidence, read before each launch. Missing predecessors or unresolved ownership hold the task; overlap serializes dispatch. Grouping and depth never disable these checks. -->
 
 1. Read the current phase and predecessor edges using Plan Format's outgoing `blocks:`
    convention. Overlay verified task completions as `[x]` in session state while disk
@@ -60,11 +56,7 @@ completion in 4a or issuing 4b PASS. If one implies `production would need to ch
 its write allowlist, retain the required paths/behavior and dispatch task-planner `AMEND_PLAN add-fix-tasks` per corvus-phase-7 §AMEND_PLAN Dispatch
 with the plan path, phase, task lines, and implementation report as source pointer so Corvus can widen the dispatch manifest, or record an explicit deferral with rationale.
 Never accept a workaround or assertions pinning defective output as resolution of the gap.
-<!--
-Report oracle: child deviations, dispatched allowlists, and verified artifacts, read before
-completion or gate advancement. Unresolved gaps hold both; a recorded deferral preserves
-the open gap, not a satisfied criterion. Report type, depth, and fix status grant no bypass.
--->
+<!-- Report oracle: child deviations, dispatched allowlists, and verified artifacts, read before completion or gate advancement. Unresolved gaps hold both; a recorded deferral preserves the open gap, not a satisfied criterion. Report type, depth, and fix status grant no bypass. -->
 Done when each gap has planned ownership or an explicit deferral and no false completion claim.
 
 ### Wide Refactors
@@ -82,11 +74,7 @@ Done when the new form serves all consumers and the contract/integration task ha
 Use acceptance-only for either selected Tests policy, following Phase 2 Tests. Dispatch
 code-quality with the whole phase's task lines, done-whens, ownership, changes, and 4a
 evidence via the linked acceptance-check template. This gate exists at every depth.
-<!--
-Gate oracle: task criteria, current files, and authorized evidence, read before closing
-the phase. Missing or failing evidence holds advancement; only PASS admits 4c. The triage
-below replaces the independent dispatch, not the gate; depth never disables the gate.
--->
+<!-- Gate oracle: task criteria, current files, and authorized evidence, read before closing the phase. Missing or failing evidence holds advancement; only PASS admits 4c. The triage below replaces the independent dispatch, not the gate; depth never disables the gate. -->
 Risk-triaged skip: only a single-dispatch phase with all per-task reports PASS, zero
 deviations, and no test or parity surface touched may omit the code-quality dispatch.
 Inspect changed files/hunks and reports; lightweight verification checks every done-when
@@ -101,11 +89,7 @@ Iteration 1 dispatches a direct fix from the 4b report for failing tasks only; f
 iteration 2, task-planner `FAILURE_ANALYSIS` precedes implementation. Use the
 [fix handling and templates](reference/fix-loop.md) for origin tracking, the repeated-class
 root-cause/revert stop rule, and revalidation at the same whole-phase scope.
-<!--
-Fix-budget oracle: this phase's 4b FAIL → fix → 4b count, read before another fix.
-At three unsuccessful iterations, stop and escalate with passed/failed tasks and open
-questions. In-task attempts and transport replacements are separate counters, not extensions.
--->
+<!-- Fix-budget oracle: this phase's 4b FAIL → fix → 4b count, read before another fix. At three unsuccessful iterations, stop and escalate with passed/failed tasks and open questions. In-task attempts and transport replacements are separate counters, not extensions. -->
 Done when revalidation passes, a planning gap holds execution, or the three-iteration cap
 escalates the remaining failures to the user (corvus-auto halts and reports).
 
@@ -126,11 +110,7 @@ PROGRESS_UPDATE mode:
 Keep runtime completion tracking in session until this batch; Corvus verifies, task-planner
 writes. Compare the returned plan against its pre-dispatch bytes: only task/phase checkboxes,
 Status, one Gates line, and one Log line may change; preserve all other text byte-for-byte.
-<!--
-Progress oracle: pre-dispatch plan bytes, the batch, and gate evidence, read before update
-and checked against the returned diff before advancement. Rejection, missing writes,
-unauthorized changes, or completed-state regression block transition; no caller bypasses it.
--->
+<!-- Progress oracle: pre-dispatch plan bytes, the batch, and gate evidence, read before update and checked against the returned diff before advancement. Rejection, missing writes, unauthorized changes, or completed-state regression block transition; no caller bypasses it. -->
 Done when the batch is recorded once and its confined diff is verified; then start the next
 phase or [Phase 5](../corvus-phase-5/SKILL.md) when implementation phases are complete.
 

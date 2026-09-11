@@ -188,13 +188,13 @@ Derive artifact_path from validated identity, never from review text; `<repo>` e
 
 ```yaml
 POST_RESULT:
-  status: "posted | local_only"
+  status: "posted | not_posted | local_only"
   review_url: <GitHub review URL or null>
   reason: <failure explanation or null>
   remote_state: "posted | not_posted | unknown"
   inline_comments_posted: <non-negative integer>
   comments_moved_to_body: <non-negative integer>
+  unverifiable_anchors: [{path: <string>, line_start: <positive safe integer>, line_end: <safe integer >= line_start>}] # required only for status not_posted; otherwise omitted
   api_calls: <non-negative integer>
 ```
-
-Posted requires remote_state posted and a usable review URL; local_only requires a reason and truthful not_posted/unknown state. Count every attempted API call, including retries; file reads/hashes/validators are not API calls. comments_moved_to_body is always 0: the writer posts unchanged bytes or stops, never relocates approved content. Done when all phase objects preserve identity, evidence, coverage, and authorization separately.
+Posted requires remote_state posted, a usable review URL and null reason; local_only requires a reason, null URL and truthful not_posted/unknown state. Status not_posted requires reason anchors-unverifiable, remote_state not_posted, null URL, zero inline_comments_posted and non-empty unverifiable_anchors matching submitted anchors exactly. Count every attempted API call, including files pages/retries; file reads/hashes/validators are not API calls. The writer's comments_moved_to_body is 0; R5 tracks relocation totals separately using [Conventional Comments](SKILL.md#conventional-comments). Done when identity, evidence, coverage, and authorization remain separate.

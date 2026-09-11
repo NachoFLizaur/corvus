@@ -97,6 +97,7 @@ describe("enforceProtected permission boundary", () => {
       "jq . .corvus/reviews/o__r__pr1/post-request.json",
       "python3 -m json.tool .corvus/reviews/o__r__pr1/post-request.json",
       "shasum -a 256 .corvus/reviews/o__r__pr1/post-request.json",
+      "gh api --method GET --paginate repos/o/r/pulls/1/files -H Accept:application/vnd.github+json",
     ]
 
     for (const command of allowlisted) {
@@ -112,6 +113,11 @@ describe("enforceProtected permission boundary", () => {
     }
 
     for (const command of [
+      "gh api --method POST --paginate repos/o/r/pulls/1/files -H Accept:application/vnd.github+json",
+      "gh api --method GET --paginate repos/o/r/pulls/1/files -H Accept:application/vnd.github+json --jq .",
+      "gh api --method GET --paginate repos/o/r/pulls/1/files -H Accept:application/vnd.github.v3.diff",
+      "gh api --method GET --paginate repos/o/r/pulls/1/files -H Accept:application/vnd.github+json; pwd",
+      "gh api --method GET --paginate repos/o/r/issues/1/files -H Accept:application/vnd.github+json",
       "gh api --method DELETE repos/o/r/pulls/1",
       "gh api --method POST repos/o/r/issues/1/comments --input .corvus/reviews/o__r__pr1/post-request.json",
       "gh api --method POST repos/o/r/pulls/1/comments --input .corvus/reviews/o__r__pr1/post-request.json",

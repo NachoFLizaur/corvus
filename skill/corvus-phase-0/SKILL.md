@@ -22,11 +22,7 @@ The caller owns a maximum of 3 clarification rounds shared across 0a and 0b. Sta
 round 1, advance after each resolved batch, and re-invoke the same analysis mode with
 answers and assumptions. Resolve round 3's unanswered items to recommendations and set
 `FINAL_ROUND_RESOLVED: true`; preserve that closed state through later discovery.
-<!--
-Round oracle: caller-maintained count, resolved batches, and closure flag, read before each
-analyst dispatch. Closure permits recorded assumptions rather than another question round;
-unresolved facts still route to discovery. Neither mode changes nor either caller resets it.
--->
+<!-- Round oracle: caller-maintained count, resolved batches, and closure flag, read before each analyst dispatch. Closure permits recorded assumptions rather than another question round; unresolved facts still route to discovery. Neither mode changes nor either caller resets it. -->
 Done when the analyst has consumed the resolved batch and returned the next status.
 
 ## Discovery Origin Contract
@@ -46,10 +42,7 @@ then run Phase 1 with `DIRECT_CALLER`. The bypass skips clarification, not disco
 return here for Depth and Tests Resolution. Preserve the supplied requirements and add
 `requirements-analyst: skipped (spec-complete)` to the
 Phase 2 input. New requirement gaps return to the analyst instead of being silently assumed.
-<!--
-Bypass oracle: request evidence against the caller's criteria, read before skipping 0a.
-Missing evidence keeps analysis enabled for either caller; only all criteria permit bypass.
--->
+<!-- Bypass oracle: request evidence against the caller's criteria, read before skipping 0a. Missing evidence keeps analysis enabled for either caller; only all criteria permit bypass. -->
 Done when discovery is available and the analyst skip is visible to planning and review.
 
 ## Phase 0a: Initial Clarification

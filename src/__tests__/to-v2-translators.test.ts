@@ -145,12 +145,13 @@ describe("toV2Permissions", () => {
   test("turns a resource map into one rule per resource in frontmatter order", () => {
     const rules = toV2Permissions(corpus["pr-comment-writer"].permission)
 
-    // `agent/pr-comment-writer.md:12-18`: a `*` deny followed by five allowlisted
+    // `agent/pr-comment-writer.md:12-19`: a `*` deny followed by six allowlisted
     // commands. Order is the whole precedence model (last match wins), so the
     // deny MUST come first and the allows MUST keep their authored sequence.
     expect(rules.filter((rule) => rule.action === "shell")).toEqual([
       { action: "shell", resource: "*", effect: "deny" },
       { action: "shell", resource: "gh api --method GET repos/*/pulls/* -H Accept:*", effect: "allow" },
+      { action: "shell", resource: "gh api --method GET --paginate repos/*/pulls/*/files -H Accept:application/vnd.github+json", effect: "allow" },
       {
         action: "shell",
         resource: "gh api --method POST repos/*/pulls/*/reviews --input .corvus/reviews/*/post-request.json",
@@ -160,8 +161,8 @@ describe("toV2Permissions", () => {
       { action: "shell", resource: "python3 -m json.tool .corvus/reviews/*/post-request.json", effect: "allow" },
       { action: "shell", resource: "shasum -a 256 .corvus/reviews/*/post-request.json", effect: "allow" },
     ])
-    // T27: 24 existing rules + one verify tool allow = 25; the shell rules are unchanged.
-    expect(rules).toHaveLength(25)
+    // 25 existing rules + one paginated PR-files read allow = 26.
+    expect(rules).toHaveLength(26)
   })
 
   test("renames v1 actions onto their v2 tool names, collapsing write and patch", () => {

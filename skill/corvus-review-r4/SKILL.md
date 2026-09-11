@@ -20,7 +20,7 @@ Reapply canonical precedence and [Convergence and Continuation](../corvus-review
 
 ## Autonomous Route
 
-Run Preflight. Any invalid/failed state, projected error, or hard rail yields REVIEW_ACTION local_only with reason, rails_applied, edits [], and rerun_scope []; display the full available review grouped by axis and proceed only to R5 local completion. For eligible state, display the final axis-grouped preview before authorizing auto_post from Invocation Mode, with the same empty edit/scope lists and a reason confirming rails passed.
+Run Preflight. Any invalid/failed state, projected error, or hard rail yields REVIEW_ACTION local_only with reason, rails_applied, edits [], and rerun_scope []; display the full available review grouped by axis and proceed only to R5 local completion. Rails come from review content and trust controls, never from process or tooling limits such as an oversized-but-successful write — see the shared [Operating Rules](../corvus-review-extras/SKILL.md#operating-rules). For eligible state, display the final axis-grouped preview before authorizing auto_post from Invocation Mode, with the same empty edit/scope lists and a reason confirming rails passed.
 
 Announce coverage, constrained action, notices, and separate Standards/Spec counts and key concerns; proceed to R5 final revalidation. Autonomous handling uses neither questions, prose requests for a reply, edits, judgment reruns, nor an interactive fallback. Done when the branch has an auto_post or terminal local_only result.
 

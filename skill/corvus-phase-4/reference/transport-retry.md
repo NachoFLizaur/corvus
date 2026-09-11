@@ -5,12 +5,7 @@ reviewers, quality agents, analysts, explorers, and researchers. An empty report
 critical truncation, missing required report section, or claimed artifact absent on disk
 is a transport failure. A well-formed failure is a real result, not a retry opportunity.
 
-<!--
-Recovery oracle: the saved dispatch bytes, report schema, retry counters, and workspace
-state, read before recovery or redispatch. Unknown mutation state blocks implementer
-recovery; exhausted transport allowance follows the step's failure path. Both callers use
-the same allowance; retries replace the original call and never extend fix/judgment budgets.
--->
+<!-- Recovery oracle: the saved dispatch bytes, report schema, retry counters, and workspace state, read before recovery or redispatch. Unknown mutation state blocks implementer recovery; exhausted transport allowance follows the step's failure path. Both callers use the same allowance; retries replace the original call and never extend fix/judgment budgets. -->
 1. Check the required report schema and read every claimed written artifact directly,
    including hidden plan paths. Done when the result is valid or transport loss is identified.
 2. Before recovering an implementer, inspect read-only Git status and expected artifacts

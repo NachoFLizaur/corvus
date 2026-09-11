@@ -96,7 +96,7 @@ const permissionPins: Record<string, Record<string, unknown>> = {
   "agent/corvus-review.md": { "*": "deny", corvus_review_payload: "allow", corvus_review_verify: "allow", question: "allow", task: closed(reviewChildren), edit: reviewStatePolicy, write: reviewStatePolicy },
   [writer]: {
     ...closed(["corvus_review_verify", "read", "glob", "grep"]), list: "deny",
-    bash: closed(["gh api --method GET repos/*/pulls/* -H Accept:*", "gh api --method POST repos/*/pulls/*/reviews --input .corvus/reviews/*/post-request.json", "jq . .corvus/reviews/*/post-request.json", "python3 -m json.tool .corvus/reviews/*/post-request.json", artifactHash]),
+    bash: closed(["gh api --method GET repos/*/pulls/* -H Accept:*", "gh api --method GET --paginate repos/*/pulls/*/files -H Accept:application/vnd.github+json", "gh api --method POST repos/*/pulls/*/reviews --input .corvus/reviews/*/post-request.json", "jq . .corvus/reviews/*/post-request.json", "python3 -m json.tool .corvus/reviews/*/post-request.json", artifactHash]),
     edit: "deny", write: "deny", task: "deny", question: "deny", external_directory: "deny", todowrite: "deny", todoread: "deny",
     webfetch: "deny", websearch: "deny", codesearch: "deny", lsp: "deny", doom_loop: "deny", skill: "deny",
   },
@@ -372,7 +372,9 @@ function mutatePermission(corpus: Corpus, path: string, mutate: (permission: Rec
 
 describe("prompt structure", () => {
   test("validates the corpus at its rollout flags; CORVUS_PROMPT_FINAL=1 requires convergence", () => {
-    expect(validate(readCorpus(), budgets, process.env.CORVUS_PROMPT_FINAL === "1")).toEqual([])
+    const corpus = readCorpus()
+    expect(validate(corpus, budgets, process.env.CORVUS_PROMPT_FINAL === "1")).toEqual([])
+    expect(Object.values(corpus).reduce((sum, text) => sum + countLines(text), 0)).toBeLessThanOrEqual(4800)
   })
   test("both source host entries retain the exact identities", async () => {
     const hooks = await v1Plugin({} as Parameters<typeof v1Plugin>[0])
@@ -684,7 +686,7 @@ describe("prompt structure", () => {
       const corpus = readCorpus()
       const cases: [string, string, string, string][] = [
         [r4, "authorized-artifact", "For authorized post/auto_post", "For any decision"],
-        [r5, "artifact-dispatch", '"expected_sha256": "<R4 SHA-256>",', '"body": "<review_body>",'],
+        [r5, "artifact-dispatch", '"expected_sha256": "<current artifact SHA-256>",', '"body": "<review_body>",'],
         [r5, "artifact-dispatch", '"event": "<approved event>"', '"event": "<approved event>", "comments": []'],
         [writer, "inline-schema", "## Closed Field Sets", "## Read the Shared Schema"],
         [writer, "no-skill-read", "no skill-directory read is needed", "read ../skill/corvus-review-extras/schemas.md"],
@@ -706,6 +708,84 @@ describe("prompt structure", () => {
         expect(changed).not.toBe(corpus[path])
         expect(validate({ ...corpus, [path]: changed }, contract)).toContain(`safety:${path}:${pin}`)
       }
+    })
+
+    test("large-diff recovery keeps evidence, relocation and bounded persistence contracts", () => {
+      const corpus = readCorpus(), schemas = "skill/corvus-review-extras/schemas.md"
+      const cases: [string, string, RegExp, string, string][] = [
+        [writer, "4. Validate Inline Locations", /canonical diff.*HTTP 406\/413 or partial\/truncated diff output.*gh api --method GET --paginate repos\/<owner>\/<name>\/pulls\/<pr_number>\/files -H Accept:application\/vnd\.github\+json/s,
+          "HTTP 406/413", "HTTP 500"],
+        [writer, "4. Validate Inline Locations", /each file's complete patch.*path membership.*complete hunk counts.*added\/context RIGHT-side lines.*multi-line span in one hunk/,
+          "added/context RIGHT-side lines", "estimated local lines"],
+        [writer, "4. Validate Inline Locations", /absent patch.*truncated patch.*incomplete pagination makes that anchor unverifiable.*If ALL anchors verify, proceed; otherwise return status not_posted\s*, reason anchors-unverifiable\s*, and unverifiable_anchors: \[\{path,line_start,line_end\}\].*only the unresolved anchors.*no POST attempted/,
+          "only the unresolved anchors", "all anchors"],
+        [writer, "Closed Field Sets", /Status not_posted requires reason anchors-unverifiable, remote_state not_posted, null URL, zero inline_comments_posted and a non-empty unverifiable_anchors array/,
+          "reason anchors-unverifiable", "reason unknown"],
+        [schemas, "POST_REQUEST and POST_RESULT — R5/Writer", /status: "posted \| not_posted \| local_only".*unverifiable_anchors:.*line_start:.*line_end:.*required only for status not_posted; otherwise omitted/,
+          "unverifiable_anchors:", "missing_positions:"],
+        [r5, "Reconcile Writer Transport", /Valid POST_RESULT not_posted, reason anchors-unverifiable \| Follow Anchor Relocation, not transport recovery/,
+          "Follow Anchor Relocation", "Terminate local_only"],
+        [r5, "Anchor Relocation", /match each unique \{path,line_start,line_end\} in unverifiable_anchors.*frozen artifact and REVIEW_DOCUMENT.*reject unknown positions.*Relocate ONLY those matching inline comments.*own axis's review body.*preserving each entire comment body, identity and suggestion unchanged/,
+          "Relocate ONLY those matching inline comments", "Relocate every inline comment"],
+        [r5, "Anchor Relocation", /increment R5's cumulative comments_moved_to_body by the number moved, not the number of unique anchors.*independently of the writer's zero count/,
+          "number moved, not the number of unique anchors", "number of unique anchors"],
+        [r5, "Anchor Relocation", /autonomous mode needs no new authorization because content is unchanged, only placement; interactive mode shows the relocation in one question.*explicit consent/,
+          "in one question", "without a question"],
+        [r5, "Anchor Relocation", /Invalidate the old descriptor.*persist the revised complete checkpoint and candidate.*corvus_review_payload measure → freeze.*corvus_review_verify with the new digest.*revalidate authorization\/current PR controls.*re-dispatch the writer ONCE.*second attempt.*non-transport reason, end local_only.*without resetting the relocation bound/,
+          "re-dispatch the writer ONCE", "re-dispatch until posted"],
+        ["skill/corvus-review-r3/SKILL.md", "Render and Persist", /gatherer reports an oversized\/truncated diff.*additions\+deletions exceeds 20,000.*prefer body placement.*patches are unavailable in review-input\.json.*R4 needs no new payload-tool preflight/,
+          "prefer body placement", "guess inline positions"],
+        [r2, "Evidence Envelope", /assemble <review_root>\/review-input\.json with the same ≤20,000-character bounded sequential patches.*Persist at R3 step 2.*JSON-validate the complete read-back before either child launches/,
+          "bounded sequential patches", "single unbounded write"],
+      ]
+      for (const [path, section, guard, before, after] of cases) {
+        const prose = sections(corpus[path], section).join("\n").replace(/<!--[\s\S]*?-->/g, "")
+        expect(safetyText(prose)).toMatch(guard)
+        const changed = prose.replace(before, after)
+        expect(changed).not.toBe(prose)
+        expect(safetyText(changed)).not.toMatch(guard)
+      }
+      const ladder = "gh api --method GET --paginate repos/*/pulls/*/files -H Accept:application/vnd.github+json"
+      const command = "gh api --method GET --paginate repos/o/r/pulls/1/files -H Accept:application/vnd.github+json"
+      const before = mutatePermission(corpus, writer, p => { delete (p.bash as Record<string, unknown>)[ladder] })
+      expect(evaluateRules(toV2Permissions(parseFrontmatter(before[writer]).frontmatter.permission), "shell", command)).toBe("deny")
+      expect(validate(before, contract)).toContain(`safety:${writer}`)
+      expect(evaluateRules(toV2Permissions(parseFrontmatter(corpus[writer]).frontmatter.permission), "shell", command)).toBe("allow")
+      expect(sections(corpus[r2], "Evidence Envelope").join("\n")).not.toMatch(/in ONE call|whole-JSON retry|never write JSON in two halves/)
+    })
+
+    test("self-imposed write bounds are guidance stated once; consumers point at it and no oversize wording ends a review", () => {
+      const corpus = readCorpus(), extras = "skill/corvus-review-extras/", r3 = "skill/corvus-review-r3/SKILL.md", state = `${extras}state.md`
+      const principle = /Engineering bounds \(write size, chunking, read-back paging\) are guidance to avoid truncation, not rails\. A write that succeeded and reads back complete and valid is a success regardless of size — log the overage in the local document and continue\. Only a FAILED or truncated write \(error result, invalid or incomplete read-back\) is a failure, and even then the recovery is retry-with-subdivision, not local_only\. In autonomous mode, once a candidate exists the pipeline reaches the writer: the only permitted non-post outcomes are a real GitHub rejection, transport uncertainty, or an R4 rail from review content \(coverage\/projection\), never a process or tooling limit\./
+      const cases: [string, string, RegExp, string, string][] = [
+        [`${extras}SKILL.md`, "Operating Rules", principle, "regardless of size", "only within the bound"],
+        [`${extras}SKILL.md`, "Operating Rules", principle, "retry-with-subdivision, not local_only", "local_only"],
+        [`${extras}SKILL.md`, "Operating Rules", principle, "never a process or tooling limit", "or any process or tooling limit"],
+        [state, "Persist at R3", /Prefer ≤20,000 characters of serialized arguments per write\/edit\/patch tool call.*not a provider limit or a rail — an oversized successful write is logged, not failed, per the shared \[Operating Rules\]/, "logged, not failed", "treated as failed"],
+        [state, "Persist at R3", /A write that returns an error, or whose read-back is invalid or incomplete, is retried once subdivided into smaller sequential calls; a write that succeeded and read back complete is never a failure whatever its size\. Only a permission denial or a retry that still fails retains valid in-memory state, terminates local-only/, "Only a permission denial or a retry that still fails", "Any write over the bound"],
+        [r2, "Evidence Envelope", /A write that succeeds and reads back as complete valid JSON is accepted whatever its size — an oversized successful write is logged, not failed, per the shared \[Operating Rules\].*A second genuine failure or a denial terminates local-only/, "whatever its size", "only within the bound"],
+        [r3, "Render and Persist", /write bounds are guidance under the shared \[Operating Rules\].*a successful oversized write is logged and synthesis continues to measurement/, "synthesis continues to measurement", "synthesis ends local-only"],
+        [r4, "Autonomous Route", /Rails come from review content and trust controls, never from process or tooling limits such as an oversized-but-successful write — see the shared \[Operating Rules\]/, "never from process or tooling limits", "including process or tooling limits"],
+        [r5, "Anchor Relocation", /self-imposed write bounds never end the review here either, per the shared \[Operating Rules\]/, "never end the review", "end the review"],
+      ]
+      for (const [path, section, guard, before, after] of cases) {
+        const prose = sections(corpus[path], section).join("\n").replace(/<!--[\s\S]*?-->/g, "")
+        expect(safetyText(prose)).toMatch(guard)
+        const changed = prose.replace(before, after)
+        expect(changed).not.toBe(prose)
+        expect(safetyText(changed)).not.toMatch(guard)
+      }
+      // Stated once: the principle sentence lives only in the extras entry; every consumer links to that section.
+      const stated = Object.entries(corpus).filter(([, text]) => /A write that succeeded and reads back complete and valid is a success regardless of size/.test(text)).map(([path]) => path)
+      expect(stated).toEqual([`${extras}SKILL.md`])
+      for (const path of [state, r2, r3, r4, r5]) expect(corpus[path]).toMatch(/\[Operating Rules\]\((?:\.\.\/corvus-review-extras\/)?SKILL\.md#operating-rules\)/)
+      // Negative control: no review prompt may make an oversize call, by itself, a local-only terminal.
+      const oversizeTerminal = /irreducible payload terminates local-only|oversiz\w*(?: successful)? (?:call|write)s? (?:ends?|terminates?|fails?) local[- ]only|failed writes or verification end local-only/i
+      for (const path of [`${extras}SKILL.md`, state, `${extras}schemas.md`, r2, r3, r4, r5, ...reviewOrchestrators]) {
+        expect(corpus[path]).not.toMatch(oversizeTerminal)
+      }
+      expect("A second failure, denial, or irreducible payload terminates local-only with path").toMatch(oversizeTerminal)
+      expect("an oversized call ends local-only").toMatch(oversizeTerminal)
     })
 
     test("optional fallback hash permissions cover all three participants and deny commands outside the artifact prefix", () => {
@@ -775,6 +855,7 @@ describe("prompt structure", () => {
         [`${extras}SKILL.md`, "Convergence and Continuation", /R4 defaults to local_only\s*; only post_converged_summary: true permits a one-line summary/, "R4 defaults to `local_only`", "R4 defaults to `auto_post`"],
         [`${extras}SKILL.md`, "Convergence and Continuation", /At R0, before another delta review.*round is ≥5.*refuse locally.*explicit trusted invocation force_delta: true/, "force_delta: true", "force_delta: false"],
         [`${extras}state.md`, "Resume at R0", /Apply shared Convergence and Continuation before admitting another delta at R0/, "before admitting another delta", "after admitting another delta"],
+        [`${extras}state.md`, "Persist at R3", /≤20,000 characters of serialized arguments/, "20,000", "unbounded"],
         [`${extras}state.md`, "Complete at R5", /including local-only, persist series_converged from the validated shared verdict.*without clearing convergence/, "including local-only", "only when posted"],
       ]
       for (const [path, section, guard, before, after] of cases) {

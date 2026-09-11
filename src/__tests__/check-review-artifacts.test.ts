@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test"
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
-import { REVIEW_INPUT_LINE_LIMIT, checkReviewArtifacts, type Inputs } from "../../scripts/check-review-artifacts"
+import { CHECKPOINT_WRITE_ARGUMENT_BUDGET, REVIEW_INPUT_LINE_LIMIT, checkReviewArtifacts, type Inputs } from "../../scripts/check-review-artifacts"
 import { freeze } from "../review-payload"
 
 const directories: string[] = []
@@ -113,6 +113,66 @@ test("review-input.json lines over the read-tool limit fail the gate; chunked lo
   expect((await checkReviewArtifacts(data.input)).exitCode).toBe(5)
 })
 
+test("checkpoint writes: size is advisory, a non-empty document is required, and only an unrecovered write error fails", async () => {
+  const data = await fixture()
+  const path = join(data.root, data.input.head, "REVIEW_DOCUMENT.md")
+  const call = (name: string, input: object, status = "completed") => ({
+    type: "tool_use", sessionID: "ses_smoke", part: { tool: name, state: { status, input } },
+  })
+  const sized = (name: string, chars: number, status = "completed", filePath = path) => {
+    const input: Record<string, string> = name === "apply_patch" ? { patchText: "" }
+      : name === "write" ? { filePath, content: "" } : { filePath, oldString: "", newString: "" }
+    const key = name === "apply_patch" ? "patchText" : name === "write" ? "content" : "newString"
+    input[key] = "x".repeat(chars - JSON.stringify(input).length)
+    expect(JSON.stringify(input).length).toBe(chars)
+    return call(name, input, status)
+  }
+  const check = async (calls: object[], ok: boolean) => {
+    writeFileSync(data.input.jsonl, [...data.events, ...calls].map(event => JSON.stringify(event)).join("\n") + "\n")
+    const result = await checkReviewArtifacts(data.input)
+    const row = result.rows.find(row => row.check === "checkpoint writes")
+    expect(row).toMatchObject({ ok, code: 5 })
+    expect(result.exitCode).toBe(ok ? 0 : 5)
+    return row!
+  }
+  expect(CHECKPOINT_WRITE_ARGUMENT_BUDGET).toBe(20000)
+  for (const name of ["write", "edit", "apply_patch"]) {
+    const bounded = [sized(name, 19999), sized(name, 20000), sized(name, 20000)]
+    expect((await check(bounded, true)).detail).toContain("max serialized args 20000 chars (advisory budget 20000; 0 over, informational)")
+    // Positive (R10-2): the observed defect shape — a 26k-char write that succeeded — is a success, reported as information only.
+    const over = sized(name, 26000)
+    expect((await check([over, ...bounded], true)).detail).toContain("max serialized args 26000 chars (advisory budget 20000; 1 over, informational)")
+    expect((await check([sized(name, 65000), ...bounded], true)).detail).toContain("1 over, informational")
+    // Negative: a write-family error with no later successful write is a real failure.
+    const failed = sized(name, 26000, "error")
+    expect((await check([failed], false)).detail).toContain(`1 write error(s) without a successful retry: ${name} event`)
+    // Positive: retry-with-subdivision — the same error followed by successful smaller writes to the same target passes.
+    expect((await check([failed, sized(name, 12000), sized(name, 12000)], true)).detail).toContain("1 write error(s) recovered by a later successful write")
+    // Negative: a later successful write to a DIFFERENT known target does not recover the failed one; an earlier success does not either.
+    await check([failed, sized("write", 1000, "completed", join(data.root, "meta.yaml"))], name === "apply_patch")
+    await check([sized(name, 12000), failed], false)
+  }
+  // Escapes count toward the advisory size but never fail the gate.
+  const escaped = { filePath: join(data.root, "review-input.json"), content: '"\n'.repeat(6100) }
+  expect(escaped.content.length).toBeLessThan(20000)
+  expect(JSON.stringify(escaped).length).toBeGreaterThan(20000)
+  expect((await check([call("write", escaped)], true)).detail).toContain("1 over, informational")
+  // R9-3 shape: a 65k apply_patch whose generation was cut mid-JSON errors; it fails only without a successful retry.
+  const cut = call("apply_patch", { value: '{"patchText":"' + "x".repeat(65000) }, "error")
+  await check([cut], false)
+  await check([cut, sized("apply_patch", 12000)], true)
+  // Errors from a different parent session do not recover this parent's failure.
+  const foreign = { ...sized("write", 1000), sessionID: "ses_other" }
+  await check([sized("write", 26000, "error"), foreign], false)
+  await check([call("read", { filePath: "x".repeat(65000) })], true)
+  for (const content of ["", " \n\t"]) {
+    writeFileSync(path, content)
+    expect((await check([], false)).detail).toContain("missing/empty REVIEW_DOCUMENT.md")
+  }
+  rmSync(path)
+  expect((await check([], false)).detail).toContain("missing/empty REVIEW_DOCUMENT.md")
+})
+
 test("missing writer, reordered tools, active lock and tampered artifact cannot produce a green gate", async () => {
   const data = await fixture()
   data.events.splice(3, 1)
@@ -183,7 +243,7 @@ async function v1Fixture() {
     ],
   }))
   const input: Inputs = { ...data.input, host: "v1", agents, install }
-  return { input, agents }
+  return { ...data, input, agents }
 }
 
 test("v1 accepts installed agent evidence without a load marker; v2 still requires the marker", async () => {
@@ -279,7 +339,7 @@ test("v1 not-exposed writer capability passes only with zero dispatches and comp
   expect(apiCall.exitCode).toBe(5)
   expect(apiCall.rows.find(row => row.check === "writer denied")).toMatchObject({ ok: false, detail: "stopped before writer dispatch" })
 
-  // Negative: a denied classification, missing completion.yaml, or meta remote_state drift each fail.
+  // Negative: a denied classification, missing terminal diagnostics everywhere, or meta remote_state drift each fail.
   writeFileSync(join(root, input.head, "completion.yaml"), completion(0, "denied"))
   expect((await checkReviewArtifacts(input)).rows.find(row => row.check === "writer denied")?.ok).toBe(false)
   rmSync(join(root, input.head, "completion.yaml"))
@@ -319,4 +379,82 @@ test("v1 not-exposed writer capability passes only with zero dispatches and comp
   const v2 = await checkReviewArtifacts({ ...input, host: "v2" })
   expect(v2.exitCode).toBe(5)
   expect(v2.rows.find(row => row.check === "writer denied")).toMatchObject({ ok: false, detail: "stopped before writer dispatch" })
+})
+
+test("v1 reads decision/meta terminal diagnostics without completion.yaml and rejects missing or conflicting fields", async () => {
+  const { input, root, events, saveEvents } = await v1Fixture()
+  events.splice(3, 1)
+  saveEvents()
+  const metaPath = join(root, input.head, "meta.yaml")
+  const decisionPath = join(root, input.head, "decision.yaml")
+  const completionPath = join(root, input.head, "completion.yaml")
+  const baseMeta = { autonomous: true, posted: false }
+  const meta = {
+    ...baseMeta, status: "posting-validation-failed", remote_state: "not_posted",
+    reason: "R5 writer capability not-exposed, cause unknown: host functions.task inventory lists pr-code-reviewer, pr-context-gatherer, researcher, security-reviewer, but not required pr-comment-writer. No writer dispatch or posting API call attempted.",
+  }
+  const postResult = { status: "local_only", remote_state: "not_posted", api_calls: 0 }
+  const diagnostic = { classification: "not-exposed, cause unknown" }
+  const save = (path: string, value: object) => writeFileSync(path, JSON.stringify(value, null, 2) + "\n")
+  const check = async (ok: boolean) => {
+    const result = await checkReviewArtifacts(input)
+    expect(result.rows.find(row => row.check === "writer denied")).toMatchObject({ ok })
+    expect(result.rows.filter(row => !row.ok).map(row => row.check)).toEqual(ok ? [] : ["writer denied"])
+    expect(result.exitCode).toBe(ok ? 0 : 5)
+  }
+
+  save(metaPath, meta)
+  save(decisionPath, { POST_RESULT: postResult })
+  await check(true)
+  save(decisionPath, { POST_RESULT: { ...postResult, api_calls: 1 } })
+  await check(false)
+  save(completionPath, { POST_RESULT: postResult, capability_diagnostic: diagnostic })
+  await check(false)
+  rmSync(completionPath)
+  save(decisionPath, { POST_RESULT: postResult, capability_diagnostic: { classification: "denied" } })
+  await check(false)
+
+  rmSync(decisionPath)
+  save(metaPath, { ...baseMeta, ...postResult, capability_diagnostic: diagnostic })
+  await check(true)
+  for (const missing of ["remote_state", "api_calls", "capability_diagnostic"]) {
+    const terminal: Record<string, unknown> = { ...baseMeta, ...postResult, capability_diagnostic: diagnostic }
+    delete terminal[missing]
+    save(metaPath, terminal)
+    await check(false)
+  }
+  save(metaPath, baseMeta)
+  await check(false)
+})
+
+test("CLI emits one SMOKE_RESULT JSON line with per-check status and the process exit code", async () => {
+  const { input, root } = await fixture()
+  const args = [input.fixture, input.owner, input.repo, input.pr, input.head, input.jsonl, input.hostlog, input.audit]
+  const run = async (argv: string[]) => {
+    const child = Bun.spawn([process.execPath, "run", resolve(import.meta.dirname, "../../scripts/check-review-artifacts.ts"), ...argv], { stdout: "pipe", stderr: "pipe" })
+    const [stdout, stderr, exitCode] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited])
+    const summaries = stdout.split("\n").filter(line => line.startsWith("SMOKE_RESULT "))
+    expect(summaries).toHaveLength(1)
+    const summary = JSON.parse(summaries[0].slice("SMOKE_RESULT ".length))
+    expect(summary.exitCode).toBe(exitCode)
+    return { summary, exitCode, stdout, stderr }
+  }
+  for (const exitCode of [0, 5]) {
+    if (exitCode) rmSync(join(root, "candidate.json"))
+    const expected = await checkReviewArtifacts(input)
+    const result = await run(args)
+    expect(result.exitCode).toBe(exitCode)
+    expect(result.stderr).toBe("")
+    expect(result.stdout).toContain("| Check | Result | Evidence |")
+    expect(result.summary).toEqual({
+      checks: expected.rows.map(row => ({ ...row, status: row.ok ? "PASS" : "FAIL" })),
+      passed: exitCode ? 17 : 18, total: 18, exitCode,
+    })
+  }
+  const usage = await run([])
+  expect(usage.exitCode).toBe(3)
+  expect(usage.summary).toMatchObject({ checks: [{ check: "arguments", status: "FAIL" }], passed: 0, total: 1 })
+  const invalidHost = await run([...args, "--host", "invalid"])
+  expect(invalidHost.exitCode).toBe(5)
+  expect(invalidHost.summary).toMatchObject({ checks: [{ check: "checker", status: "FAIL" }], passed: 0, total: 1 })
 })

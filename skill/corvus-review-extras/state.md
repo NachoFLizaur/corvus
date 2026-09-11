@@ -10,7 +10,6 @@ Record `autonomous` only from the fixed trusted invocation: `corvus-review` → 
 ## Namespace and Lock
 
 Derive these once from R0's validated owner, repository, positive PR number, and lowercase 40-hex head SHA:
-
 ```text
 review_root = .corvus/reviews/<owner>__<repo>__pr<num>
 head_review_dir = <review_root>/<head_sha>
@@ -36,7 +35,6 @@ On any lock permission denial, stop local-only without an alternate path or unlo
 
 ## Checkpoint Shape
 `REVIEW_DOCUMENT.md` serializes the entire [REVIEW_DOCUMENT](schemas.md#review_document--r3), not merely review_body. Include source_findings with both axis maps/projection, review_context, all tags, logs, edits, notices, and exact rendered strings. A checkpoint lacking these fields is incompatible and requires fresh analysis.
-
 ```yaml
 schema_version: 1
 owner: "<validated owner>"
@@ -72,9 +70,11 @@ Use `synthesized` for a valid R3 checkpoint (`reason: null`, `recoverable: true`
 5. A valid recoverable unposted document loads both axis groups, source data, and edit history; mark R1/R2 and R3 synthesis resumed, announce `Resuming synthesized review for head <sha8> — skipping R1/R2; remeasuring at R3`, and follow [R0 Post Follow-Up](../corvus-review-r0/SKILL.md#post-follow-up). Discard any prior descriptor/authorization. A local-only-final checkpoint takes the fresh-analysis route. Done when restored data passes renewed measurement and the normal R4 mode route.
 
 ## Persist at R3
-
-1. After synthesis validation and before candidate creation or measurement, overwrite the complete document, then overwrite metadata last with status synthesized and Invocation Mode. Use exact `date -u +%Y-%m-%dT%H:%M:%SZ` output for created_at; reset posted false for fresh synthesis and derive series_converged from the shared verdict. Preserve the complete source objects and edit history. Done when both files describe the current in-memory state.
-2. Persist series knowledge below. If either checkpoint write fails, retain valid in-memory state, terminate local-only, and report `Review checkpoint persistence failed; cross-session resume unavailable.` State the recovery path: restore checkpoint storage and rerun R0 with fresh analysis if no complete checkpoint survives. A knowledge-write failure is disclosed separately. Done when persistence success/failure is explicit.
+<!-- Persistence invariant: serialized arguments are checked before each mutation; complete-document read-back precedes metadata. Oversize calls prefer subdivision/compaction, but a successful oversized write is logged, not failed; failed or truncated writes retry subdivided, and only a denial or a retry that still fails ends local-only. No mode, resume or tool choice changes this posture. -->
+1. Prefer ≤20,000 characters of serialized arguments per write/edit/patch tool call, including JSON escapes, paths and patch framing: a conservative engineering budget against truncation, not a provider limit or a rail — an oversized successful write is logged, not failed, per the shared [Operating Rules](SKILL.md#operating-rules). Apply it to `REVIEW_DOCUMENT.md`, already-chunked `review-input.json`, and every other review-state write. Subdivide oversized sections; where a whole-JSON call is required, compact before writing. Done when each call fits before submission, or its overage is logged in the local document and work continues.
+2. After synthesis validation and before candidate creation or measurement, create `REVIEW_DOCUMENT.md` with its header + first section, then append remaining sections in separate sequential calls. With only `apply_patch`, use Add File then Update File patches; use `edit` append when available, never `write` overwrite of a partial file. Preserve the complete source objects and edit history. Verify the complete document with the read tool, paging through every section as needed. Done when read-back matches the complete in-memory document.
+3. Then overwrite `meta.yaml` last with status synthesized and Invocation Mode. Use exact `date -u +%Y-%m-%dT%H:%M:%SZ` output for created_at; reset posted false for fresh synthesis and derive series_converged from the shared verdict. Done when both files describe the current in-memory state.
+4. Persist series knowledge below. A write that returns an error, or whose read-back is invalid or incomplete, is retried once subdivided into smaller sequential calls; a write that succeeded and read back complete is never a failure whatever its size. Only a permission denial or a retry that still fails retains valid in-memory state, terminates local-only, and reports `Review checkpoint persistence failed; cross-session resume unavailable.` State the recovery path: restore checkpoint storage and rerun R0 with fresh analysis if no complete checkpoint survives. A knowledge-write failure is disclosed separately. Done when persistence success/failure is explicit.
 
 ## Posting Validation Failures
 

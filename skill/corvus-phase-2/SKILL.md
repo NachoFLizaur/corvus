@@ -17,11 +17,7 @@ Use `**Tests**: deferred | none` from Plan Format, defaulting to deferred. Defer
 author coverage during Phase 4 and run a single full suite at Phase 5a; none uses acceptance
 checks only, with no test authoring. Both retain acceptance checks at the required gates.
 deferred → no test execution before Phase 5a; none → no test execution at all.
-<!--
-Test timing oracle: the selected plan policy and current phase, read before every dispatch.
-Missing or conflicting policy blocks dispatch; consumers permit execution only at the stated
-phase for the selected policy. Neither depth nor autonomous approval disables this control.
--->
+<!-- Test timing oracle: the selected plan policy and current phase, read before every dispatch. Missing or conflicting policy blocks dispatch; consumers permit execution only at the stated phase for the selected policy. Neither depth nor autonomous approval disables this control. -->
 
 ### Planner Dispatch
 
@@ -86,11 +82,7 @@ Done when review reaches `OK` or a stalled residual list is surfaced; a blocked 
 ## Phase 3: User Approval
 
 Read the current plan and terminal review before presenting this single approval gate.
-<!--
-Approval oracle: the on-disk plan, terminal review, and caller's approval, read before Phase 4
-dispatch. Missing evidence or unresolved REJECT holds execution. Autonomous approval replaces
-the user decision only; neither caller nor depth bypasses the review prerequisite.
--->
+<!-- Approval oracle: the on-disk plan, terminal review, and caller's approval, read before Phase 4 dispatch. Missing evidence or unresolved REJECT holds execution. Autonomous approval replaces the user decision only; neither caller nor depth bypasses the review prerequisite. -->
 Present one bounded summary; detailed tasks stay in the plan:
 
 ```markdown

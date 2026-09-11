@@ -46,13 +46,7 @@ At a trigger, the next dispatch is root-cause analysis: identify the common deci
 or invariant and evaluate removal/revert/simplification first. Record the keep/revert/simplify
 decision with evidence before admitting an implementation dispatch. Keep fired triggers
 visible until this analysis resolves them; later rows cannot dilute an unresolved trigger.
-<!--
-Ledger oracle: verified current rows plus the full prior-series ledger, read before dispatch
-and rechecked by the child before persistence or product edits. Missing lineage or inconsistent
-counts holds both consumers; a trigger permits analysis and ledger persistence, not symptom
-edits. Zero rows admits no remediation. Plan copies, new rounds, and fast mode disable neither
-trigger; only an evidenced root-cause/removal decision resolves a fired hold.
--->
+<!-- Ledger oracle: verified current rows plus the full prior-series ledger, read before dispatch and rechecked by the child before persistence or product edits. Missing lineage or inconsistent counts holds both consumers; a trigger permits analysis and ledger persistence, not symptom edits. Zero rows admits no remediation. Plan copies, new rounds, and fast mode disable neither trigger; only an evidenced root-cause/removal decision resolves a fired hold. -->
 Done when the recorded calculation admits an evidenced root fix, routes analysis, or holds
 the dispatch for missing evidence.
 
@@ -90,11 +84,7 @@ Move an acknowledged estimated constant at most once per review series without n
 measurement evidence. Record the move and the production data, benchmark, or observation
 needed to justify another. Include that measurement debt in the hand-off; further proposed
 moves without the named evidence receive a declined disposition with rationale.
-<!--
-Estimate oracle: series move history and specified measurements, read before authorizing a
-change. Missing history holds the move; absent new evidence after the first move declines it.
-A new review round preserves the limit; the named measurement evidence permits reassessment.
--->
+<!-- Estimate oracle: series move history and specified measurements, read before authorizing a change. Missing history holds the move; absent new evidence after the first move declines it. A new review round preserves the limit; the named measurement evidence permits reassessment. -->
 Done when the proposed move is evidenced or declined and its measurement debt is visible.
 
 ## Finding Disposition

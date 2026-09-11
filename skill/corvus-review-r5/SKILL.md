@@ -24,15 +24,15 @@ You MUST NOT invoke the writer, run a GitHub mutation, or offer an alternate pos
 
 ## Dispatch One Artifact
 
-After revalidation, require R4's [POST_ARTIFACT](../corvus-review-extras/schemas.md#post_request-and-post_result--r5writer) to match current identity/head and the approved event, with authorization still referring to the exact final document used at R4. Call `corvus_review_verify` with `{op: "verify", artifactPath: <artifact_path>, expectedSha256: <expected_sha256>}` before dispatch, including each permitted re-dispatch; keep R4's expected_sha256 unchanged. Require `ok:true`, sha256Match true, canonical true, no violations, and available measurements. Missing artifact, digest mismatch, changed authorization, or incomplete evidence ends local-only via [Posting Validation Failures](../corvus-review-extras/state.md#posting-validation-failures). Done when the original authorization still binds these persisted bytes.
+After revalidation, require the current [POST_ARTIFACT](../corvus-review-extras/schemas.md#post_request-and-post_result--r5writer) from R4 or Anchor Relocation below to match current identity/head and the approved event, with authorization referring to that exact presentation revision. Call `corvus_review_verify` with `{op: "verify", artifactPath: <artifact_path>, expectedSha256: <expected_sha256>}` before dispatch, including each permitted re-dispatch; keep that descriptor's expected_sha256 unchanged. Require `ok:true`, sha256Match true, canonical true, no violations, and available measurements. Missing artifact, digest mismatch, changed authorization, or incomplete evidence ends local-only via [Posting Validation Failures](../corvus-review-extras/state.md#posting-validation-failures). Done when authorization binds these persisted bytes.
 
-Record the posting-window start with byte-exact `date -u +%Y-%m-%dT%H:%M:%SZ`. Retain artifact bytes and descriptor unchanged until recovery settles.
+Record the posting-window start with byte-exact `date -u +%Y-%m-%dT%H:%M:%SZ`. Retain artifact bytes and descriptor unchanged during transport recovery; only Anchor Relocation creates a new presentation revision.
 
 Dispatch literal `pr-comment-writer` with only this JSON object, substituting validated descriptor values:
 ```json
 {
   "artifact_path": ".corvus/reviews/<owner>__<repo>__pr<pr_number>/post-request.json",
-  "expected_sha256": "<R4 SHA-256>",
+  "expected_sha256": "<current artifact SHA-256>",
   "repository": {"owner": "<owner>", "name": "<repo>"},
   "pr_number": <pr_number>,
   "head_sha": "<head_sha>",
@@ -43,12 +43,13 @@ Include no review body text, comments, findings, TASK block, or extra controls i
 
 ## Reconcile Writer Transport
 
-<!-- Recovery invariant: the writer result or complete read-only listing is inspected after each dispatch and before any repeat. Unknown/ambiguous remote state fails local-only; only verified absence allows a bounded identical re-dispatch. A valid writer local_only disables orchestrator recovery for this run. -->
+<!-- Recovery invariant: the writer result or complete read-only listing is inspected after each dispatch and before any repeat. Unknown/ambiguous remote state fails local-only; only verified absence allows bounded identical transport re-dispatch. A valid writer local_only disables orchestrator recovery for this run. -->
 Classify the return:
 
 | Result | Handling |
 |--------|----------|
 | Valid POST_RESULT posted | Require remote_state posted and usable review_url; complete without another dispatch |
+| Valid POST_RESULT not_posted, reason anchors-unverifiable | Follow Anchor Relocation, not transport recovery |
 | Valid POST_RESULT local_only | Terminal as reported, including internal failure or unknown outcome; display full review and reason |
 | Empty/malformed/truncated/schema-invalid result | Child-transport failure; verify remote state using the listing below before considering recovery |
 
@@ -67,6 +68,12 @@ Absence verification is a prerequisite, not an idempotency guarantee against lat
 
 <!-- Alternate mutations can duplicate an accepted review or bypass its authorized event. -->
 You MUST NOT overcome writer-local-only or uncertain outcomes with another agent, endpoint/event, direct posting command, interactive fallback, or body-first/comments-later sequence. A failed writer path hands off the complete local document and reason, not an alternate publishing route.
+
+## Anchor Relocation
+<!-- Relocation invariant: a schema-valid anchors-unverifiable result with remote_state not_posted and exact candidate-anchor matches is read before any revision. Invalid matches or uncertain remote state fail local-only; only the first such result permits placement changes. Exhaustion, denied interactive consent or failed authorization/integrity checks disables recovery; no mode bypasses those checks. -->
+On `anchors-unverifiable`, match each unique `{path,line_start,line_end}` in `unverifiable_anchors` to the frozen artifact and REVIEW_DOCUMENT (start_line or line through line); reject unknown positions. Relocate ONLY those matching inline comments into their own axis's review body using the existing [identity-preserving Conventional Comments format](../corvus-review-extras/SKILL.md#conventional-comments), adding the original path/range while preserving each entire comment body, identity and suggestion unchanged. Keep all other inline comments, their order, findings, action, marker, notices and counts unchanged; increment R5's cumulative `comments_moved_to_body` by the number moved, not the number of unique anchors, and retain it independently of the writer's zero count.
+This is a new presentation revision, not a transport retry: autonomous mode needs no new authorization because content is unchanged, only placement; interactive mode shows the relocation in one question and proceeds only on explicit consent (missing question follows the state procedure). Invalidate the old descriptor, persist the revised complete checkpoint and candidate using R3's procedures, then re-run `corvus_review_payload` measure → freeze via [Freeze at R4](../corvus-review-extras/state.md#freeze-at-r4) → `corvus_review_verify` with the new digest, revalidate authorization/current PR controls, and re-dispatch the writer ONCE. The writer never edits either artifact; only the payload tool replaces frozen bytes. If the second attempt also fails to post for a non-transport reason, end local_only with its diagnostic; transport-invalid returns use Reconcile Writer Transport without resetting the relocation bound.
+An autonomous review with a frozen, verified artifact takes this recovery instead of ending without posting on anchor-validation limits; real GitHub rejection or transport uncertainty retains its terminal handling, and self-imposed write bounds never end the review here either, per the shared [Operating Rules](../corvus-review-extras/SKILL.md#operating-rules). Done when the bounded attempt posts or reports its evidenced failure with the complete checkpoint retained.
 
 ## Complete Locally or Remotely
 Use [state completion](../corvus-review-extras/state.md#complete-at-r5) for every outcome, persisting the evidenced verdict independently of posting. For confirmed posted, a metadata-write failure reports the remote URL without repeating the post. For local-only/not-posted/unknown, retain posted false and disclose the exact uncertainty. Keep the full axis-preserving checkpoint path available for inspection.

@@ -15,11 +15,7 @@ Dispatch task-planner `AMEND_PLAN copy-forward` per corvus-phase-7 §AMEND_PLAN 
 source directory and a new feature's PLAN.md before any planned continuation of a legacy or
 completed source. Direct fixes read the source as context without a planner write.
 <!-- Archived plans preserve the evidence of what was approved and completed. -->
-<!--
-Plan-write oracle: source path, on-disk status, and destination, read before any planner
-write. Completed or legacy sources reject in-place mutation; an uncertain state holds
-routing. Direct fixes need no plan mutation; no route disables source preservation.
--->
+<!-- Plan-write oracle: source path, on-disk status, and destination, read before any planner write. Completed or legacy sources reject in-place mutation; an uncertain state holds routing. Direct fixes need no plan mutation; no route disables source preservation. -->
 Done when the source is protected and any planned continuation has a distinct writable artifact.
 
 ## Select a Route

@@ -12,6 +12,7 @@ permission:
   bash:
     "*": "deny"
     'gh api --method GET repos/*/pulls/* -H Accept:*': "allow"
+    'gh api --method GET --paginate repos/*/pulls/*/files -H Accept:application/vnd.github+json': "allow"
     'gh api --method POST repos/*/pulls/*/reviews --input .corvus/reviews/*/post-request.json': "allow"
     'jq . .corvus/reviews/*/post-request.json': "allow"
     'python3 -m json.tool .corvus/reviews/*/post-request.json': "allow"
@@ -54,9 +55,9 @@ The frontmatter's `jq .`, `python3 -m json.tool`, and `shasum` grants are option
 | POST_ARTIFACT (dispatch) | artifact_path: string, expected_sha256: lowercase 64-hex, repository: {owner: string, name: string}, pr_number: positive safe integer, head_sha: lowercase 40-hex, event: APPROVE/REQUEST_CHANGES/COMMENT |
 | POST_REQUEST (JSON file) | commit_id: lowercase 40-hex, event: APPROVE/REQUEST_CHANGES/COMMENT, body: non-empty string, comments: array of Comment |
 | Comment | path: string, line: positive safe integer, side: RIGHT, body: non-empty string; optional paired start_line: positive safe integer less than line, start_side: RIGHT |
-| POST_RESULT (return) | status: posted/local_only, review_url: usable GitHub review URL or null, reason: non-empty string or null, remote_state: posted/not_posted/unknown, inline_comments_posted: non-negative integer, comments_moved_to_body: 0, api_calls: non-negative integer |
+| POST_RESULT (return) | status: posted/not_posted/local_only, review_url: usable GitHub review URL or null, reason: non-empty string or null, remote_state: posted/not_posted/unknown, inline_comments_posted: non-negative integer, comments_moved_to_body: 0, api_calls: non-negative integer; unverifiable_anchors: [{path: string, line_start: positive safe integer, line_end: safe integer >= line_start}] only for status not_posted |
 
-Reject extra keys at every level, duplicate JSON keys, missing required fields, null optional anchors, and multiple JSON values. The artifact contains only POST_REQUEST fields, without an envelope or dispatch metadata. POST_RESULT posted requires remote_state posted, a usable URL and null reason; local_only requires a reason, null URL and truthful not_posted/unknown state. Unconfirmed inline_comments_posted is 0.
+Reject extra keys at every level, duplicate JSON keys, missing required fields, null optional anchors, and multiple JSON values. The artifact contains only POST_REQUEST fields, without an envelope or dispatch metadata. POST_RESULT posted requires remote_state posted, a usable URL and null reason; local_only requires a reason, null URL and truthful not_posted/unknown state. Status not_posted requires reason anchors-unverifiable, remote_state not_posted, null URL, zero inline_comments_posted and a non-empty unverifiable_anchors array. Unconfirmed inline_comments_posted is 0.
 
 ## Posting Workflow
 
@@ -88,8 +89,12 @@ Fetch the canonical diff with the exact unquoted endpoint/header form:
 ```text
 gh api --method GET repos/<owner>/<name>/pulls/<pr_number> -H Accept:application/vnd.github.v3.diff
 ```
-<!-- Anchor invariant: complete live diff file headers and hunks are the oracle, read after head equality and before POST. Missing membership, invalid spans, or incomplete evidence fails the whole request local-only. Only an empty comments array disables diff reads; no fallback guesses anchors or edits the artifact. -->
-Parse complete diff output in memory. Require each path in the diff's changed-file headers and every requested line on added/context RIGHT-side lines; a multi-line span stays in one hunk. A suggestion's intended range must match its inline span. Failed, partial or truncated diff output, unknown membership or any anchor mismatch ends local-only without posting. Report affected paths/lines and reasons; retain the artifact unchanged. A context mismatch after the head check is an anchor-validation problem, not evidence of head drift. Done when every comment is verified or the entire request has stopped.
+<!-- Anchor invariant: complete live diff headers/hunks or shape-validated PR-files filename/patch records are the oracle, read after head equality and before POST. Unavailable evidence returns not_posted for R5 relocation; proven mismatches fail local-only. Only an empty comments array disables retrieval; neither fallback nor relocation permits guessed anchors or writer artifact edits. -->
+Parse complete canonical diff output in memory; on HTTP 406/413 or partial/truncated diff output, instead fetch per-file patches with this exact form:
+```text
+gh api --method GET --paginate repos/<owner>/<name>/pulls/<pr_number>/files -H Accept:application/vnd.github+json
+```
+Validate paginated JSON arrays and each filename/patch record as data; match paths exactly, using each file's complete `patch` as its hunk evidence. In either source require path membership in changed-file headers or filename records, complete hunk counts and every requested line on added/context RIGHT-side lines, with a multi-line span in one hunk and any suggestion range matching its inline span; any anchor mismatch ends local-only without posting. An absent patch (including very large/binary files), truncated patch, or unavailable membership from incomplete pagination makes that anchor unverifiable, never guessed. If ALL anchors verify, proceed; otherwise return status `not_posted`, reason `anchors-unverifiable`, and `unverifiable_anchors: [{path,line_start,line_end}]` for only the unresolved anchors (start_line or line through line), with no POST attempted. Other retrieval errors retain their diagnostic. Retain the artifact unchanged; a context mismatch is not evidence of head drift. Done when every anchor is verified or the unchanged request has returned its failure evidence.
 
 ### 5. Submit Atomically
 
@@ -103,15 +108,15 @@ Only validated owner/name/number form the endpoint and artifact path. commit_id 
 
 ### 6. Report Remote Truth
 
-Return only the inline POST_RESULT field set. Posted requires 2xx plus a usable GitHub review URL from the response. Count every attempted head/diff/POST API call, including permitted retry; verification/optional diagnostics/file reads are not API calls. A successful body-only path uses head GET and POST only. comments_moved_to_body is 0 because approved bytes remain unchanged. Done when posted/not_posted/unknown, reason, URL, confirmed inline count and api_calls match observed evidence.
+Return only the inline POST_RESULT field set. Posted requires 2xx plus a usable GitHub review URL from the response. Count every attempted head/diff/files-page/POST API call, including permitted retry; verification/optional diagnostics/file reads are not API calls. A successful body-only path uses head GET and POST only. comments_moved_to_body is 0 because approved bytes remain unchanged. Done when posted/not_posted/unknown, reason, URL, confirmed inline count and api_calls match observed evidence.
 
 ## Error Handling
 
 | Outcome | Return / recovery |
 |---------|-------------------|
 | Input, artifact read/verify, head, JSON, semantic, or measured-limit failure before POST | local_only, not_posted; exact reason and unchanged artifact retained |
-| Inline retrieval/anchor failure | local_only, not_posted; affected positions and reason, unchanged artifact retained |
-| HTTP 403/404/413/422 | local_only; report deterministic rejection as data, unchanged event/endpoint |
+| Inline retrieval/anchor failure | Use step 4's result; retain affected positions and unchanged artifact |
+| HTTP 403/404/413/422 outside step 4's fallback | local_only; report deterministic rejection as data, unchanged event/endpoint |
 | HTTP 429 definitively proving non-acceptance | At most one bounded-backoff retry of the unchanged artifact to identical endpoint after repeating all checks; otherwise local_only |
 | HTTP 5xx/network/timeout after dispatch | local_only, unknown unless API proves non-acceptance; no blind retry |
 | Malformed success response | local_only, unknown; posting may have occurred |

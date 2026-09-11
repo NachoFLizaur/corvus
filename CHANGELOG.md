@@ -5,6 +5,27 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.10.0-beta.5 — 2026-09-11
+
+### Fixed
+
+- Large-diff posting (R10-1): when GitHub returns HTTP 406/413 or a partial/truncated canonical diff for the PR (>20,000 changed lines), `pr-comment-writer` now falls back to `gh api --method GET --paginate repos/<owner>/<name>/pulls/<pr_number>/files` and validates each inline anchor against the per-file `patch` records; anchors whose patch is absent/truncated or whose membership is unresolved return `status: not_posted`, `reason: anchors-unverifiable`, and `unverifiable_anchors` with no POST attempted — never a guessed position and never a writer edit of the frozen artifact.
+- R5 Anchor Relocation (R10-1): on `anchors-unverifiable`, the orchestrator relocates only the matching inline comments into their own axis's review body (identity-preserving Conventional Comments, body/suggestion unchanged), persists the revised checkpoint and candidate, re-runs measure → freeze → verify with the new digest, revalidates PR controls, and re-dispatches the writer once (autonomous: no new authorization because content is unchanged; interactive: one consent question). **Autonomous reviews with a frozen, verified artifact always reach the writer**: only a real GitHub rejection, transport uncertainty, or an R4 rail from review content can end without posting.
+- Oversized-write posture (R10-2): a run treated its own 26k-character write — which succeeded and read back complete — as terminal and ended `local_only` before freeze/post. The shared Operating Rules now state once that engineering bounds (write size, chunking, read-back paging) are guidance against truncation, not rails: a successful write is a success regardless of size (log the overage locally and continue); only a failed or truncated write is a failure, recovered by retry-with-subdivision, not `local_only`. `state.md` Persist at R3, R2's evidence envelope, R3, R4 and R5 point at that rule; no review prompt makes an oversize call a local-only terminal (pinned in the structural test with negative controls).
+- R3 checkpoint bounded assembly (R9-3): `REVIEW_DOCUMENT.md` is written as header + first section then appended section by section (≤20,000 serialized characters preferred per call, `edit` append or Add/Update patches, never a `write` overwrite of a partial file), with complete read-back before `meta.yaml`; this replaces the single ~65k-character tool call whose generation was cut mid-JSON and lost the checkpoint.
+- Review-input bounded assembly (R9-3): `review-input.json` uses the same bounded sequential patches, JSON-validated from the complete read-back before either child launches; a write error, truncation, or malformed call gets one smaller assembly retry via the compaction ladder.
+- Gate checker artifact-shape (R8-11): the v1 not-exposed acceptance reads `remote_state`, `api_calls` and the capability classification from whichever review-state file the run persisted them in (`completion.yaml`, `decision.yaml`, or `meta.yaml`, including a terminal `status`/`reason` diagnosis), so equivalent terminal evidence in either shape scores `writer denied: PASS`; fixture tests pin both shapes and the historical negatives. The new `checkpoint writes` check passes on a non-empty `REVIEW_DOCUMENT.md` with every write tool call completed, reports the maximum serialized argument size as information, and fails only for an absent/empty checkpoint or a write error with no later successful retry. The checker also emits a machine-readable `SMOKE_RESULT` summary line.
+
+### Changed
+
+- Corpus consolidation (R9-2): 202 lines recovered without behavior change by consolidating duplicated lifecycle/review material (dispatch templates, fix loop, transport retry, remediation, phase entries) behind their owning references — 4,998 → 4,796 lines, all budgets honored; the corpus ceiling stays 5,000.
+- Smoke gate updates: `scripts/check-review-artifacts.ts` scores 18 checks (adds `checkpoint writes`) and prints a `SMOKE_RESULT` JSON line for machine consumption; the v1 gate for this release is the single run recorded under Validation.
+
+### Known
+
+- The OpenCode 2 end-to-end review gate is still deferred; v2 users stay on 0.10.0-beta.3.
+- The large-diff path (406 fallback → `anchors-unverifiable` → R5 relocation → single re-dispatch) is validated by unit pins only; verify it on a real >20,000-line PR — when the writer still cannot verify anchors it relocates those comments to the body and posts.
+
 ## 0.10.0-beta.4 — 2026-09-11
 
 ### Added
