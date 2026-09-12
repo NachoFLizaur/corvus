@@ -377,6 +377,8 @@ Corvus PR Review is a multi-pass code review system that brings the same structu
 @corvus-review-auto #456    # autonomous; auto-posts only when every rail passes
 ```
 
+**Token scopes:** `repo` covers reading PRs, diffs and reviews and posting reviews; without suitable repository access, required reads or posting fail (public repositories may use narrower access). `read:user` makes identity readable and lifts the unknown-identity `COMMENT_ONLY` cap; if identity is unreadable, R0 tries `gh auth status` once on HTTP 403 and retains the cap if no usable login is found, without bypassing other rails. `checks:read` (Checks read permission for fine-grained tokens) enables CI verification; without check access, CI is reported unavailable, never assumed passing.
+
 ### Workflow
 
 ```

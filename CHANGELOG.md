@@ -5,6 +5,17 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.10.0-beta.6 — 2026-09-12
+
+### Added
+
+- Explicit read-only GitHub command forms for both review orchestrators: `gh pr list`, PR commits GET (single-page and paginated), paginated PR-files GET with the JSON Accept header, `gh issue view`, and repository contents GET. The gatherer gains the two non-API forms alongside its existing GET allow. R0 records verified concurrent-PR file overlaps; shallow-checkout origin derivation prefers the PR commits API while retaining gaps for unavailable line attribution.
+- Identity-scope recovery (R11-3): both review orchestrators allow bare `gh auth status` for one fallback after an identity HTTP 403; unresolved identity retains the `COMMENT_ONLY` cap with `read:user`/`checks:read` guidance, and the README documents token access requirements.
+
+### Fixed
+
+- The smoke GitHub shim forwards three-dot compare endpoints (`repos/<owner>/<repo>/compare/<a>...<b>`) without relaxing its rejection of other repeated-dot paths, accepts the PR-files JSON Accept header, and requires `--json` for `pr list` and `issue view`; `issue comment` remains blocked.
+
 ## 0.10.0-beta.5 — 2026-09-11
 
 ### Fixed

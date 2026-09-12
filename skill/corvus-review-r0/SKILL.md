@@ -44,12 +44,14 @@ The parent never runs `git status`, `git diff`, or `gh api …/files`: worktree 
 
 Acquire the lock using [review state](../corvus-review-extras/state.md#namespace-and-lock) before inspecting checkpoints. That procedure owns the only R0 question call: interactive fresh-lock override. Follow its current-head resume/reconciliation branch after the marker scan below, but finish current config and triage before acting on any checkpoint.
 
+<!-- Identity invariant: fixed API/status output for the PR host is read before setting self_review or deciding to post; missing/ambiguous login keeps the shared unknown-identity cap in both modes. Only a usable login resolves unknown; no override disables the cap or other rails. -->
 Read authenticated identity and CI with fixed commands:
 ```bash
 gh api user --jq .login
 gh pr checks <number> --repo <owner/repo> --json name,state,link
 ```
-
+On HTTP 403 from `gh api user`, run `gh auth status` once (no arguments) and parse only an unambiguous active login for the PR host from a successful account entry in its output.
+If still unavailable, retain the existing unknown-identity `COMMENT_ONLY` cap and report: "identity unreadable (HTTP 403: token lacks `read:user`) — grant `read:user` to lift the COMMENT_ONLY cap; `gh pr checks` needs `checks:read` for CI verification".
 Compare usable login to author exactly: equal→self_review true, different→false, failure/unusable→unknown. CI SUCCESS/NEUTRAL/SKIPPED→pass; FAILURE/ERROR→fail; PENDING/QUEUED/IN_PROGRESS→pending. Record unavailable/unknown check states explicitly rather than inventing pass. Aggregate fail first, then pending, all pass→pass, otherwise none. Done when every available rail input, including self_review, has value and evidence independently of other caps.
 
 Deduplicate linked issue numbers from closingIssuesReferences and case-insensitive fixes/closes/resolves references in the body. Use only validated issue numbers for later retrieval; preserve the original text as evidence. Done when linked_issues is populated or empty.
@@ -84,7 +86,7 @@ A `post` or follow-up request starts fresh R0 → revalidate head/base/config an
 
 ## Triage and Exit
 
-Set all flags independently; capture values and evidence in rail_inputs even when another rail already determines action.
+Set all flags independently; capture values and evidence in rail_inputs even when another rail already determines action; for concurrent-review context, use `gh pr list --repo <owner/repo> --state open --json number,title,files` to identify other open PRs touching the same files and note verified overlaps in verified_facts.
 
 | Input | Record / handling |
 |-------|-------------------|

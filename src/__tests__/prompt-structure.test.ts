@@ -116,7 +116,8 @@ const readOnlyPins: Record<string, Record<string, unknown>> = {
   "agent/pr-context-gatherer.md": {
     ...closed(["read", "glob", "grep"]), task: "deny", webfetch: "deny", question: "deny", edit: "deny", write: "deny",
     bash: { "*": "deny", "rm *": "deny", "mv *": "deny", "cp *": "deny", "sudo *": "deny",
-      ...Object.fromEntries(["gh pr diff *", "gh pr view *", "gh api --method GET *", "git log*", "git blame*",
+      ...Object.fromEntries(["gh pr diff *", "gh pr view *", "gh api --method GET *",
+        "gh pr list --repo * --state * --json *", "gh issue view * --repo * --json *", "git log*", "git blame*",
         "git diff*", "git show*", "git shortlog*", "git rev-parse*", "git ls-files*", "git merge-base*",
         "file *", "wc *", "sort *", "uniq *"].map(pattern => [pattern, "allow"])) },
   },
@@ -820,6 +821,80 @@ describe("prompt structure", () => {
         const beforeRules = toV2Permissions(parseFrontmatter(missing[path]).frontmatter.permission)
         expect(evaluateRules(beforeRules, "shell", "gh pr checkout 12 --repo o/r --detach")).toBe("deny")
         expect(validate(missing, contract)).toContain(`safety:${path}:detached-checkout`)
+      }
+    })
+
+    /**
+     * Identity pins read authored permissions and R0 prose before mutating in-memory copies;
+     * missing fallback access, widened auth access or lost fail-closed guidance fails these
+     * checks regardless of rollout flags. They verify prompt contracts, not live GitHub identity.
+     */
+    test("identity fallback permits only bare auth status in both orchestrators", () => {
+      const corpus = readCorpus(), command = "gh auth status"
+      for (const path of reviewOrchestrators) {
+        const { permission } = parseFrontmatter(corpus[path]).frontmatter
+        if (!record(permission) || !record(permission.bash)) throw new Error("Missing bash permission map")
+        const rules = toV2Permissions(permission)
+        expect(permission.bash[command]).toBe("allow")
+        expect(evaluateRules(rules, "shell", command)).toBe("allow")
+        expect(evaluateRules(rules, "shell", "gh api user --jq .login")).toBe("allow")
+        for (const denied of ["gh auth login", "gh auth logout", "gh auth status --show-token",
+          "gh auth status --hostname github.com", "gh auth status --json hosts"]) {
+          expect(evaluateRules(rules, "shell", denied), `${path}: ${denied}`).toBe("deny")
+        }
+        const missing = mutatePermission(corpus, path, p => { delete (p.bash as Record<string, unknown>)[command] })
+        expect(evaluateRules(toV2Permissions(parseFrontmatter(missing[path]).frontmatter.permission), "shell", command)).toBe("deny")
+      }
+    })
+
+    test("R0 retries identity once on HTTP 403 and retains the unknown cap with scope guidance", () => {
+      const prose = sections(readCorpus()["skill/corvus-review-r0/SKILL.md"], "Establish State and Gather Rail Inputs")
+        .join("\n").replace(/<!--[\s\S]*?-->/g, "")
+      const fallback = /On HTTP 403 from gh api user\s*, run gh auth status once \(no arguments\) and parse only an unambiguous active login for the PR host from a successful account entry in its output/
+      const unavailable = /If still unavailable, retain the existing unknown-identity COMMENT_ONLY cap and report:/
+      expect(safetyText(prose)).toMatch(fallback)
+      expect(safetyText(prose)).toMatch(unavailable)
+      expect(prose).toContain("identity unreadable (HTTP 403: token lacks `read:user`) — grant `read:user` to lift the COMMENT_ONLY cap; `gh pr checks` needs `checks:read` for CI verification")
+      expect(safetyText(prose)).toMatch(/Compare usable login to author exactly: equal→self_review true, different→false, failure\/unusable→unknown/)
+      for (const [before, after] of [["On HTTP 403", "On HTTP 404"], ["once (no arguments)", "repeatedly"],
+        ["unambiguous active login for the PR host", "any cached login"], ["successful account entry", "failed account entry"]]) {
+        const changed = prose.replace(before, after)
+        expect(changed).not.toBe(prose)
+        expect(safetyText(changed)).not.toMatch(fallback)
+      }
+      const uncapped = prose.replace("retain the existing unknown-identity `COMMENT_ONLY` cap", "discard the unknown-identity cap")
+      expect(uncapped).not.toBe(prose)
+      expect(safetyText(uncapped)).not.toMatch(unavailable)
+    })
+
+    test("review GitHub reads retain explicit forms and deny replacement POST methods", () => {
+      const corpus = readCorpus()
+      const reads = [
+        ["gh pr list --repo * --state * --json *", "gh pr list --repo o/r --state open --json number,title,files"],
+        ["gh api --method GET repos/*/pulls/*/commits", "gh api --method GET repos/o/r/pulls/8/commits"],
+        ["gh api --method GET --paginate repos/*/pulls/*/commits", "gh api --method GET --paginate repos/o/r/pulls/8/commits"],
+        ["gh api --method GET --paginate repos/*/pulls/*/files -H Accept:application/vnd.github+json", "gh api --method GET --paginate repos/o/r/pulls/8/files -H Accept:application/vnd.github+json"],
+        ["gh issue view * --repo * --json *", "gh issue view 8 --repo o/r --json number,title,body"],
+        ["gh api --method GET repos/*/contents/*", "gh api --method GET repos/o/r/contents/src/index.ts"],
+      ]
+      for (const path of [...reviewOrchestrators, "agent/pr-context-gatherer.md"]) {
+        const { permission } = parseFrontmatter(corpus[path]).frontmatter
+        if (!record(permission) || !record(permission.bash)) throw new Error("Missing bash permission map")
+        const rules = toV2Permissions(permission)
+        for (const [key, command] of reads) {
+          expect(evaluateRules(rules, "shell", command), `${path}: ${command}`).toBe("allow")
+          if (reviewOrchestrators.includes(path) || !command.startsWith("gh api")) {
+            expect(permission.bash[key]).toBe("allow")
+            const missing = mutatePermission(corpus, path, p => { delete (p.bash as Record<string, unknown>)[key] })
+            expect(evaluateRules(toV2Permissions(parseFrontmatter(missing[path]).frontmatter.permission), "shell", command)).toBe("deny")
+          }
+          if (command.startsWith("gh api")) for (const method of ["-X POST", "--method POST"]) {
+            expect(evaluateRules(rules, "shell", command.replace("--method GET", method))).toBe("deny")
+          }
+        }
+        for (const command of ["gh pr list --repo o/r --state open", "gh issue view 8 --repo o/r", "gh issue comment 8 --repo o/r --body no"]) {
+          expect(evaluateRules(rules, "shell", command)).toBe("deny")
+        }
       }
     })
 

@@ -44,6 +44,7 @@ permission:
     'git rev-parse HEAD': "allow"
     "gh repo view --json nameWithOwner --jq '.nameWithOwner'": "allow"
     'gh api user --jq .login': "allow"
+    'gh auth status': "allow"
     "gh pr view * --repo * --json number,url,title,body,author,baseRefName,baseRefOid,headRefName,headRefOid,labels,reviewRequests,isDraft,mergeable,state,mergedAt,additions,deletions,changedFiles,files,closingIssuesReferences,latestReviews,reviewDecision": "allow"
     "gh pr checks * --repo * --json name,state,link": "allow"
     'gh api repos/*/pulls/*/reviews --jq *': "allow"
@@ -53,15 +54,19 @@ permission:
     'gh pr diff * --repo *': "allow"
     "gh pr diff * --repo * --name-only": "allow"
     "gh pr checkout * --repo * --detach": "allow"
+    "gh pr list --repo * --state * --json *": "allow"
+    'gh api --method GET repos/*/pulls/*/commits': "allow"
+    'gh api --method GET --paginate repos/*/pulls/*/commits': "allow"
+    'gh api --method GET --paginate repos/*/pulls/*/files -H Accept:application/vnd.github+json': "allow"
+    "gh issue view * --repo * --json *": "allow"
+    'gh api --method GET repos/*/contents/*': "allow"
     'gh api --method GET "repos/*/contents/.opencode/review-config.yaml?ref=*" -H "Accept: application/vnd.github.raw+json"': "allow"
 ---
 
 # Corvus Review — Interactive Orchestrator
-
 Coordinate a complete PR review with user preview/edit control before posting. Use Invocation Mode in the state reference loaded through `corvus-review-extras`. Delegate detection rather than reviewing code directly.
 
 ## Operating Rules
-
 Load skill `corvus-review-extras` at intake. It owns the closed child roster, instruction/data boundary, config/schema pointers, reviewability, action precedence, Convergence and Continuation, and progress convention. Phase skills own all procedures and dispatch templates; load each before entering its phase, including on resume or rerun.
 
 Follow R3/R4 for `corvus_review_payload` and R5 for `corvus_review_verify`: measurement and freezing are tool calls, never manual counting; the frontmatter's `shasum` grant is an optional diagnostic fallback only, not posting verification. The state reference owns missing-tool diagnostics, including question, and R0 owns `post` recovery.
@@ -73,7 +78,6 @@ You MUST NOT post without the user's final R4 choice and R5 revalidation, or byp
 Call question only for R0's interactive fresh-lock override or an eligible R4 decision/edit/rerun. Missing intake input and hard-rail/local-only outcomes report and terminate without a question. Done when every user interaction belongs to an eligible procedure branch.
 
 ## Workflow
-
 Initialize R0–R5 todos, then follow this shared skeleton. Preserve validated objects between phases instead of re-gathering evidence in the orchestrator.
 
 | Phase / Skill | Required outcome |
@@ -88,15 +92,12 @@ Initialize R0–R5 todos, then follow this shared skeleton. Preserve validated o
 Done with each phase when its own exit criterion is satisfied and its checkpoint records the next route. Follow R0's Post Follow-Up for validated resume. A failed checkpoint does not imply permission to skip a phase or publish partial control state.
 
 ### Review and Decision Loops
-
 R2 owns the exact mapping and bounded recovery. R3 reads findings from axis_results, not solely completed pass_results: successful axis evidence survives a failed sibling contribution. Keep dimension configuration and axis identity separate through synthesis, filtering, presentation, and persistence.
 
 R4's interactive branch provides Post Review, Edit Comments, Save Locally, and bounded Re-run Review choices. Follow its linked procedure for dimension-scoped reruns; retain untouched dimensions in both axis maps and projection. Every edit/rerun returns through full synthesis and a new eligible preview. Done when a post is authorized for the final shown bytes, never an earlier draft.
 
 ### Failure Routes
-
 Follow the owning skill's bounded recovery; extras owns caps rather than a copied truth table here. Trust/synthesis/invalid-control failures end locally, with owned-lock cleanup. R1 context failure and R2 child failure use different recovery/status rules. R5 writer-local-only is terminal; only its verified child-transport recovery may re-dispatch the same request. Done when uncertainty and remote state are disclosed without alternate publishing.
 
 ## Completion
-
 Use R5's summary: separate Standards/Spec assessments, totals and concerns; dimension coverage/reasons; constrained action/notices; posted URL or explicit local-only/unknown result; series trends and checkpoint outcome. Update todos truthfully. A follow-up starts a new R0 workflow. Done when the user can distinguish review evidence, posting authorization, and actual remote result.
