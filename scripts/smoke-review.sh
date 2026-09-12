@@ -9,6 +9,7 @@ HOST=""
 PR="https://github.com/NachoFLizaur/corvus/pull/8"
 MODEL="amazon-bedrock/global.openai.gpt-6-astra"
 KEEP=0
+WRITER=0
 TIMEOUT_MIN=40
 WORK=""
 PORT=""
@@ -18,7 +19,9 @@ START=$SECONDS
 die() { printf '| preflight | FAIL | %s |\n' "$2" >&2; exit "$1"; }
 cap() { local seconds="$1"; shift; perl -e 'alarm shift; exec @ARGV' "$seconds" "$@"; }
 usage() {
-  printf '%s\n' 'Usage: bash scripts/smoke-review.sh --host v1|v2 [--pr URL] [--model ID] [--keep] [--timeout-min N=40]'
+  printf '%s\n' 'Usage: bash scripts/smoke-review.sh --host v1|v2 [--pr URL] [--model ID] [--keep] [--timeout-min N=40] [--writer | --full]'
+  printf '%s\n' '  --writer  execute the real pr-comment-writer against the shim (POST blocked) instead of denying its dispatch'
+  printf '%s\n' '  --full    every optional leg (currently --writer)'
 }
 while (($#)); do
   case "$1" in
@@ -27,11 +30,13 @@ while (($#)); do
       case "$1" in --host) HOST="$2" ;; --pr) PR="$2" ;; --model) MODEL="$2" ;; --timeout-min) TIMEOUT_MIN="$2" ;; esac
       shift 2 ;;
     --keep) KEEP=1; shift ;;
+    --writer|--full) WRITER=1; shift ;;
     --help|-h) usage; exit 0 ;;
     *) usage; die 3 "unknown argument: $1" ;;
   esac
 done
 [[ "$HOST" == v1 || "$HOST" == v2 ]] || die 3 '--host v1|v2 is required'
+[[ "$WRITER" == 0 || "$HOST" == v1 ]] || die 3 '--writer/--full is v1-only until the v2 gate lands'
 [[ "$TIMEOUT_MIN" =~ ^[1-9][0-9]*$ && ${#TIMEOUT_MIN} -le 4 ]] || die 3 'timeout must be a positive integer (minutes, at most four digits)'
 [[ "$PR" =~ ^https://github.com/([a-zA-Z0-9_-]+)/([a-zA-Z0-9_.-]+)/pull/([1-9][0-9]*)/?$ ]] || die 4 'expected a canonical github.com PR URL'
 OWNER="${BASH_REMATCH[1]}" REPO="${BASH_REMATCH[2]}" NUMBER="${BASH_REMATCH[3]}"
@@ -94,9 +99,9 @@ BASE="${TMPDIR:-/tmp}/opencode"
 mkdir -p "$BASE"
 WORK="$(mktemp -d "$BASE/smoke-review-$HOST.XXXXXX")"
 WORK="$(cd "$WORK" && pwd -P)"
-export SMOKE_WORK="$WORK" SMOKE_ROOT="$ROOT" SMOKE_HOST="$HOST" SMOKE_MODEL="$MODEL"
+export SMOKE_WORK="$WORK" SMOKE_ROOT="$ROOT" SMOKE_HOST="$HOST" SMOKE_MODEL="$MODEL" SMOKE_WRITER="$WRITER"
 mkdir -p "$WORK"/xdg/{data/opencode,config/opencode,state,cache} "$WORK"/{bin,install,pack,dist}
-printf 'Sandbox: %s\nHost: %s; PR: %s; model: %s; review cap: %sm\n' "$WORK" "$HOST" "$PR" "$MODEL" "$TIMEOUT_MIN"
+printf 'Sandbox: %s\nHost: %s; PR: %s; model: %s; review cap: %sm; writer: %s\n' "$WORK" "$HOST" "$PR" "$MODEL" "$TIMEOUT_MIN" "$([[ "$WRITER" == 1 ]] && printf executed || printf denied)"
 
 # Isolate all host state, but preserve the machine's AWS environment and ~/.aws.
 # Only the Bedrock entry is read/copied before the first host DB open; presence
@@ -140,12 +145,16 @@ export SMOKE_INSTALL="$WORK/install/node_modules/corvus-ai"
 # export. Build a sandbox-only verifier from the same tree, without repacking or
 # editing the installed plugin that the host will exercise.
 cap 60 bun build "$ROOT/src/review-payload.ts" --outdir "$WORK/dist" --target bun >"$WORK/verifier-build.log" 2>&1 || die 3 'standalone verifier build failed'
+# Writer mode carries no task deny: the shim's POST admission is the only barrier and
+# the real writer runs to its blocked POST. Barrier mode keeps the host-resolved deny.
 bun -e '
   const root = process.env.SMOKE_INSTALL
   const v2 = process.env.SMOKE_HOST === "v2"
+  const writer = process.env.SMOKE_WRITER === "1"
   const barrier = v2
     ? { plugins: [root], agents: { "corvus-review-auto": { permissions: [{ action: "subagent", resource: "pr-comment-writer", effect: "deny" }] } } }
-    : { plugin: [root + "/dist/server.js"], model: process.env.SMOKE_MODEL, agent: { "corvus-review-auto": { permission: { task: { "pr-comment-writer": "deny" } } } } }
+    : { plugin: [root + "/dist/server.js"], model: process.env.SMOKE_MODEL,
+      ...(writer ? {} : { agent: { "corvus-review-auto": { permission: { task: { "pr-comment-writer": "deny" } } } } }) }
   await Bun.write(process.env.XDG_CONFIG_HOME + "/opencode/opencode.json", JSON.stringify(barrier, null, 2) + "\n")
 ' || die 3 'host config generation failed'
 cp "$ROOT/scripts/gh-readonly-shim.sh" "$WORK/bin/gh"
@@ -177,16 +186,31 @@ else
 fi
 
 # Barrier invariant: inspect the host-resolved rule before sending the model any
-# PR content. An absent/non-deny final writer rule aborts both hosts. This does
-# not grant additional permissions, and neither --keep nor a timeout disables it.
+# PR content. Barrier mode: an absent/non-deny final writer rule aborts both hosts.
+# Writer mode (v1): the final rule must allow, and the writer agent itself must expose
+# corvus_review_verify (and not corvus_review_payload) so the run exercises the real
+# tool path; the shim remains the mutation barrier. This does not grant additional
+# permissions, and neither --keep nor a timeout disables it.
 bun -e '
   const data = await Bun.file(process.env.SMOKE_WORK + "/agents.json").json()
   const v2 = process.env.SMOKE_HOST === "v2"
+  const expected = process.env.SMOKE_WRITER === "1" ? "allow" : "deny"
   const agent = v2 ? data.find(a => a.id === "corvus-review-auto") : data
   const rules = v2 ? agent?.permissions : agent?.permission
   const writer = rules?.filter(r => v2 ? r.action === "subagent" && r.resource === "pr-comment-writer" : r.permission === "task" && r.pattern === "pr-comment-writer").at(-1)
-  if ((v2 ? writer?.effect : writer?.action) !== "deny") { console.error("Effective writer-deny override missing"); process.exit(1) }
+  if ((v2 ? writer?.effect : writer?.action) !== expected) { console.error("Effective writer rule is not " + expected); process.exit(1) }
 ' || die 6 'posting barrier not installed; model was not started'
+if [[ "$WRITER" == 1 ]]; then
+  cap 60 "$CLI" debug agent pr-comment-writer >"$WORK/writer-agent.json" 2>>"$WORK/agents.stderr" || die 3 'writer agent inspection failed'
+  bun -e '
+    const agent = await Bun.file(process.env.SMOKE_WORK + "/writer-agent.json").json()
+    const tools = agent.tools ?? {}
+    if (agent.name !== "pr-comment-writer" || tools.corvus_review_verify !== true || tools.corvus_review_payload === true) {
+      console.error("writer exposure: " + JSON.stringify({ name: agent.name, corvus_review_verify: tools.corvus_review_verify, corvus_review_payload: tools.corvus_review_payload })); process.exit(1)
+    }
+    console.log("Writer exposure: corvus_review_verify=true, corvus_review_payload=" + JSON.stringify(tools.corvus_review_payload))
+  ' || die 6 'writer tool exposure failed; model was not started'
+fi
 
 if [[ "$HOST" == v2 ]]; then
   for ((attempt=0; attempt<60; attempt++)); do
@@ -200,7 +224,7 @@ collect_logs
 bun -e '
   const { checkPluginLoaded } = await import(process.env.SMOKE_ROOT + "/scripts/check-review-artifacts.ts")
   const result = checkPluginLoaded({ host: process.env.SMOKE_HOST, hostlog: process.env.SMOKE_WORK + "/host.log",
-    agents: process.env.SMOKE_WORK + "/agents.json", install: process.env.SMOKE_INSTALL })
+    agents: process.env.SMOKE_WORK + "/agents.json", install: process.env.SMOKE_INSTALL, writer: process.env.SMOKE_WRITER === "1" })
   console.log("Plugin preflight: " + result.detail)
   if (!result.ok) process.exit(1)
 ' || die 3 'plugin load evidence missing or failed (see host.log)'
@@ -237,7 +261,9 @@ sleep 3
 stop_service || die 3 'sandbox service could not be stopped; artifacts not checked'
 collect_logs
 CHECK_STATUS=0
-bun run "$ROOT/scripts/check-review-artifacts.ts" "$WORK/fixture" "$OWNER" "$REPO" "$NUMBER" "$HEAD_SHA" "$WORK/run.jsonl" "$WORK/host.log" "$WORK/gh-audit.log" --host "$HOST" --agents "$WORK/agents.json" --install "$SMOKE_INSTALL" | tee "$WORK/result.txt" || CHECK_STATUS=$?
+CHECK_ARGS=(--host "$HOST" --agents "$WORK/agents.json" --install "$SMOKE_INSTALL")
+[[ "$WRITER" == 0 ]] || CHECK_ARGS+=(--writer --db "$XDG_DATA_HOME/opencode/opencode.db")
+bun run "$ROOT/scripts/check-review-artifacts.ts" "$WORK/fixture" "$OWNER" "$REPO" "$NUMBER" "$HEAD_SHA" "$WORK/run.jsonl" "$WORK/host.log" "$WORK/gh-audit.log" "${CHECK_ARGS[@]}" | tee "$WORK/result.txt" || CHECK_STATUS=$?
 [[ "$RUN_STATUS" != 142 && "$RUN_STATUS" != 124 ]] || exit 124
 ((CHECK_STATUS == 0)) || exit "$CHECK_STATUS"
 ((RUN_STATUS == 0)) || exit 3

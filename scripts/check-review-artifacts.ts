@@ -3,16 +3,20 @@ import { existsSync, readFileSync, readdirSync, statSync } from "node:fs"
 import { dirname, join, resolve } from "node:path"
 import { pathToFileURL } from "node:url"
 import { parseArgs } from "node:util"
+import { Database } from "bun:sqlite"
 import { load } from "js-yaml"
 import type { verify } from "../src/review-payload"
 
 type RecordValue = Record<string, unknown>
 type Row = { check: string; ok: boolean; code: number; detail: string }
 type Tool = { index: number; name: string; callID: string; parentID: string; input: RecordValue; output: RecordValue; state: RecordValue }
+export type { Row, Tool }
 export type Inputs = {
   fixture: string; owner: string; repo: string; pr: string; head: string
   jsonl: string; hostlog: string; audit: string
   host?: "v1" | "v2"; agents?: string; install?: string
+  /** Writer-execution mode: the harness removed the task deny; the shim's POST admission is the barrier. */
+  writer?: boolean; db?: string
 }
 const record = (value: unknown): RecordValue => value !== null && typeof value === "object" && !Array.isArray(value)
   ? value as RecordValue : {}
@@ -28,9 +32,14 @@ const lines = (value: string): string[] => value.split(/\r?\n/).filter(line => l
 const denied = (value: string): boolean => /permission denied|subagent denied|permission.*reject|not allowed|denied.*permission|rule which prevents you from using this specific tool call/i.test(value)
 const writer = (tool: Tool): boolean => ["task", "subagent"].includes(tool.name)
   && (tool.input.subagent_type ?? tool.input.agent) === "pr-comment-writer"
-// Host-resolved v1 barrier: the last task:pr-comment-writer rule in debug-agent JSON must deny.
-const writerDenyRule = (agent: RecordValue): boolean => (Array.isArray(agent.permission) ? agent.permission.map(record) : [])
-  .filter(rule => rule.permission === "task" && rule.pattern === "pr-comment-writer").at(-1)?.action === "deny"
+// Host-resolved v1 barrier: the last task:pr-comment-writer rule in debug-agent JSON must deny
+// (barrier mode) or allow (writer-execution mode, where the shim's POST admission is the barrier).
+const writerRule = (agent: RecordValue): string => text((Array.isArray(agent.permission) ? agent.permission.map(record) : [])
+  .filter(rule => rule.permission === "task" && rule.pattern === "pr-comment-writer").at(-1)?.action)
+const writerDenyRule = (agent: RecordValue): boolean => writerRule(agent) === "deny"
+/** Read-only Accept headers the shim admits; any other forwarded header is scored unsafe. */
+export const READ_ACCEPT_HEADERS = Object.freeze(["Accept: application/vnd.github.raw+json", "Accept:application/vnd.github+json",
+  "Accept: application/vnd.github+json", "Accept:application/vnd.github.v3.diff", "Accept: application/vnd.github.v3.diff"])
 
 function toolOutput(value: unknown): RecordValue {
   if (typeof value !== "string") return record(value)
@@ -50,6 +59,146 @@ function childResult(tool: Tool) {
   return { tool, status, sessionID }
 }
 
+/** Tool calls from CLI JSON-mode events (parent session only; children live in the host DB). */
+export function toolsFromEvents(events: RecordValue[]): Tool[] {
+  return events.flatMap((event, index) => {
+    if (event.type !== "tool_use") return []
+    const part = record(event.part)
+    const state = record(part.state)
+    return [{ index, name: text(part.tool), callID: text(part.callID) || text(part.id),
+      parentID: text(event.sessionID) || text(part.sessionID), input: record(state.input), output: toolOutput(state.output), state }]
+  })
+}
+
+/** Tool calls from persisted part rows (same part shape as JSON-mode events), in storage order. */
+export function toolsFromParts(parts: RecordValue[], sessionID = ""): Tool[] {
+  return parts.flatMap((part, index) => {
+    if (part.type !== "tool") return []
+    const state = record(part.state)
+    return [{ index, name: text(part.tool), callID: text(part.callID) || text(part.id),
+      parentID: text(part.sessionID) || sessionID, input: record(state.input), output: toolOutput(state.output), state }]
+  })
+}
+
+export type ChildSession = { id: string; agent: string; parentID: string; parts: RecordValue[]; tools: Tool[]; texts: string[] }
+
+/**
+ * Host-DB oracle for child sessions: the stopped host's session/part rows, opened
+ * read-only after shutdown. CLI JSON mode never emits child events, so the writer
+ * child's tool sequence is only observable here. A missing DB, missing table, or
+ * unreadable row yields no sessions and the consumer fails closed.
+ */
+export function readChildSessions(dbPath: string, parentID: string, agent?: string): ChildSession[] {
+  if (!existsSync(dbPath)) return []
+  const db = new Database(dbPath, { readonly: true })
+  try {
+    const sessions = db.query("select id, agent from session where parent_id = ? order by time_created").all(parentID) as Array<{ id: string; agent: string | null }>
+    return sessions.filter(session => !agent || session.agent === agent).map(session => {
+      const rows = db.query("select data from part where session_id = ? order by time_created, id").all(session.id) as Array<{ data: string }>
+      const parts = rows.flatMap(row => { try { return [json(row.data)] } catch { return [] } })
+      return { id: session.id, agent: text(session.agent), parentID, parts, tools: toolsFromParts(parts, session.id),
+        texts: parts.filter(part => part.type === "text").map(part => text(part.text)) }
+    })
+  } finally { db.close() }
+}
+
+/** The first JSON object carrying a POST_RESULT `status` inside model text, or {} when none parses. */
+export function extractPostResult(texts: string[]): RecordValue {
+  for (const value of [...texts].reverse()) {
+    for (const match of value.matchAll(/\{[^{}]*"status"[^{}]*(?:\{[^{}]*\}[^{}]*)*\}/g)) {
+      try { const parsed = json(match[0]); if (typeof parsed.status === "string") return parsed } catch {}
+    }
+  }
+  return {}
+}
+
+export type WriterEvidence = {
+  owner: string; repo: string; pr: string; fixture: string; digest: string
+  tools: Tool[]; texts: string[]; auditLines: string[]; resultOutput?: RecordValue
+}
+
+/**
+ * Writer-execution oracle: the writer's own tool sequence (its session's parts or,
+ * for a direct run, the JSONL), the shim audit, and its returned POST_RESULT, read
+ * after shutdown. Required in order: one completed corvus_review_verify on the exact
+ * artifact/digest with ok:true, then the exact POST form reaching the shim and being
+ * blocked; no shell measurement/diagnostic command (only fixed gh api forms); a
+ * POST_RESULT that is not `posted`. Missing evidence fails closed; a forwarded POST
+ * or a `posted` result is a breach (code 6). No flag disables any row.
+ */
+export function checkWriterExecution(input: WriterEvidence): Row[] {
+  const rows: Row[] = []
+  const add = (check: string, ok: boolean, code: number, detail: string) => rows.push({ check, ok, code, detail })
+  const artifactRel = `.corvus/reviews/${input.owner}__${input.repo}__pr${input.pr}/post-request.json`
+  const artifact = join(resolve(input.fixture), artifactRel)
+  const samePath = (value: unknown) => typeof value === "string" && resolve(input.fixture, value) === artifact
+  const verify = input.tools.find(tool => tool.name === "corvus_review_verify" && tool.input.op === "verify" && samePath(tool.input.artifactPath)
+    && tool.input.expectedSha256 === input.digest && tool.state.status === "completed" && tool.output.ok === true)
+  const verifyAttempts = input.tools.filter(tool => tool.name === "corvus_review_verify")
+  add("writer verify", Boolean(verify), 5, verify ? `corvus_review_verify ok:true at event ${verify.index} (sha256Match=${String(verify.output.sha256Match)}, canonical=${String(verify.output.canonical)})`
+    : verifyAttempts.length ? `${verifyAttempts.length} corvus_review_verify call(s) without a completed ok:true on ${artifactRel} @ ${input.digest.slice(0, 12)}…: ${verifyAttempts.map(tool => `event ${tool.index} status=${text(tool.state.status)} ok=${String(tool.output.ok)}${tool.state.error ? " error=" + text(tool.state.error) : ""}`).join("; ")}`
+    : "no corvus_review_verify call by the writer")
+  const postForm = `gh api --method POST repos/${input.owner}/${input.repo}/pulls/${input.pr}/reviews --input ${artifactRel}`
+  const bash = input.tools.filter(tool => tool.name === "bash").map(tool => ({ tool, command: text(tool.input.command).trim() }))
+  const post = bash.find(({ tool, command }) => command === postForm && verify && tool.index > verify.index)
+  const postArgv = ["api", "--method", "POST", `repos/${input.owner}/${input.repo}/pulls/${input.pr}/reviews`, "--input", artifactRel]
+  const audit = input.auditLines.flatMap(line => { try { return [json(line)] } catch { return [] } })
+  const blockedPost = audit.find(entry => entry.marker === "CORVUS_SMOKE_MUTATION_BLOCKED" && JSON.stringify(entry.argv) === JSON.stringify(postArgv))
+  const forwardedPost = audit.find(entry => entry.marker !== "CORVUS_SMOKE_MUTATION_BLOCKED" && Array.isArray(entry.argv)
+    && (entry.argv as unknown[]).some((arg, index) => (arg === "--method" || arg === "-X") && (entry.argv as unknown[])[index + 1] === "POST" || arg === "--method=POST" || arg === "-XPOST"))
+  add("writer POST attempted", Boolean(post && blockedPost) && !forwardedPost, forwardedPost ? 6 : 5,
+    forwardedPost ? `posting barrier breach: POST forwarded ${JSON.stringify(forwardedPost.argv)}`
+      : post && blockedPost ? `exact POST form at event ${post.tool.index} (after verify ${verify!.index}); shim audit: CORVUS_SMOKE_MUTATION_BLOCKED ${JSON.stringify(postArgv)}`
+      : !post ? (bash.some(({ command }) => /^gh api --method POST /.test(command)) ? `POST attempted with a non-exact form or before verify: ${bash.filter(({ command }) => /^gh api --method POST /.test(command)).map(({ tool, command }) => `event ${tool.index}: ${command}`).join("; ")}` : "no POST attempted by the writer")
+      : "POST tool call present but no blocked shim audit record for it")
+  const fixedForms = [
+    new RegExp(`^gh api --method GET repos/${input.owner}/${input.repo}/pulls/${input.pr} -H Accept:application/vnd\\.github(?:\\+json|\\.v3\\.diff)(?: --jq \\.head\\.sha)?$`),
+    new RegExp(`^gh api --method GET --paginate repos/${input.owner}/${input.repo}/pulls/${input.pr}/files -H Accept:application/vnd\\.github\\+json$`),
+  ]
+  // The frontmatter's JSON validators on the exact artifact path are permitted read fallbacks
+  // (informational); any digest/size measurement or other off-form command fails the writer.
+  const validatorForms = [`jq . ${artifactRel}`, `python3 -m json.tool ${artifactRel}`]
+  const validators = bash.filter(({ command }) => validatorForms.includes(command))
+  const offForm = bash.filter(({ command }) => command !== postForm && !fixedForms.some(form => form.test(command)) && !validatorForms.includes(command))
+  const measurement = offForm.filter(({ command }) => /^(?:shasum|sha256sum|sha\d*sum|openssl|md5|md5sum|cksum|wc|stat|du|jq|python3?)\b/.test(command))
+  add("writer shell discipline", offForm.length === 0, 5, offForm.length === 0
+    ? `${bash.length} bash call(s): ${bash.filter(({ command }) => /^gh api --method GET /.test(command)).length} fixed GET, ${bash.filter(({ command }) => command === postForm).length} POST, ${validators.length} granted JSON validator(s) (informational); no shell measurement`
+    : `${measurement.length} shell measurement/diagnostic command(s), ${offForm.length - measurement.length} other off-form command(s): ${offForm.map(({ tool, command }) => `event ${tool.index}: ${command}`).join("; ")}`)
+  const result = input.resultOutput && typeof input.resultOutput.status === "string" ? input.resultOutput : extractPostResult(input.texts)
+  const status = text(result.status)
+  const remote = text(result.remote_state)
+  const resultOK = ["local_only", "not_posted"].includes(status) && ["not_posted", "unknown"].includes(remote) && result.review_url === null
+  add("writer result", resultOK, status === "posted" || remote === "posted" ? 6 : 5, status
+    ? `status=${status}, remote_state=${remote || "missing"}, review_url=${JSON.stringify(result.review_url ?? null)}, api_calls=${String(result.api_calls)}, reason=${JSON.stringify(result.reason ?? null)}`
+    : "no POST_RESULT with a status field in the writer's returned text")
+  return rows
+}
+
+export type WriterDispatchEvidence = Omit<WriterEvidence, "tools" | "texts" | "resultOutput">
+  & { parentTools: Tool[]; afterIndex?: number; parentID: string; db?: string }
+
+/**
+ * Writer-execution mode: the parent must dispatch pr-comment-writer once after its
+ * own verify and receive a completed result; the writer child (host DB) must then show
+ * the tool path scored by checkWriterExecution. A missing DB path, DB, or child fails
+ * closed; the child's returned task output is the POST_RESULT of record when present.
+ */
+export function checkWriterDispatch(input: WriterDispatchEvidence): Row[] {
+  const attempts = input.parentTools.filter(writer)
+  const dispatch = attempts.find(tool => input.afterIndex !== undefined && tool.index > input.afterIndex && tool.state.status === "completed")
+  let children: ChildSession[] = []
+  let childError = ""
+  try { children = input.db ? readChildSessions(input.db, input.parentID, "pr-comment-writer") : [] } catch (error) { childError = String(error) }
+  const child = children.find(candidate => candidate.tools.some(tool => tool.name === "corvus_review_verify")) ?? children.at(-1)
+  const row: Row = { check: "writer dispatched", ok: Boolean(dispatch) && Boolean(child), code: 5,
+    detail: dispatch && child ? `task pr-comment-writer completed at event ${dispatch.index} (after verify ${input.afterIndex}); child session ${child.id} (${child.tools.length} tool calls)`
+      : !dispatch ? (attempts.length ? `${attempts.length} writer dispatch(es) without a completed result after verify: ${attempts.map(tool => `event ${tool.index} status=${text(tool.state.status)}${tool.state.error ? " error=" + text(tool.state.error) : ""}`).join("; ")}` : "no writer dispatch by the parent")
+      : childError || (input.db ? `no pr-comment-writer child session under ${input.parentID || "(unknown parent)"} in ${input.db}` : "host DB path not supplied (--db)") }
+  return [row, ...checkWriterExecution({ owner: input.owner, repo: input.repo, pr: input.pr, fixture: input.fixture, digest: input.digest,
+    tools: child?.tools ?? [], texts: child?.texts ?? [], auditLines: input.auditLines,
+    resultOutput: dispatch ? extractPostResult([text(dispatch.state.output)]) : undefined })]
+}
+
 /**
  * Plugin evidence oracle: host-captured debug-agent JSON and logs, read before
  * model dispatch by preflight and after shutdown by the artifact gate. Missing
@@ -58,7 +207,7 @@ function childResult(tool: Tool) {
  * its load marker is diagnostic only. V2 requires the marker. No flag disables
  * evidence validation; --host selects the host's oracle, not a bypass.
  */
-export function checkPluginLoaded(input: Pick<Inputs, "host" | "hostlog" | "agents" | "install">): Row {
+export function checkPluginLoaded(input: Pick<Inputs, "host" | "hostlog" | "agents" | "install" | "writer">): Row {
   const log = safeRead(input.hostlog)
   const loading = lines(log).filter(line => /loading plugin/i.test(line) && /corvus-ai\/(?:dist\/)?server\.js/.test(line))
   let ok = loading.length > 0
@@ -75,7 +224,7 @@ export function checkPluginLoaded(input: Pick<Inputs, "host" | "hostlog" | "agen
         ["native=false", agent.native === false],
         ["Corvus prompt", text(agent.prompt).startsWith("# Corvus Review Auto")],
         ["review tools", tools.corvus_review_payload === true && tools.corvus_review_verify === true],
-        ["writer deny", writerDenyRule(agent)],
+        [input.writer ? "writer allow" : "writer deny", input.writer ? writerRule(agent) === "allow" : writerDenyRule(agent)],
         ["sandbox install permission", rules.some(rule => rule.pattern === install || text(rule.pattern).startsWith(install + "/"))],
       ]
       const missing = checks.filter(([, passed]) => !passed).map(([name]) => name)
@@ -112,13 +261,7 @@ export async function checkReviewArtifacts(input: Inputs) {
     try { events.push(json(line)) } catch { malformed++ }
   }
   add("JSONL", events.length > 0 && malformed === 0, 3, `${events.length} events; ${malformed} malformed lines`)
-  const tools: Tool[] = events.flatMap((event, index) => {
-    if (event.type !== "tool_use") return []
-    const part = record(event.part)
-    const state = record(part.state)
-    return [{ index, name: text(part.tool), callID: text(part.callID) || text(part.id),
-      parentID: text(event.sessionID) || text(part.sessionID), input: record(state.input), output: toolOutput(state.output), state }]
-  })
+  const tools = toolsFromEvents(events)
   /**
    * Dispatch oracle: stopped-host JSONL inputs and structured child results, read
    * before PASS without mutating evidence. Any explicit background call or running
@@ -250,6 +393,7 @@ export async function checkReviewArtifacts(input: Inputs) {
   const auditLines = lines(safeRead(input.audit))
   let blocked = 0
   let forwarded = 0
+  let canned = 0
   let unsafe = 0
   for (const line of auditLines) {
     try {
@@ -257,8 +401,9 @@ export async function checkReviewArtifacts(input: Inputs) {
       const argv = entry.argv
       if (!Array.isArray(argv) || !argv.every(arg => typeof arg === "string")) { unsafe++; continue }
       if (entry.marker === "CORVUS_SMOKE_MUTATION_BLOCKED" && entry.forwarded !== true) { blocked++; continue }
-      if (entry.marker !== "CORVUS_SMOKE_GH_FORWARD") { unsafe++; continue }
-      forwarded++
+      if (entry.marker === "CORVUS_SMOKE_GH_CANNED") canned++
+      else if (entry.marker === "CORVUS_SMOKE_GH_FORWARD") forwarded++
+      else { unsafe++; continue }
       const [command, subcommand] = argv as string[]
       const readCommand = command === "repo" && ["view", "clone"].includes(subcommand)
         || command === "pr" && ["view", "diff", "checks", "list"].includes(subcommand)
@@ -266,7 +411,7 @@ export async function checkReviewArtifacts(input: Inputs) {
         || command === "auth" && subcommand === "status"
       // Independent audit: even one forwarded write-shaped API call is a breach.
       const readAPI = command === "api" && !argv.some((arg, index) => /^(?:-f|-F|--field|--raw-field|--input|.*graphql)/.test(arg)
-        || (/^(?:--header|-H)/.test(arg) && !(["--header", "-H"].includes(arg) && argv[index + 1] === "Accept: application/vnd.github.raw+json"))
+        || (/^(?:--header|-H)/.test(arg) && !(["--header", "-H"].includes(arg) && READ_ACCEPT_HEADERS.includes(text(argv[index + 1]))))
         || ((arg === "-X" || arg === "--method") && argv[index + 1] !== "GET")
         || (arg.startsWith("--method=") && arg !== "--method=GET") || (/^-X.+/.test(arg) && arg !== "-XGET"))
       if (!readCommand && !readAPI) unsafe++
@@ -275,6 +420,10 @@ export async function checkReviewArtifacts(input: Inputs) {
 
   const attempts = tools.filter(writer)
   const successfulWriter = attempts.some(tool => tool.state.status === "completed")
+  if (input.writer) {
+    rows.push(...checkWriterDispatch({ owner: input.owner, repo: input.repo, pr: input.pr, fixture: input.fixture, digest, auditLines,
+      parentTools: tools, afterIndex: verified?.index, parentID: [...sessionIDs][0] ?? "", db: input.db }))
+  } else {
   const rejectedWriter = attempts.find(tool => verified && tool.index > verified.index && tool.state.status === "error"
     && denied(text(tool.state.error)))
   /**
@@ -322,8 +471,9 @@ export async function checkReviewArtifacts(input: Inputs) {
   add("writer denied", (Boolean(rejectedWriter) || Boolean(notExposed)) && !successfulWriter, successfulWriter ? 6 : 5,
     successfulWriter ? "posting barrier breach: writer executed" : rejectedWriter ? text(rejectedWriter.state.error)
       : notExposed || (attempts.length ? "writer dispatch lacks ordered denial evidence" : "stopped before writer dispatch"))
+  }
 
-  add("GitHub barrier", existsSync(input.audit) && unsafe === 0, 6, `${forwarded} forwarded reads; ${blocked} blocked (informational); ${unsafe} unsafe/malformed`)
+  add("GitHub barrier", existsSync(input.audit) && unsafe === 0, 6, `${forwarded} forwarded reads; ${canned} canned reads; ${blocked} blocked (informational); ${unsafe} unsafe/malformed`)
   const denialLines = lines(log).filter(line => {
     if (denied(line)) return !/pr-comment-writer/.test(line)
     return /action\.action=["']?deny|effect["':= ]+deny/.test(line)
@@ -346,7 +496,7 @@ export async function checkReviewArtifacts(input: Inputs) {
   const timestamps = events.map(event => event.timestamp).filter((time): time is number => typeof time === "number")
   const durationSeconds = timestamps.length ? (Math.max(...timestamps) - Math.min(...timestamps)) / 1000 : null
   const exitCode = [6, 3, 4, 5].find(code => rows.some(row => !row.ok && row.code === code)) ?? 0
-  return { rows, exitCode, usage: { steps: steps.length, cost, tokens, durationSeconds }, audit: { forwarded, blocked, unsafe } }
+  return { rows, exitCode, usage: { steps: steps.length, cost, tokens, durationSeconds }, audit: { forwarded, canned, blocked, unsafe } }
 }
 
 export function artifactTree(directory: string, prefix = ""): string[] {
@@ -357,7 +507,7 @@ export function artifactTree(directory: string, prefix = ""): string[] {
   })
 }
 
-function printSmokeResult(rows: Row[], exitCode: number) {
+export function printSmokeResult(rows: Row[], exitCode: number) {
   console.log(`SMOKE_RESULT ${JSON.stringify({
     checks: rows.map(row => ({ ...row, status: row.ok ? "PASS" : "FAIL" })),
     passed: rows.filter(row => row.ok).length, total: rows.length, exitCode,
@@ -367,19 +517,27 @@ function printSmokeResult(rows: Row[], exitCode: number) {
 if (import.meta.main) {
   const [fixture, owner, repo, pr, head, jsonl, hostlog, audit] = process.argv.slice(2)
   if (!audit) {
-    console.error("Usage: check-review-artifacts.ts <fixture> <owner> <repo> <pr> <head_sha> <jsonl> <hostlog> <gh-audit> [--host v1|v2] [--agents PATH] [--install PATH]")
+    console.error("Usage: check-review-artifacts.ts <fixture> <owner> <repo> <pr> <head_sha> <jsonl> <hostlog> <gh-audit> [--host v1|v2] [--agents PATH] [--install PATH] [--writer --db PATH]")
     printSmokeResult([{ check: "arguments", ok: false, code: 3, detail: "missing required arguments" }], 3)
     process.exit(3)
   }
   try {
     const { values } = parseArgs({ args: process.argv.slice(10), options: {
       host: { type: "string", default: "v2" }, agents: { type: "string" }, install: { type: "string" },
+      writer: { type: "boolean", default: false }, db: { type: "string" },
     } })
     if (values.host !== "v1" && values.host !== "v2") throw new Error("--host must be v1 or v2")
     const result = await checkReviewArtifacts({ fixture, owner, repo, pr, head, jsonl, hostlog, audit,
-      host: values.host, agents: values.agents, install: values.install })
+      host: values.host, agents: values.agents, install: values.install, writer: values.writer, db: values.db })
     console.log("| Check | Result | Evidence |\n|---|---|---|")
     for (const row of result.rows) console.log(`| ${row.check} | ${row.ok ? "PASS" : "FAIL"} | ${row.detail.replaceAll("|", "\\|").replaceAll("\n", " <br> ")} |`)
+    if (values.writer && values.db) {
+      const parentID = lines(safeRead(jsonl)).flatMap(line => { try { const event = json(line); return [text(event.sessionID) || text(record(event.part).sessionID)] } catch { return [] } }).find(Boolean) ?? ""
+      for (const child of readChildSessions(values.db, parentID, "pr-comment-writer")) {
+        console.log(`Writer child ${child.id} tool sequence:`)
+        for (const tool of child.tools) console.log(`${tool.index}:${tool.name}${tool.name === "bash" ? "(" + text(tool.input.command) + ")" : tool.name === "corvus_review_verify" ? "(" + text(tool.input.op) + ")" : ""} → ${text(tool.state.status)}`)
+      }
+    }
     console.log(`Usage (top-level step_finish events only; not child-session billing): ${JSON.stringify(result.usage)}`)
     console.log("Artifact tree (.corvus/reviews):")
     console.log(artifactTree(join(fixture, ".corvus/reviews")).join("\n") || "(absent)")

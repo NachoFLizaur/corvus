@@ -5,6 +5,19 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.10.0-beta.7 — 2026-09-12
+
+### Fixed
+
+- Writer tool preflight (R12-1): `pr-comment-writer` step 1 now begins by confirming `corvus_review_verify` is among its callable tools; if absent it returns `local_only` with `remote_state: not_posted` and reason `not-exposed, cause unknown` plus the observed tool inventory, and never runs shell diagnostics as a substitute. The Trust and Capability Boundary states once that the `jq .`/`python3 -m json.tool`/`shasum -a 256` grants are diagnostic only and never satisfy any verification step (pinned in the structural test with negative controls; line-neutral, corpus 4,800/4,800).
+- The gate now executes the real writer against a blocked transport: `scripts/smoke-review.sh --writer` (included in `--full`, v1) removes the sandbox task deny so R5 dispatches `pr-comment-writer`, and the read-only `gh` shim's POST admission is the only barrier. `scripts/check-review-artifacts.ts --writer --db <host db>` replaces `writer denied` with five rows — `writer dispatched` (completed task after the parent's verify, child session found in the stopped host DB), `writer verify` (the child's own `corvus_review_verify` on the exact artifact/digest, `ok:true`), `writer POST attempted` (exact `gh api --method POST … --input` form after verify, `CORVUS_SMOKE_MUTATION_BLOCKED` in the audit; a forwarded POST is exit 6), `writer shell discipline` (only fixed `gh api` forms and the granted exact-path JSON validators; any digest/size measurement fails), and `writer result` (a POST_RESULT that is not `posted`; a `posted` claim is exit 6). The default barrier mode is unchanged.
+- `scripts/smoke-writer.sh` (`bun run smoke:writer`): a network-free direct writer run — a sandbox relay primary dispatches the real writer once (the host refuses a subagent as `run --agent`) against a fixture artifact frozen by the built `freeze()` and a canned shim (`CORVUS_SMOKE_GH_CANNED=<dir>` serves `pull.json`/`pull.diff`/`files.json`/`reviews.json` for the PR read endpoints, honors only dotted-path `--jq`, and fails closed on anything else); `scripts/check-writer-run.ts` scores the same writer rows from the host DB child.
+- The smoke shim admits the writer's canonical diff header (`Accept:application/vnd.github.v3.diff`, spaced or not), which it previously blocked, and the checker's forwarded-header audit accepts the same read-only Accept set; canned reads are counted separately (`CORVUS_SMOKE_GH_CANNED`).
+
+### Known
+
+- The OpenCode 2 end-to-end review gate is still deferred (`--writer` is v1-only); v2 users stay on 0.10.0-beta.3.
+
 ## 0.10.0-beta.6 — 2026-09-12
 
 ### Added

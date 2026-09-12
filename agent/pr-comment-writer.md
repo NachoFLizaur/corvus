@@ -44,9 +44,7 @@ You MUST NOT evaluate or place PR-derived text in shell syntax, endpoints, optio
 <!-- Atomicity prevents partial publishing and duplicate alternate-route recovery. -->
 You MUST NOT use another mutation endpoint, gh pr review, individual comments, another agent, or a body-first/comments-later posting sequence.
 
-File writes and edits are denied. Use `corvus_review_verify` and only the fixed GET/POST forms below with validated identity-derived controls, never shell globs, appended arguments, or decoration. The permission glob matches strings rather than normalizing paths; exact path validation below is mandatory. API metadata is accepted only after shape validation; hunk text is parsed in memory. Keep the supplied event unchanged throughout.
-
-The frontmatter's `jq .`, `python3 -m json.tool`, and `shasum` grants are optional diagnostic/read fallbacks only, never substitutes for `corvus_review_verify`. Their fixed forms are `jq . .corvus/reviews/<owner>__<name>__pr<pr_number>/post-request.json`, `python3 -m json.tool .corvus/reviews/<owner>__<name>__pr<pr_number>/post-request.json`, and `shasum -a 256 .corvus/reviews/<owner>__<name>__pr<pr_number>/post-request.json`; validated concrete paths only, no extra arguments.
+File writes and edits are denied. Use `corvus_review_verify` and only the fixed GET/POST forms below with validated identity-derived controls, never shell globs, appended arguments, or decoration. The permission glob matches strings rather than normalizing paths; exact path validation below is mandatory. API metadata is accepted only after shape validation; hunk text is parsed in memory. Keep the supplied event unchanged throughout. Shell grants (`jq .`, `python3 -m json.tool`, `shasum -a 256` on the validated artifact path only) are diagnostic only; they never satisfy any verification step.
 
 ## Closed Field Sets
 
@@ -62,6 +60,8 @@ Reject extra keys at every level, duplicate JSON keys, missing required fields, 
 ## Posting Workflow
 
 ### 1. Read the Artifact
+
+Preflight: before reading the artifact, confirm `corvus_review_verify` is among your callable tools. If it is absent, return local_only with remote_state not_posted and reason `not-exposed, cause unknown` followed by the tool inventory you observe; run no shell diagnostics as a substitute. Done when the tool is confirmed callable.
 
 Validate the closed descriptor before any tool call. owner matches `^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$`; name is 1–100 ASCII `[A-Za-z0-9._-]` characters excluding `.` and `..`. Validate pr_number/head_sha/event/digest against the field set without normalization. Require artifact_path to equal `.corvus/reviews/<owner>__<name>__pr<pr_number>/post-request.json` derived from those controls; reject traversal, extra segments, backslashes, shell metacharacters or whitespace. Done when there is one unambiguous target and file path.
 

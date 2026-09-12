@@ -1,8 +1,11 @@
+import { Database } from "bun:sqlite"
 import { afterEach, expect, test } from "bun:test"
+import { createHash } from "node:crypto"
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { CHECKPOINT_WRITE_ARGUMENT_BUDGET, REVIEW_INPUT_LINE_LIMIT, checkReviewArtifacts, type Inputs } from "../../scripts/check-review-artifacts"
+import { checkWriterRun } from "../../scripts/check-writer-run"
 import { freeze } from "../review-payload"
 
 const directories: string[] = []
@@ -457,4 +460,212 @@ test("CLI emits one SMOKE_RESULT JSON line with per-check status and the process
   const invalidHost = await run([...args, "--host", "invalid"])
   expect(invalidHost.exitCode).toBe(5)
   expect(invalidHost.summary).toMatchObject({ checks: [{ check: "checker", status: "FAIL" }], passed: 0, total: 1 })
+})
+
+/**
+ * Writer-execution fixture: a v1 run whose parent dispatched pr-comment-writer after
+ * verify and received a completed task result, plus a host DB holding the writer
+ * child's real-shaped tool sequence (read → head GET → diff GET → verify → blocked POST).
+ */
+async function writerFixture() {
+  const data = await v1Fixture()
+  const { input, root } = data
+  const directory = resolve(input.fixture, "..")
+  const agent = JSON.parse(readFileSync(input.agents!, "utf8"))
+  agent.permission[0].action = "allow"
+  writeFileSync(input.agents!, JSON.stringify(agent))
+  const relative = ".corvus/reviews/owner__repo__pr8"
+  const digest = createHash("sha256").update(readFileSync(join(root, "post-request.json"))).digest("hex")
+  const events = readFileSync(input.jsonl, "utf8").split("\n").filter(Boolean).map(line => JSON.parse(line))
+  const writerEvent = events.find(event => event.part?.tool === "subagent")!
+  const postResult = { status: "local_only", review_url: null, reason: "POST returned CORVUS_SMOKE_MUTATION_BLOCKED without an HTTP status", remote_state: "unknown", inline_comments_posted: 0, comments_moved_to_body: 0, api_calls: 3 }
+  writerEvent.part.tool = "task"
+  writerEvent.part.state = { status: "completed", input: { subagent_type: "pr-comment-writer", description: "Post verified review artifact", prompt: "{...}" },
+    output: `<task id="ses_writer" state="completed">\n<task_result>\n${JSON.stringify(postResult)}\n</task_result>\n</task>` }
+  writeFileSync(input.jsonl, events.map(event => JSON.stringify(event)).join("\n") + "\n")
+  const post = `gh api --method POST repos/owner/repo/pulls/8/reviews --input ${relative}/post-request.json`
+  const childTools: Array<[string, object, string]> = [
+    ["read", { filePath: join(root, "post-request.json") }, "<content>{...}</content>"],
+    ["bash", { command: "gh api --method GET repos/owner/repo/pulls/8 -H Accept:application/vnd.github+json --jq .head.sha" }, input.head + "\n"],
+    ["bash", { command: "gh api --method GET repos/owner/repo/pulls/8 -H Accept:application/vnd.github.v3.diff" }, "diff --git a/x b/x\n"],
+    ["corvus_review_verify", { op: "verify", artifactPath: `${relative}/post-request.json`, expectedSha256: digest }, JSON.stringify({ ok: true, sha256Match: true, canonical: true, violations: [], measurements: {} })],
+    ["bash", { command: post }, "CORVUS_SMOKE_MUTATION_BLOCKED api --method POST ...\n"],
+  ]
+  const db = join(directory, "opencode.db")
+  const writeDb = (tools: Array<[string, object, string]>, texts: string[] = [JSON.stringify(postResult)], agentName = "pr-comment-writer", parent = "ses_smoke") => {
+    rmSync(db, { force: true })
+    const database = new Database(db)
+    database.run("create table session (id text primary key, parent_id text, agent text, time_created integer)")
+    database.run("create table part (id text primary key, message_id text, session_id text, time_created integer, data text)")
+    database.run("insert into session values (?, ?, ?, ?)", ["ses_smoke", null, "corvus-review-auto", 1])
+    database.run("insert into session values (?, ?, ?, ?)", ["ses_writer", parent, agentName, 2])
+    let index = 0
+    for (const [name, toolInput, output] of tools) database.run("insert into part values (?, ?, ?, ?, ?)",
+      [`prt_${index}`, "msg_1", "ses_writer", ++index, JSON.stringify({ type: "tool", tool: name, callID: `call_${index}`, state: { status: "completed", input: toolInput, output } })])
+    for (const value of texts) database.run("insert into part values (?, ?, ?, ?, ?)", [`prt_${index}`, "msg_2", "ses_writer", ++index, JSON.stringify({ type: "text", text: value })])
+    database.close()
+  }
+  writeDb(childTools)
+  const audit = (extra: object[] = []) => writeFileSync(input.audit, [
+    { marker: "CORVUS_SMOKE_GH_FORWARD", argv: ["pr", "view", "8"] },
+    { marker: "CORVUS_SMOKE_GH_FORWARD", argv: ["api", "--method", "GET", "repos/owner/repo/pulls/8", "-H", "Accept:application/vnd.github+json", "--jq", ".head.sha"] },
+    { marker: "CORVUS_SMOKE_GH_FORWARD", argv: ["api", "--method", "GET", "repos/owner/repo/pulls/8", "-H", "Accept:application/vnd.github.v3.diff"] },
+    { marker: "CORVUS_SMOKE_MUTATION_BLOCKED", argv: ["api", "--method", "POST", "repos/owner/repo/pulls/8/reviews", "--input", `${relative}/post-request.json`] },
+    ...extra,
+  ].map(entry => JSON.stringify(entry)).join("\n") + "\n")
+  audit()
+  writeFileSync(join(root, "lock.yaml"), "status: completed\n")
+  const writerInput: Inputs = { ...input, writer: true, db }
+  return { ...data, input: writerInput, events, writerEvent, childTools, writeDb, audit, digest, post, postResult }
+}
+
+test("writer mode passes on a real writer child (verify → blocked POST, fixed gh forms, non-posted result) and fails closed on each missing piece", async () => {
+  const data = await writerFixture()
+  const { input } = data
+  const result = await checkReviewArtifacts(input)
+  expect(result.rows.filter(row => !row.ok)).toEqual([])
+  expect(result.exitCode).toBe(0)
+  const names = result.rows.map(row => row.check)
+  expect(names).toContain("writer dispatched")
+  expect(names).toEqual(expect.arrayContaining(["writer verify", "writer POST attempted", "writer shell discipline", "writer result"]))
+  expect(names).not.toContain("writer denied")
+  expect(result.rows.find(row => row.check === "plugin loaded")?.ok).toBe(true)
+  expect(result.rows.find(row => row.check === "writer verify")?.detail).toMatch(/ok:true at event 3 \(sha256Match=true, canonical=true\)/)
+  expect(result.rows.find(row => row.check === "writer POST attempted")?.detail).toMatch(/exact POST form at event 4 \(after verify 3\); shim audit: CORVUS_SMOKE_MUTATION_BLOCKED/)
+  expect(result.rows.find(row => row.check === "writer shell discipline")?.detail).toBe("3 bash call(s): 2 fixed GET, 1 POST, 0 granted JSON validator(s) (informational); no shell measurement")
+  expect(result.rows.find(row => row.check === "writer result")?.detail).toStartWith("status=local_only, remote_state=unknown, review_url=null, api_calls=3")
+  expect(result.audit).toEqual({ forwarded: 3, canned: 0, blocked: 1, unsafe: 0 })
+  const row = async (check: string) => (await checkReviewArtifacts(input)).rows.find(item => item.check === check)
+
+  // Negative: the writer-deny rule is now the wrong barrier; writer mode requires allow.
+  const agent = JSON.parse(readFileSync(input.agents!, "utf8"))
+  agent.permission[0].action = "deny"
+  writeFileSync(input.agents!, JSON.stringify(agent))
+  expect(await row("plugin loaded")).toMatchObject({ ok: false })
+  expect((await row("plugin loaded"))?.detail).toContain("writer allow")
+  agent.permission[0].action = "allow"
+  writeFileSync(input.agents!, JSON.stringify(agent))
+
+  // Negative: no host DB, no child session, or a child under another parent/agent fails "writer dispatched".
+  expect((await checkReviewArtifacts({ ...input, db: undefined })).rows.find(item => item.check === "writer dispatched")).toMatchObject({ ok: false, detail: "host DB path not supplied (--db)" })
+  expect((await checkReviewArtifacts({ ...input, db: join(input.fixture, "missing.db") })).rows.find(item => item.check === "writer dispatched")?.ok).toBe(false)
+  data.writeDb(data.childTools, undefined, "pr-comment-writer", "ses_other")
+  expect((await row("writer dispatched"))?.detail).toStartWith("no pr-comment-writer child session under ses_smoke")
+  data.writeDb(data.childTools, undefined, "researcher")
+  expect(await row("writer dispatched")).toMatchObject({ ok: false })
+  data.writeDb(data.childTools)
+  expect(await row("writer dispatched")).toMatchObject({ ok: true })
+
+  // Negative: the parent never dispatched, or the dispatch errored (the old sandbox denial), fails.
+  const save = (list: object[]) => writeFileSync(input.jsonl, list.map(event => JSON.stringify(event)).join("\n") + "\n")
+  save(data.events.filter(event => event !== data.writerEvent))
+  expect(await row("writer dispatched")).toMatchObject({ ok: false, detail: "no writer dispatch by the parent" })
+  data.writerEvent.part.state.status = "error"
+  data.writerEvent.part.state.error = "Subagent denied: pr-comment-writer"
+  save(data.events)
+  expect((await row("writer dispatched"))?.detail).toContain("without a completed result after verify")
+  data.writerEvent.part.state.status = "completed"
+  delete data.writerEvent.part.state.error
+  save(data.events)
+
+  // Negative: verify missing, ok:false, wrong digest, or errored fails "writer verify".
+  const without = (name: string) => data.childTools.filter(([tool]) => tool !== name)
+  data.writeDb(without("corvus_review_verify"))
+  expect(await row("writer verify")).toMatchObject({ ok: false, detail: "no corvus_review_verify call by the writer" })
+  data.writeDb(data.childTools.map(([name, toolInput, output]) => name === "corvus_review_verify" ? [name, toolInput, JSON.stringify({ ok: false, reason: "sha256-mismatch" })] : [name, toolInput, output]))
+  expect((await row("writer verify"))?.detail).toContain("without a completed ok:true")
+  data.writeDb(data.childTools.map(([name, toolInput, output]) => name === "corvus_review_verify" ? [name, { ...toolInput, expectedSha256: "b".repeat(64) }, output] : [name, toolInput, output]))
+  expect(await row("writer verify")).toMatchObject({ ok: false })
+
+  // Negative: POST absent, POST before verify, or a non-exact form fails "writer POST attempted"; a forwarded POST is a breach (6).
+  data.writeDb(data.childTools.filter(([, toolInput]) => (toolInput as { command?: string }).command !== data.post))
+  expect(await row("writer POST attempted")).toMatchObject({ ok: false, detail: "no POST attempted by the writer" })
+  data.writeDb([data.childTools[4], ...data.childTools.slice(0, 4)])
+  expect((await row("writer POST attempted"))?.detail).toContain("non-exact form or before verify")
+  data.writeDb(data.childTools.map(([name, toolInput, output]) => (toolInput as { command?: string }).command === data.post ? [name, { command: data.post + " --silent" }, output] : [name, toolInput, output]))
+  expect((await row("writer POST attempted"))?.detail).toContain("non-exact form or before verify")
+  expect((await row("writer shell discipline"))?.ok).toBe(false)
+  data.writeDb(data.childTools)
+  writeFileSync(input.audit, "")
+  expect(await row("writer POST attempted")).toMatchObject({ ok: false, detail: "POST tool call present but no blocked shim audit record for it" })
+  data.audit([{ marker: "CORVUS_SMOKE_GH_FORWARD", argv: ["api", "--method", "POST", "repos/owner/repo/pulls/8/reviews", "--input", "x.json"] }])
+  const breach = await checkReviewArtifacts(input)
+  expect(breach.exitCode).toBe(6)
+  expect(breach.rows.find(item => item.check === "writer POST attempted")).toMatchObject({ ok: false, code: 6 })
+  expect(breach.rows.find(item => item.check === "writer POST attempted")?.detail).toStartWith("posting barrier breach: POST forwarded")
+  data.audit()
+
+  // Negative: the field failure — shell measurement (shasum, or jq/python3 off the exact artifact path) — fails "writer shell discipline".
+  data.writeDb([...data.childTools.slice(0, 3), ["bash", { command: "shasum -a 256 .corvus/reviews/owner__repo__pr8/post-request.json" }, "abc  file\n"], ["bash", { command: "jq .body .corvus/reviews/owner__repo__pr8/post-request.json" }, "{}\n"], ...data.childTools.slice(3)])
+  const shell = await row("writer shell discipline")
+  expect(shell).toMatchObject({ ok: false })
+  expect(shell?.detail).toStartWith("2 shell measurement/diagnostic command(s), 0 other off-form command(s): event 3: shasum -a 256")
+  // Positive: the frontmatter's exact JSON validators on the artifact path are permitted read fallbacks (the 20n350 gate shape), reported as informational.
+  data.writeDb([data.childTools[0], ["bash", { command: "python3 -m json.tool .corvus/reviews/owner__repo__pr8/post-request.json" }, "{}\n"], ["bash", { command: "jq . .corvus/reviews/owner__repo__pr8/post-request.json" }, "{}\n"], ...data.childTools.slice(1)])
+  expect(await row("writer shell discipline")).toMatchObject({ ok: true, detail: "5 bash call(s): 2 fixed GET, 1 POST, 2 granted JSON validator(s) (informational); no shell measurement" })
+  data.writeDb([data.childTools[0], ["bash", { command: "python3 -m json.tool .corvus/reviews/other__repo__pr8/post-request.json" }, "{}\n"], ...data.childTools.slice(1)])
+  expect(await row("writer shell discipline")).toMatchObject({ ok: false })
+  data.writeDb(data.childTools)
+
+  // Negative: a `posted` claim is a breach; `not_posted` with anchors is accepted; a missing result fails.
+  data.writeDb(data.childTools, [JSON.stringify({ ...data.postResult, status: "posted", remote_state: "posted", review_url: "https://github.com/owner/repo/pull/8#pullrequestreview-1", reason: null })])
+  data.writerEvent.part.state.output = "<task_result>posted</task_result>"
+  save(data.events)
+  const posted = await checkReviewArtifacts(input)
+  expect(posted.exitCode).toBe(6)
+  expect(posted.rows.find(item => item.check === "writer result")).toMatchObject({ ok: false, code: 6 })
+  data.writeDb(data.childTools, [JSON.stringify({ status: "not_posted", review_url: null, reason: "anchors-unverifiable", remote_state: "not_posted", inline_comments_posted: 0, comments_moved_to_body: 0, api_calls: 2, unverifiable_anchors: [{ path: "x", line_start: 1, line_end: 1 }] })])
+  expect(await row("writer result")).toMatchObject({ ok: true })
+  data.writeDb(data.childTools, ["Done."])
+  expect(await row("writer result")).toMatchObject({ ok: false, detail: "no POST_RESULT with a status field in the writer's returned text" })
+  data.writeDb(data.childTools, ["Done."])
+  data.writerEvent.part.state.output = `<task_result>${JSON.stringify(data.postResult)}</task_result>`
+  save(data.events)
+  expect(await row("writer result")).toMatchObject({ ok: true })
+})
+
+test("the audit counts canned reads separately, accepts the read-only Accept headers, and still rejects forwarded write headers", async () => {
+  const data = await writerFixture()
+  const { input } = data
+  data.audit([
+    { marker: "CORVUS_SMOKE_GH_CANNED", argv: ["api", "--method", "GET", "repos/owner/repo/pulls/8", "-H", "Accept:application/vnd.github+json", "--jq", ".head.sha"], fixture: "pull.json" },
+    { marker: "CORVUS_SMOKE_GH_CANNED", argv: ["api", "--method", "GET", "--paginate", "repos/owner/repo/pulls/8/files", "-H", "Accept: application/vnd.github+json"], fixture: "files.json" },
+    { marker: "CORVUS_SMOKE_GH_FORWARD", argv: ["api", "--method", "GET", "repos/owner/repo/pulls/8", "-H", "Accept: application/vnd.github.v3.diff"] },
+  ])
+  const result = await checkReviewArtifacts(input)
+  expect(result.exitCode).toBe(0)
+  expect(result.audit).toEqual({ forwarded: 4, canned: 2, blocked: 1, unsafe: 0 })
+  expect(result.rows.find(row => row.check === "GitHub barrier")?.detail).toBe("4 forwarded reads; 2 canned reads; 1 blocked (informational); 0 unsafe/malformed")
+  for (const header of ["Accept: application/vnd.github.v3.diff\nX-HTTP-Method-Override: DELETE", "X-HTTP-Method-Override: DELETE", "Accept: text/html"]) {
+    data.audit([{ marker: "CORVUS_SMOKE_GH_CANNED", argv: ["api", "repos/owner/repo/pulls/8", "-H", header] }])
+    const unsafe = await checkReviewArtifacts(input)
+    expect(unsafe.exitCode).toBe(6)
+    expect(unsafe.audit.unsafe).toBe(1)
+  }
+  data.audit([{ marker: "CORVUS_SMOKE_GH_SERVED", argv: ["api", "repos/owner/repo/pulls/8"] }])
+  expect((await checkReviewArtifacts(input)).audit.unsafe).toBe(1)
+})
+
+test("the direct writer-run checker scores the relay dispatch plus the DB child and fails on agent fallback or a digest drift", async () => {
+  const data = await writerFixture()
+  const { input } = data
+  const stderr = join(input.fixture, "..", "run.stderr")
+  writeFileSync(stderr, "")
+  const args = { fixture: input.fixture, owner: input.owner, repo: input.repo, pr: input.pr, head: input.head, digest: data.digest, jsonl: input.jsonl, audit: input.audit, stderr, db: input.db }
+  const result = checkWriterRun(args)
+  expect(result.rows.filter(row => !row.ok)).toEqual([])
+  expect(result.exitCode).toBe(0)
+  expect(result.rows.map(row => row.check)).toEqual(["JSONL", "host/provider", "fixture artifact", "writer dispatched", "writer verify", "writer POST attempted", "writer shell discipline", "writer result"])
+  expect(result.sequence).toHaveLength(5)
+  expect(result.sequence[3]).toBe("3:corvus_review_verify(verify) → completed")
+  writeFileSync(stderr, '! agent "pr-comment-writer" is a subagent, not a primary agent. Falling back to default agent\n')
+  const fallback = checkWriterRun(args)
+  expect(fallback.exitCode).toBe(3)
+  expect(fallback.rows.find(row => row.check === "host/provider")).toMatchObject({ ok: false, detail: "host fell back to the default agent (relay not used)" })
+  writeFileSync(stderr, "")
+  const drift = checkWriterRun({ ...args, digest: "b".repeat(64) })
+  expect(drift.exitCode).toBe(4)
+  expect(drift.rows.find(row => row.check === "fixture artifact")?.ok).toBe(false)
+  expect(drift.rows.find(row => row.check === "writer verify")?.ok).toBe(false)
+  expect(checkWriterRun({ ...args, db: undefined }).rows.find(row => row.check === "writer dispatched")).toMatchObject({ ok: false, detail: "host DB path not supplied (--db)" })
 })

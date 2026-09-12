@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test"
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 
@@ -71,4 +71,54 @@ test("gh decision table forwards only reads, with one unforgeable argv audit rec
     expect(entries[index]).toEqual({ marker: allowed ? "CORVUS_SMOKE_GH_FORWARD" : "CORVUS_SMOKE_MUTATION_BLOCKED", argv })
   }
   expect(readFileSync(forwarded, "utf8").trim().split("\n").length).toBe(cases.filter(([, allowed]) => allowed).length)
+})
+
+test("canned mode serves only the writer/R5 PR reads from fixtures, never forwards, and keeps mutations blocked", () => {
+  const directory = mkdtempSync(join(tmpdir(), "corvus-gh-shim-canned-"))
+  directories.push(directory)
+  const fake = join(directory, "gh")
+  const forwarded = join(directory, "forwarded")
+  const audit = join(directory, "audit")
+  const canned = join(directory, "canned")
+  mkdirSync(canned)
+  writeFileSync(fake, '#!/bin/bash\nprintf "forwarded\\n" >> "$FAKE_GH_FORWARDED"\n')
+  chmodSync(fake, 0o700)
+  const head = "a".repeat(40)
+  writeFileSync(join(canned, "pull.json"), JSON.stringify({ number: 1, head: { sha: head, ref: "x" } }) + "\n")
+  writeFileSync(join(canned, "pull.diff"), "diff --git a/README.md b/README.md\n@@ -1,3 +1,3 @@\n # Smoke\n-old\n+new\n third\n")
+  writeFileSync(join(canned, "files.json"), JSON.stringify([{ filename: "README.md", patch: "@@ -1,3 +1,3 @@" }]) + "\n")
+  const run = (argv: string[]) => {
+    const result = Bun.spawnSync(["bash", resolve(import.meta.dirname, "../../scripts/gh-readonly-shim.sh"), ...argv], {
+      env: { ...process.env, PATH: `${directory}:${process.env.PATH}`, CORVUS_SMOKE_REAL_GH: fake, CORVUS_SMOKE_GH_AUDIT: audit, CORVUS_SMOKE_GH_CANNED: canned, FAKE_GH_FORWARDED: forwarded },
+    })
+    return { code: result.exitCode, out: result.stdout.toString(), err: result.stderr.toString() }
+  }
+  const cases: Array<[string[], number, string | RegExp, string]> = [
+    [["api", "--method", "GET", "repos/o/r/pulls/1", "-H", "Accept:application/vnd.github+json", "--jq", ".head.sha"], 0, head + "\n", "CORVUS_SMOKE_GH_CANNED"],
+    [["api", "--method", "GET", "repos/o/r/pulls/1", "-H", "Accept:application/vnd.github.v3.diff"], 0, /^diff --git a\/README\.md b\/README\.md\n/, "CORVUS_SMOKE_GH_CANNED"],
+    [["api", "--method", "GET", "--paginate", "repos/o/r/pulls/1/files", "-H", "Accept:application/vnd.github+json"], 0, /^\[\{"filename":"README\.md"/, "CORVUS_SMOKE_GH_CANNED"],
+    [["api", "repos/o/r/pulls/1", "--jq", ".number"], 0, "1\n", "CORVUS_SMOKE_GH_CANNED"],
+    [["api", "repos/o/r/pulls/1", "--jq", ".missing.key"], 0, "null\n", "CORVUS_SMOKE_GH_CANNED"],
+    // Fixture absent (reviews.json not written) or unsupported jq filter: fail closed, no forward.
+    [["api", "repos/o/r/pulls/1/reviews", "--paginate"], 1, "", "CORVUS_SMOKE_GH_CANNED"],
+    [["api", "repos/o/r/pulls/1", "--jq", "[.[] | {body}]"], 1, "", "CORVUS_SMOKE_GH_CANNED"],
+    // Admitted reads outside the fixture table never reach the network in canned mode.
+    [["pr", "view", "1"], 1, "", "CORVUS_SMOKE_GH_CANNED"],
+    [["api", "repos/o/r"], 1, "", "CORVUS_SMOKE_GH_CANNED"],
+    // Mutations stay blocked by admission, exactly as without canned mode.
+    [["api", "--method", "POST", "repos/o/r/pulls/1/reviews", "--input", ".corvus/reviews/o__r__pr1/post-request.json"], 1, "", "CORVUS_SMOKE_MUTATION_BLOCKED"],
+    [["pr", "review", "1", "--approve"], 1, "", "CORVUS_SMOKE_MUTATION_BLOCKED"],
+  ]
+  for (const [argv, code, stdout, marker] of cases) {
+    const result = run(argv)
+    expect(result.code, JSON.stringify(argv) + result.err).toBe(code)
+    if (typeof stdout === "string") expect(result.out).toBe(stdout)
+    else expect(result.out).toMatch(stdout)
+    if (code === 1) expect(result.err).toMatch(marker === "CORVUS_SMOKE_MUTATION_BLOCKED" ? /^CORVUS_SMOKE_MUTATION_BLOCKED / : /^CORVUS_SMOKE_CANNED_(?:MISSING|UNSUPPORTED_JQ) /)
+  }
+  const entries = readFileSync(audit, "utf8").trim().split("\n").map(line => JSON.parse(line))
+  expect(entries.map(entry => entry.marker)).toEqual(cases.map(([, , , marker]) => marker))
+  expect(entries.slice(0, 3).map(entry => entry.fixture)).toEqual(["pull.json", "pull.diff", "files.json"])
+  expect(entries[5].fixture).toBe("missing")
+  expect(existsSync(forwarded)).toBe(false)
 })

@@ -151,6 +151,8 @@ const bodyPins: Record<string, BodyPin[]> = {
     { name: "no-retyping", required: /Never re-type, copy, rewrite, relocate or re-encode review content\./i },
     { name: "final-verification", required: /Call corvus_review_verify once immediately before each POST, including a permitted retry, with \{op: "verify", artifactPath: <artifact_path>, expectedSha256: <original expected_sha256>\}/i },
     { name: "verification-success", required: /Require ok:true\s*, sha256Match true, canonical true, no violations, and available measurements/i },
+    { name: "tool-preflight", section: "1. Read the Artifact", required: /Preflight: before reading the artifact, confirm corvus_review_verify is among your callable tools\. If it is absent, return local_only with remote_state not_posted and reason not-exposed, cause unknown followed by the tool inventory you observe; run no shell diagnostics as a substitute\./i },
+    { name: "shell-diagnostic-only", required: /Shell grants \([^)]*\) are diagnostic only; they never satisfy any verification step\./i },
   ],
   "command/git-commit.md": [
     { name: "staged-only", required: /\b(?:commit|operates?)\s+only\s+(?:on\s+)?(?:the\s+)?user['’]s\s+already\s+staged\s+(?:set|changes)\b/i },
@@ -171,7 +173,7 @@ const safetyFixtureBodies: Corpus = {
   [r2]: "## Evidence Envelope\n<review_root>/review-input.json\nEach complete dispatch prompt is ≤ 12,000 characters. The compaction ladder is: drop pasted hunks → drop file summaries → pointer-only evidence.",
   [r4]: "For authorized post/auto_post, call corvus_review_payload with op freeze. Only ok:true creates a usable POST_ARTIFACT descriptor for R5.",
   [r5]: '## Dispatch One Artifact\nCall corvus_review_verify with {op: "verify", artifactPath: <artifact_path>, expectedSha256: <expected_sha256>} before dispatch, including each permitted re-dispatch. Require ok:true, sha256Match true, canonical true, no violations, and available measurements.\n```json\n{"artifact_path":"<path>","expected_sha256":"<digest>","repository":{"owner":"<owner>","name":"<name>"},"pr_number":<pr_number>,"head_sha":"<head>","event":"<event>"}\n```',
-  [writer]: '## Closed Field Sets\nPOST_ARTIFACT POST_REQUEST Comment POST_RESULT\nAn ok:false result ends local-only without posting; a digest mismatch is never accepted. Any anchor mismatch ends local-only without posting. Never re-type, copy, rewrite, relocate or re-encode review content. Call corvus_review_verify once immediately before each POST, including a permitted retry, with {op: "verify", artifactPath: <artifact_path>, expectedSha256: <original expected_sha256>}. Require ok:true, sha256Match true, canonical true, no violations, and available measurements.',
+  [writer]: '## Closed Field Sets\nPOST_ARTIFACT POST_REQUEST Comment POST_RESULT\nAn ok:false result ends local-only without posting; a digest mismatch is never accepted. Any anchor mismatch ends local-only without posting. Never re-type, copy, rewrite, relocate or re-encode review content. Call corvus_review_verify once immediately before each POST, including a permitted retry, with {op: "verify", artifactPath: <artifact_path>, expectedSha256: <original expected_sha256>}. Require ok:true, sha256Match true, canonical true, no violations, and available measurements. Shell grants (`jq .`) are diagnostic only; they never satisfy any verification step.\n### 1. Read the Artifact\nPreflight: before reading the artifact, confirm `corvus_review_verify` is among your callable tools. If it is absent, return local_only with remote_state not_posted and reason `not-exposed, cause unknown` followed by the tool inventory you observe; run no shell diagnostics as a substitute.',
   "command/git-commit.md": "Commit only the user's already staged changes. Never stage files. Request explicit confirmation.",
   "command/cleanup-subagents.md": "With --list, never invoke deletion. Stop after the preview. Request explicit confirmation only after the complete preview.",
   "agent/corvus-auto.md": "## Git Delivery\nStage exact task-owned paths; use the discovered base and commit after final validation.",
@@ -702,6 +704,10 @@ describe("prompt structure", () => {
         [writer, "final-verification", "including a permitted retry", "except on a permitted retry"],
         [writer, "verification-success", "sha256Match true", "sha256Match false"],
         [writer, "verification-success", "canonical true", "canonical false"],
+        [writer, "tool-preflight", "confirm `corvus_review_verify` is among your callable tools", "assume `corvus_review_verify` is among your callable tools"],
+        [writer, "tool-preflight", "run no shell diagnostics as a substitute", "run shell diagnostics as a substitute"],
+        [writer, "tool-preflight", "reason `not-exposed, cause unknown`", "reason `anchors-unverifiable`"],
+        [writer, "shell-diagnostic-only", "are diagnostic only; they never satisfy any verification step", "may satisfy any verification step"],
       ]
       expect(validate(corpus, contract)).toEqual([])
       for (const [path, pin, before, after] of cases) {
