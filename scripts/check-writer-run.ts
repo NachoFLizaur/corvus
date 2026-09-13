@@ -2,14 +2,14 @@ import { createHash } from "node:crypto"
 import { existsSync, readFileSync } from "node:fs"
 import { join, resolve } from "node:path"
 import { parseArgs } from "node:util"
-import { checkWriterDispatch, printSmokeResult, readChildSessions, toolsFromEvents, type Row } from "./check-review-artifacts"
+import { checkModelStateWrites, checkWriterDispatch, printSmokeResult, readChildSessions, readDescendants, reviewRoot, toolsFromEvents, type Row } from "./check-review-artifacts"
 
 type RecordValue = Record<string, unknown>
 const record = (value: unknown): RecordValue => value !== null && typeof value === "object" && !Array.isArray(value) ? value as RecordValue : {}
 const text = (value: unknown): string => typeof value === "string" ? value : ""
 const lines = (value: string): string[] => value.split(/\r?\n/).filter(line => line.trim())
 
-export type WriterRunInputs = { fixture: string; owner: string; repo: string; pr: string; head: string; digest: string; jsonl: string; audit: string; stderr?: string; db?: string }
+export type WriterRunInputs = { fixture: string; owner: string; repo: string; pr: string; head: string; digest: string; jsonl: string; audit: string; stderr?: string; db?: string; expect?: "blocked" | "head-moved" }
 
 /**
  * Direct writer-run gate (scripts/smoke-writer.sh): a sandbox relay primary dispatches
@@ -17,7 +17,9 @@ export type WriterRunInputs = { fixture: string; owner: string; repo: string; pr
  * the writer child's own tool sequence. The fixture artifact bytes must equal the
  * dispatched digest and the host must not have fallen back to another agent before
  * any writer row is scored; missing/malformed evidence fails closed. Rows come from
- * checkWriterDispatch; exit 6 means a forwarded mutation or a `posted` claim, 5 a
+ * checkWriterDispatch (writer PR tools → verify → post → blocked plugin POST, local_only/unknown;
+ * with --head-moved: post tool rejected head-moved, no POST, local_only/not_posted);
+ * exit 6 means a forwarded mutation or a `posted` claim, 5 a
  * missing/incorrect writer path, 3 a host/JSONL failure, 4 a fixture failure.
  */
 export function checkWriterRun(input: WriterRunInputs) {
@@ -34,7 +36,7 @@ export function checkWriterRun(input: WriterRunInputs) {
   const stderr = input.stderr && existsSync(input.stderr) ? readFileSync(input.stderr, "utf8") : ""
   const fallback = /falling back to default agent|not a primary agent/i.test(stderr)
   add("host/provider", errors.length === 0 && !fallback, 3, fallback ? "host fell back to the default agent (relay not used)" : errors.join("\n") || "no terminal host/provider error")
-  const artifact = join(resolve(input.fixture), ".corvus/reviews", `${input.owner}__${input.repo}__pr${input.pr}`, "post-request.json")
+  const artifact = join(resolve(input.fixture), reviewRoot(input), "post-request.json")
   const digest = existsSync(artifact) ? createHash("sha256").update(readFileSync(artifact)).digest("hex") : ""
   let commit = ""
   try { commit = text(record(JSON.parse(readFileSync(artifact, "utf8"))).commit_id) } catch {}
@@ -43,13 +45,18 @@ export function checkWriterRun(input: WriterRunInputs) {
   const parentTools = toolsFromEvents(events)
   const parentID = events.map(event => text(event.sessionID) || text(record(event.part).sessionID)).find(Boolean) ?? ""
   const auditLines = lines(existsSync(input.audit) ? readFileSync(input.audit, "utf8") : "")
+  try {
+    if (!input.db) throw new Error("host DB required for all-agent write audit")
+    const descendants = readDescendants(input.db, parentID)
+    rows.push(checkModelStateWrites([...parentTools, ...descendants.flatMap(child => child.tools)], input.fixture))
+  } catch (error) { add("model state writes", false, 5, `unreadable child evidence: ${String(error)}`) }
   // The relay performs no verify of its own; every completed dispatch counts (afterIndex -1).
   rows.push(...checkWriterDispatch({ owner: input.owner, repo: input.repo, pr: input.pr, fixture: input.fixture, digest: input.digest,
-    auditLines, parentTools, afterIndex: -1, parentID, db: input.db }))
+    auditLines, parentTools, afterIndex: -1, parentID, db: input.db, expect: input.expect }))
   let sequence: string[] = []
   try {
     const child = input.db ? readChildSessions(input.db, parentID, "pr-comment-writer").at(-1) : undefined
-    sequence = (child?.tools ?? []).map(tool => `${tool.index}:${tool.name}${tool.name === "bash" ? "(" + text(tool.input.command) + ")" : tool.name === "corvus_review_verify" ? "(" + text(tool.input.op) + ")" : ""} → ${text(tool.state.status)}`)
+    sequence = (child?.tools ?? []).map(tool => `${tool.index}:${tool.name}${tool.name === "bash" ? "(" + text(tool.input.command) + ")" : ["corvus_review_verify", "corvus_review_pr"].includes(tool.name) ? "(" + text(tool.input.op) + ")" : tool.name === "corvus_review_post" ? "(" + text(tool.output.outcome) + ", tool_api_calls=" + String(tool.output.tool_api_calls) + ")" : ""} → ${text(tool.state.status)}`)
   } catch {}
   const exitCode = [6, 3, 4, 5].find(code => rows.some(row => !row.ok && row.code === code)) ?? 0
   return { rows, exitCode, sequence, auditLines }
@@ -58,14 +65,15 @@ export function checkWriterRun(input: WriterRunInputs) {
 if (import.meta.main) {
   const [fixture, owner, repo, pr, head, digest, jsonl, audit, stderr] = process.argv.slice(2, 11)
   if (!audit) {
-    console.error("Usage: check-writer-run.ts <fixture> <owner> <repo> <pr> <head_sha> <expected_sha256> <jsonl> <gh-audit> [stderr] [--db PATH]")
+    console.error("Usage: check-writer-run.ts <fixture> <owner> <repo> <pr> <head_sha> <expected_sha256> <jsonl> <gh-audit> [stderr] [--db PATH] [--head-moved]")
     printSmokeResult([{ check: "arguments", ok: false, code: 3, detail: "missing required arguments" }], 3)
     process.exit(3)
   }
   try {
     const positional = stderr && !stderr.startsWith("--") ? 11 : 10
-    const { values } = parseArgs({ args: process.argv.slice(positional), options: { db: { type: "string" } } })
-    const result = checkWriterRun({ fixture, owner, repo, pr, head, digest, jsonl, audit, stderr: positional === 11 ? stderr : undefined, db: values.db })
+    const { values } = parseArgs({ args: process.argv.slice(positional), options: { db: { type: "string" }, "head-moved": { type: "boolean" } } })
+    const result = checkWriterRun({ fixture, owner, repo, pr, head, digest, jsonl, audit, stderr: positional === 11 ? stderr : undefined, db: values.db,
+      expect: values["head-moved"] ? "head-moved" : "blocked" })
     console.log("| Check | Result | Evidence |\n|---|---|---|")
     for (const row of result.rows) console.log(`| ${row.check} | ${row.ok ? "PASS" : "FAIL"} | ${row.detail.replaceAll("|", "\\|").replaceAll("\n", " <br> ")} |`)
     console.log("Writer child tool sequence:\n" + (result.sequence.join("\n") || "(none)"))

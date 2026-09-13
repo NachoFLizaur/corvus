@@ -15,7 +15,7 @@ through the caller, preserving IDs, order, and recommendations:
 
 | Caller | Batch Resolution |
 |--------|------------------|
-| Interactive `corvus` | Put the whole batch in one `question()` call; return `ANSWERS_BY_ID`. |
+| Interactive `corvus` | Put the whole batch in one `question()` call; return `ANSWERS_BY_ID`, using recommendations as `ASSUMPTIONS_BY_ID` for unavailable answers. |
 | `corvus-auto` | Record recommended answers as `ASSUMPTIONS_BY_ID`; keep interaction disabled. |
 
 The caller owns a maximum of 3 clarification rounds shared across 0a and 0b. Start at
@@ -23,7 +23,7 @@ round 1, advance after each resolved batch, and re-invoke the same analysis mode
 answers and assumptions. Resolve round 3's unanswered items to recommendations and set
 `FINAL_ROUND_RESOLVED: true`; preserve that closed state through later discovery.
 <!-- Round oracle: caller-maintained count, resolved batches, and closure flag, read before each analyst dispatch. Closure permits recorded assumptions rather than another question round; unresolved facts still route to discovery. Neither mode changes nor either caller resets it. -->
-Done when the analyst has consumed the resolved batch and returned the next status.
+If round state is missing, close clarification with recorded recommendations and `FINAL_ROUND_RESOLVED: true`; use available analysis after [bounded report recovery](../corvus-phase-4/reference/transport-retry.md). Done when resolved answers or assumptions accompany the next handoff.
 
 ## Discovery Origin Contract
 
@@ -41,7 +41,7 @@ task-planner's Plan Format, preserving a supplied user choice,
 then run Phase 1 with `DIRECT_CALLER`. The bypass skips clarification, not discovery;
 return here for Depth and Tests Resolution. Preserve the supplied requirements and add
 `requirements-analyst: skipped (spec-complete)` to the
-Phase 2 input. New requirement gaps return to the analyst instead of being silently assumed.
+Phase 2 input. Record reversible recommendations for new gaps as assumptions; immutable requirements stay unchanged.
 <!-- Bypass oracle: request evidence against the caller's criteria, read before skipping 0a. Missing evidence keeps analysis enabled for either caller; only all criteria permit bypass. -->
 Done when discovery is available and the analyst skip is visible to planning and review.
 
@@ -80,10 +80,8 @@ For a `PHASE_0A` return, dispatch requirements-analyst with the accumulated payl
 **REPORT BACK**: Use your Output Format; identify only the remaining discovery delta.
 ```
 
-On `QUESTIONS_NEEDED`, resolve the batch. On `DISCOVERY_NEEDED`, return to Phase 1 for
-the delta and then re-enter 0b. On `REQUIREMENTS_CLEAR`, proceed below. Missing facts
-remain explicit discovery prerequisites; the clarification cap resolves decisions, not facts.
-Done when requirements are ready for planning or a named prerequisite holds the handoff.
+On `QUESTIONS_NEEDED`, resolve the batch. On `DISCOVERY_NEEDED`, investigate only the delta through Phase 1, then re-enter 0b; if facts remain unavailable, proceed with explicit gaps, not invented facts. On `REQUIREMENTS_CLEAR`, proceed below.
+Done when available requirements and assumptions reach planning with factual gaps noted.
 
 ## Depth and Tests Resolution
 
@@ -96,6 +94,6 @@ The interactive user may override depth at Phase 3.
 Resolve Tests through [Phase 2 Tests](../corvus-phase-2/SKILL.md#tests), using the caller's
 Depth and Test Inputs section for provenance handling. Carry the selected value forward.
 If apparatus far exceeds the stated scope, confirm with the user (corvus-auto halts and reports).
-Pass clear immutable requirements, assumptions, depth, Tests, and completed discovery to
+Pass immutable requirements, assumptions, depth, Tests, and available discovery to
 Phase 2, preserving competing in-flight work and surfacing it to the interactive user first.
-Done when Phase 2 has resolved inputs, or a specific unresolved prerequisite holds planning.
+Done when Phase 2 has available inputs and explicit unresolved prerequisites.

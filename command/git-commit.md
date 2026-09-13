@@ -37,7 +37,7 @@ You MUST NOT stage files, modify the index, or include unstaged/untracked files;
 <!-- Committed secrets remain recoverable from history even after removal. -->
 You MUST NOT commit secrets; stop and warn with redacted locations if the staged diff contains tokens, passwords, API keys, or other credentials.
 
-Ask for clarification if the diff is too large or complex to explain reliably. Done when the intended staged changes and their purpose are understood, or the blocking condition is reported.
+Describe verified staged changes and disclose unknown purpose or scope instead of blocking on clarification. Done when supported changes and explanation gaps are ready for the preview; safety checks still apply to the full staged set.
 
 ### 2. Draft the Message
 
@@ -51,7 +51,7 @@ Use the requested mode:
 
 For conventional subjects, use `<type>(<optional-scope>): <description>`: lowercase type/scope, imperative description of at most 50 characters, no trailing period. Choose `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`, or `revert` according to the change; keep scope consistent with existing history where possible. Wrap the body at 72 characters and reference relevant issues with `Fixes #123` or `Closes #456`.
 
-Mark breaking changes after the type/scope, for example `feat(api)!: remove deprecated endpoint`, and explain the break in the body for body-bearing modes. Recommend long mode for five or more changed files or breaking changes. If a required body needs motivation the diff cannot establish, ask for context before drafting it.
+Mark breaking changes after the type/scope, for example `feat(api)!: remove deprecated endpoint`, and explain the break in the body for body-bearing modes. Recommend long mode for five or more changed files or breaking changes. If the diff cannot establish motivation, state observed changes and disclose that gap rather than inventing a reason.
 
 Done when the message describes the actual change and its known motivation rather than a vague label such as "fix bug".
 

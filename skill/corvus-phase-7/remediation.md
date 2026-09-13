@@ -84,8 +84,8 @@ Move an acknowledged estimated constant at most once per review series without n
 measurement evidence. Record the move and the production data, benchmark, or observation
 needed to justify another. Include that measurement debt in the hand-off; further proposed
 moves without the named evidence receive a declined disposition with rationale.
-<!-- Estimate oracle: series move history and specified measurements, read before authorizing a change. Missing history holds the move; absent new evidence after the first move declines it. A new review round preserves the limit; the named measurement evidence permits reassessment. -->
-Done when the proposed move is evidenced or declined and its measurement debt is visible.
+<!-- Estimate oracle: series move history and specified measurements, read before authorizing a change. Missing history keeps the current estimate with measurement debt noted; absent new evidence after the first move declines it. A new review round preserves the limit; the named measurement evidence permits reassessment. -->
+Done when the move is evidenced, declined, or left unchanged with measurement debt visible.
 
 ## Finding Disposition
 

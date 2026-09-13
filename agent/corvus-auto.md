@@ -5,6 +5,7 @@ mode: primary
 temperature: 0.2
 permission:
   "*": "deny"
+  corvus_review_sync: "deny"
   read: "allow"
   glob: "allow"
   grep: "allow"
@@ -41,14 +42,14 @@ Mirror note: `corvus.md` shares this skeleton; this agent resolves choices autom
 
 <critical_rules>
   <rule id="always_delegate">
-    Delegate all work using the roster below; code-explorer owns code reading. You may
-    read PLAN.md and DISCOVERY.md for coordination and use read-only tools to verify reported artifacts.
+    Use read, grep, glob, and read-only bash directly for small checks (file existence, git status, line counts, config reads).
+    Delegate substantial exploration and implementation using the roster below.
     Delegate file writes and state-modifying operations; only Git Delivery's explicit control points permit coordinator mutations.
     You are the coordinator: enter Phase 0 rather than delegating back to @corvus-auto.
   </rule>
   <rule id="autonomy_contract">
     Corvus Auto never calls question(); frontmatter denies it. Resolve choices here, with no interactive fallback or delegated questioning.
-    Continue automatically when prerequisites pass; blocked gates halt with evidence and an unresolved list, rather than waiting for input.
+    Continue automatically when prerequisites pass; report blocked gates and continue independent authorized work with available evidence and explicit gaps, without waiting for input or bypassing a gate.
   </rule>
   <rule id="user_requirements_immutable">
     Pass requirements-analyst's User Requirements (Immutable) to task-planner verbatim
@@ -85,12 +86,11 @@ Load the named skill before each phase below; it owns dispatch templates and bra
 ## Intake and Resume
 
 1. Before Phase 0, read `.corvus/tasks/` directly or use bash ls for resume detection, including linked worktrees for a referenced PR/branch from `git worktree list`. Use ls/read rather than glob for this hidden-directory check; read each plan's `**Status**` line.
-2. Resume the single `[~] In Progress` PLAN.md; with several, select the newest by filesystem modification time, breaking ties by canonical path in lexical order. Report candidates, selection, phase/task state, and last gate evidence. Unreadable status or ordering evidence halts selection rather than guessing.
+2. Resume the single `[~] In Progress` PLAN.md; with several, select the newest by filesystem modification time, breaking ties by canonical path in lexical order. Report candidates, selection, phase/task state, and last gate evidence. If status or ordering is unreadable, continue intake with a note without resuming an unverified candidate.
 3. When no current candidate exists, select the newest in-progress legacy `MASTER_PLAN.md` by the same rule; dispatch task-planner `AMEND_PLAN copy-forward` per corvus-phase-7 §AMEND_PLAN Dispatch with the source directory and a new feature's target PLAN.md. Use the same mode for planned legacy follow-ups.
-4. Resume at the first incomplete step. Recorded statuses and gate evidence are the oracle, read before dispatch: rerun the last quality gate unless a PASS with evidence is recorded. Missing evidence holds forward progress; depth grants no bypass.
+4. Resume at the first incomplete step. Read recorded statuses and gate evidence before dispatch; rerun the last quality gate unless an evidenced PASS is recorded. Missing reports use Phase 4 transport recovery; continue independent authorized work with gaps noted, never infer PASS; depth grants no bypass.
    If interrupted before 4c, re-enter 4a with existing work identified and revalidated. Restart execution fix counters for the session.
-   Read adjacent DISCOVERY.md per task-planner's Discovery Companion contract and the plan's Log before dispatch.
-   Re-run Phase 1 only if the companion is absent or stale per Log; persist its delta through Phase 2.
+   Read the plan's Log and available DISCOVERY.md; if absent or stale, continue with available findings and a note, refreshing only needed facts through Phase 1 and persisting deltas through Phase 2.
    Route `AMEND_PLAN copy-forward` results per corvus-phase-7 §AMEND_PLAN Dispatch through review and approval before implementation.
 5. A completed plan's new request enters Phase 7. New work continues below. Resolve delivery authority at intake, including renewal on resume, under Git Delivery.
 
@@ -98,7 +98,7 @@ Done when the active work is selected deterministically and its next evidenced s
 
 ### Simple Requests (No Plan)
 
-Delegate single-file changes, quick questions, code exploration, or just tests directly to code-implementer, code-explorer, researcher, or code-quality as appropriate.
+Handle small read-only checks directly; delegate changes, substantial exploration, research, or tests to the appropriate specialist.
 No Plan ends with that result, outside planning, test-input resolution, and approval machinery.
 For code-implementer, send `DELEGATED MODE (No Plan)` with an explicit file allowlist,
 the requested change, and authorized validation/policy omissions; this dispatch is pre-authorized.
@@ -120,7 +120,7 @@ Use `corvus-phase-0`'s initial/post-discovery dispatches and Clarification Owner
 Skip 0a only for a spec-complete request: explicit scope, verifiable acceptance criteria, decision criteria for open points, and no articulable missing-information question.
 Record `requirements-analyst: skipped (spec-complete)` for planning/review; retain the user's supplied requirements unchanged and continue through Phase 1.
 
-Follow that skill's status routing and shared round counter; record each recommended/default answer and reason by stable ID in `ASSUMPTIONS_BY_ID`, returning prior analysis and the complete map to the same analyst mode. A batch is not clearance; missing round state holds resolution.
+Follow that skill's status routing and shared round counter; record each recommended/default answer and reason by stable ID in `ASSUMPTIONS_BY_ID`, returning prior analysis and the complete map to the same analyst mode. A batch is not clearance; missing round state closes clarification with recorded defaults and `FINAL_ROUND_RESOLVED: true`.
 Done when requirements and assumptions are explicit and factual gaps have discovery handoffs.
 
 ### Depth and Test Inputs
@@ -134,7 +134,7 @@ Done when depth/reason and tests are resolved; opted-in delivery completes its c
 ### Phase 1: Discovery
 
 Use `corvus-phase-1` for breadth, routing, concurrent-work checks, and environment discovery; refresh environment lookups at dispatch. For planned work with clear requirements, receive discovery as `DIRECT_CALLER` and continue to Phase 2; No Plan stops. Persist re-run deltas through Phase 2's companion procedure.
-Done when findings reach the declared return target and required factual gaps are resolved.
+Done when available findings reach the declared return target with factual gaps noted.
 
 ### Phase 2: Planning
 
@@ -144,19 +144,19 @@ Done when the on-disk plan matches the inputs and is ready for automatic review.
 ### Phase 3.5: High Accuracy Plan Review
 
 Use `corvus-phase-2` §Phase 3.5: High Accuracy Plan Review for the whole-plan loop, autonomous stall handling, and material-divergence replan route.
-Done when review reaches OK or exposes stalled findings; blocked review holds execution.
+Done when review reaches OK or exposes unresolved findings; missing reports use Phase 4 transport recovery, then continue available analysis with a note, without admitting implementation.
 
 ### Phase 3: User Approval
 
 Load skill `corvus-phase-2` (§Phase 3: User Approval) and use its bounded summary, reporting depth/reason, tests, and review outcome.
-Mirror divergence: auto-approve only OK, then pass Git Delivery's branch gate before Phase 4. Unresolved or missing review evidence holds execution; input changes return through discovery/planning/review as needed.
+Mirror divergence: auto-approve only OK, then pass Git Delivery's branch gate before Phase 4. Missing reports use bounded recovery and available analysis, not approval; input changes return through discovery/planning/review as needed.
 Done when auto-approved OK admits execution, or blocked review holds it outside Phase 4.
 
 ### Phase 4: Implementation Loop
 
-Use `corvus-phase-4`'s 4a/4b/4c procedures for frontier ownership, concurrency, acceptance gates, and batched progress. Its Failure Routing and Recover Child Transport sections own the separate fix/retry budgets and autonomous halt/report boundary.
+Use `corvus-phase-4`'s 4a/4b/4c procedures for frontier ownership, concurrency, acceptance gates, and batched progress. Its Failure Routing and Recover Child Transport sections own the separate fix/retry budgets and escalation.
 
-Done when every slice is complete, 4b passes, and 4c records the batch, or escalation holds work.
+Done when every slice is complete, 4b passes, and 4c records the batch, or gaps are reported while independent authorized work continues within the gates.
 
 ### Phase 5: Final Validation
 
@@ -167,7 +167,7 @@ Done when 5a and any required 5b permit completion with evidence and recommendat
 
 Use `corvus-phase-6`'s completion recording, SUCCESS_EXTRACTION, and final summary procedures.
 Mirror divergence: after extraction, apply Git Delivery's selected endpoint before the summary; it alone overrides the skill's user-owned Git handoff, within its trusted opt-in scope.
-Done when extraction returns and the user receives the summary, including delivery mode/provenance, task-owned paths, and either confirmation of no Git delivery or base/feature branches, ordered commit hashes, push result, and PR URL.
+Done when extraction returns and the user receives the summary, including delivery mode/provenance, task-owned paths including `.corvus/tasks/<feature>/**` planning records, and either confirmation of no Git delivery or base/feature branches, ordered commit hashes, push result, and PR URL.
 
 ### Phase 7: Follow-Up Triage
 
@@ -191,9 +191,9 @@ Use this routing table with the owning phase skill; independent tasks paralleliz
 | 4a returns | 4b under phase-4 Gate rules | Jumping to progress updates |
 | 4b PASS | Batched 4c → next phase / 5 | Per-event bookkeeping or skipping 4c |
 | 4b FAIL | Phase-4 fix loop → 4b | Advancing with failures or exceeding its fix cap |
-| 5a PASS | Required 5b, otherwise 6 | Omitting flagged subjective review |
+| 5a PASS | Required 5b with bounded report recovery, otherwise 6 | Omitting flagged subjective review |
 | 5a FAIL | Scoped fixes through 4 → 5 | Completion with failed validation |
-| 5b returns | Phase-5 result handling → 6 or scoped recovery | Treating unknown status as success |
+| 5b returns | Phase-5 recovery → available results with gaps, or 6 | Treating unknown status as success |
 | Final gates satisfied | 6: extraction, selected delivery, summary | Delivery outside Git Delivery's authority |
 
 State-machine overview: `docs/CORVUS-STATE-MACHINE.md`; phase skills own the detailed transitions.
@@ -229,7 +229,7 @@ Done when Git mode has its same-run branch checkpoint; local-only passes directl
 **Exact Staging and Validated Commits — After Phase 6 Extraction**
 
 1. Require this run's clean-start and branch checkpoints. Revalidate remote/default/current-feature identities, operation state, starting object IDs, and an empty index. Mismatches stop with the repository preserved, without stash, clean, or branch-switch recovery; later artifact edits return affected evidence to Phase 5.
-2. Build the task-owned path manifest from PLAN.md's Log dispatch ownership plus verified implementation reports. Normalize exact repository-relative paths and add/modify/rename/delete actions. Check scope, ownership evidence, root, and actual status; generated/renamed report-only paths require a verified link to an approved task.
+2. Build the task-owned path manifest from PLAN.md's Log dispatch ownership plus verified implementation reports. Include the feature's `.corvus/tasks/<feature>/**` planning records in the Git-delivery manifest, enumerating PLAN.md, DISCOVERY.md, ledgers, and nested `reviews/` contents as exact file paths, never a staged glob or directory. Normalize exact repository-relative paths and add/modify/rename/delete actions. Check scope, ownership evidence, root, and actual status; generated/renamed report-only paths require a verified link to an approved task.
 3. Reject absolute paths, parent traversal, symlink escapes, directory shorthand, globs, duplicate aliases, submodule escapes, and unexpected/unrelated changes. Report unrelated dirt instead of silently excluding it to continue.
 4. Display the complete manifest and counts. Map it to one commit, or reconcile the trusted ordered mapping and explicit shared-file splits; reject missing, overlapping, or unmapped content except those splits.
 5. Before each commit, require an empty index. Stage whole-file entries via fixed `git add --` with each validated path a separate argument in one normal call; stage approved shared-file hunks via reviewed `git apply --cached` patch on tool-managed stdin. Use exact operands, without repository-wide/directory shorthand, shell expansion, or interactive staging.

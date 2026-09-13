@@ -5,7 +5,7 @@ reviewers, quality agents, analysts, explorers, and researchers. An empty report
 critical truncation, missing required report section, or claimed artifact absent on disk
 is a transport failure. A well-formed failure is a real result, not a retry opportunity.
 
-<!-- Recovery oracle: the saved dispatch bytes, report schema, retry counters, and workspace state, read before recovery or redispatch. Unknown mutation state blocks implementer recovery; exhausted transport allowance follows the step's failure path. Both callers use the same allowance; retries replace the original call and never extend fix/judgment budgets. -->
+<!-- Recovery oracle: saved dispatch bytes, report schema, retry count, and workspace state, read before recovery. Unknown mutation state blocks implementer recovery; exhausted or unavailable recovery continues available evidence with a note, not PASS or mutation authority. Both callers allow one same-session retry; it never extends fix/judgment budgets or disables approval, ownership, or validation gates. -->
 1. Check the required report schema and read every claimed written artifact directly,
    including hidden plan paths. Done when the result is valid or transport loss is identified.
 2. Before recovering an implementer, inspect read-only Git status and expected artifacts
@@ -13,13 +13,8 @@ is a transport failure. A well-formed failure is a real result, not a retry oppo
    preserve/reconcile existing work, avoid repeating completed mutations, and retain the
    original file/validation contract. If state cannot be established, take the step's
    failure path. Done when mutation state is known or recovery is blocked.
-3. Resume the same child once, requesting only its final report. If still invalid,
-   redispatch once with byte-identical task inputs; keep recovery metadata separate and
-   refresh the mutation audit for implementers first. Check each returned report using
-   step 1. Done when a conforming replacement arrives or both recovery opportunities expire.
-4. On exhaustion, follow the owning step's failure path: 4b FAIL, 5b fail-closed, or a
-   blocked phase as applicable. Recovery replaces a dispatch in existing counters rather
-   than adding a workflow decision. Done when the result is routed without budget extension.
+3. Retry once in the same child session, requesting only its final report, with unchanged task inputs and separate recovery metadata. Check the result using step 1; if the session is unavailable, record that instead of launching a replacement. Done when the retry returns or is unavailable.
+4. Then continue with available results and a note naming the child, retry outcome, and unresolved evidence. Preserve valid sibling findings; mark unknown coverage honestly. Continue independent authorized work or a partial summary, not dependent mutations, false PASS, or completion with failed validation. Done when results and gaps are routed without budget extension.
 
 ## Cancelled Dispatches
 

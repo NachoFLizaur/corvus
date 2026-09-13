@@ -10,29 +10,9 @@ set -euo pipefail
 
 readonly real_gh="$CORVUS_SMOKE_REAL_GH"
 allowed=0
-# JSON-read admission uses argv before exec/audit: missing JSON or an unknown
-# option leaves allowed=0 for both commands; no flag bypasses this check.
-check_json_read() {
-  shift 2
-  local has_json=0
-  while (($#)); do
-    case "$1" in
-      --json)
-        [[ $# -ge 2 && -n "$2" && "$2" != -* ]] || return 0
-        has_json=1; shift 2 ;;
-      --json=*) [[ -n "${1#--json=}" ]] || return 0; has_json=1; shift ;;
-      --repo|-R|--state|-s|--limit|-L|--jq|-q|--template|-t)
-        [[ $# -ge 2 && -n "$2" && "$2" != -* ]] || return 0
-        shift 2 ;;
-      -*) return 0 ;;
-      *) shift ;;
-    esac
-  done
-  allowed="$has_json"
-}
 case "${1:-} ${2:-}" in
   'repo view'|'repo clone'|'pr view'|'pr diff'|'pr checks'|'auth status') allowed=1 ;;
-  'pr list'|'issue view') check_json_read "$@" ;;
+  'pr list'|'pr status'|'issue view'|'issue list'|'run list'|'run view') allowed=1 ;;
   'pr checkout')
     for arg in "${@:3}"; do
       [[ "$arg" != --detach ]] || allowed=1
@@ -40,6 +20,18 @@ case "${1:-} ${2:-}" in
     done
     ;;
 esac
+[[ "${1:-}" != search ]] || allowed=1
+
+# CLI admission reads every argument before exec/audit. Mutation transport flags
+# fail closed even on an admitted read subcommand; JSON output is optional. API
+# calls use the stricter parser below instead. No read flag disables either check.
+if [[ "${1:-}" != api ]]; then
+  for arg in "$@"; do
+    case "$arg" in
+      --method|--method=*|-X*|--input|--input=*|-f*|-F*|--field|--field=*|--raw-field|--raw-field=*) allowed=0; break ;;
+    esac
+  done
+fi
 
 accept=""
 jq_filter=""
@@ -106,6 +98,17 @@ if ((allowed == 1)) && [[ -n "${CORVUS_SMOKE_GH_CANNED:-}" ]]; then
     esac
   fi
   [[ "$canned" != missing && -f "$CORVUS_SMOKE_GH_CANNED/$canned" ]] || canned=missing
+  # Head-moved mode (pull.moved.json present): the first PR metadata read serves pull.json
+  # and every later one pull.moved.json — the head moves after the writer's own check, so
+  # the post tool's independent head recheck must reject before any POST. Admission and
+  # mutation blocking are unchanged; the served fixture name is recorded in the audit.
+  if [[ "$canned" == pull.json && -f "$CORVUS_SMOKE_GH_CANNED/pull.moved.json" ]]; then
+    reads=0
+    [[ ! -f "$CORVUS_SMOKE_GH_CANNED/.pull-reads" ]] || IFS= read -r reads <"$CORVUS_SMOKE_GH_CANNED/.pull-reads" || true
+    [[ "$reads" =~ ^[0-9]{1,6}$ ]] || reads=0
+    printf '%s\n' "$((reads + 1))" >"$CORVUS_SMOKE_GH_CANNED/.pull-reads"
+    ((reads == 0)) || canned=pull.moved.json
+  fi
 fi
 
 marker=CORVUS_SMOKE_MUTATION_BLOCKED

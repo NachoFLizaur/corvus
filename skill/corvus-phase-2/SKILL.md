@@ -7,7 +7,7 @@ description: Planning (Phase 2), mandatory High Accuracy Plan Review (Phase 3.5)
 
 ## Phase 2: Planning
 
-Turn clear requirements and completed discovery into one adaptive plan. The schema and
+Turn immutable requirements and available discovery into one adaptive plan. The schema and
 effort policy live in task-planner's Plan Format; this skill
 owns dispatch templates, test-execution timing, the review loop, and the approval handoff.
 
@@ -17,14 +17,14 @@ Use `**Tests**: deferred | none` from Plan Format, defaulting to deferred. Defer
 author coverage during Phase 4 and run a single full suite at Phase 5a; none uses acceptance
 checks only, with no test authoring. Both retain acceptance checks at the required gates.
 deferred → no test execution before Phase 5a; none → no test execution at all.
-<!-- Test timing oracle: the selected plan policy and current phase, read before every dispatch. Missing or conflicting policy blocks dispatch; consumers permit execution only at the stated phase for the selected policy. Neither depth nor autonomous approval disables this control. -->
+<!-- Test timing oracle: the selected plan policy and current phase, read before every dispatch. Default absent policy to deferred; conflicts use the narrower prohibition with a note. Consumers permit execution only at the stated phase for the selected policy. Neither depth nor autonomous approval disables this control. -->
 
 ### Planner Dispatch
 
 1. Resolve the user's repository root, feature, analyst-owned immutable requirements,
    proposed depth with reason, selected tests, and discovery digest. Preserve supplied
-   choices; use the analyst for requirement changes and discovery for missing facts.
-   Done when planning inputs are clear and grounded in the repository.
+   choices; use the analyst for requirement changes and record unavailable facts as gaps.
+   Done when available planning inputs are grounded and assumptions are explicit.
 2. Dispatch task-planner with the following payload. Decision-record handling belongs to
    its Decision Records section and the user's repository `docs/decisions/` convention.
    Persist discovery using its Discovery Companion schema.
@@ -32,7 +32,7 @@ deferred → no test execution before Phase 5a; none → no test execution at al
 ```markdown
 **TASK**: Create one adaptive plan and persist its discovery companion for <feature and intended outcome>.
 **Repository**: <canonical user-repository root>
-**Plan**: <root>/.corvus/tasks/<feature>/PLAN.md
+**Plan**: <root>/.corvus/tasks/<feature>/PLAN.md — planning artifacts, including DISCOVERY.md, ledgers, and task-scoped `reviews/` state, are project memory committed with the work by default.
 **Depth**: <selected value> — <reason>
 **Tests**: <selected policy>
 **User Requirements (Immutable)**: <verbatim requirements-analyst section>
@@ -40,15 +40,11 @@ deferred → no test execution before Phase 5a; none → no test execution at al
 **Report Back**: Written plan and DISCOVERY.md locations, depth and reason, decision IDs, unresolved questions.
 ```
 
-   Done when task-planner returns the written artifact or a precise blocked prerequisite.
-3. Read the returned PLAN.md and DISCOVERY.md from disk directly; glob is not the existence
-   check for the hidden directory. Compare requirements, selected inputs, and digest with
-   the returned content using Plan Format and Discovery Companion. Resolve missing or
-   incomplete artifacts through task-planner before review.
-   Done when one on-disk plan and its discovery evidence are ready for automatic Phase 3.5 review.
+   Done when task-planner returns the artifact or available analysis with noted prerequisites.
+3. Read returned artifacts directly and compare requirements, selected inputs, and digest using Plan Format and Discovery Companion. Missing/incomplete output uses [bounded report recovery](../corvus-phase-4/reference/transport-retry.md); continue with available evidence and notes. A missing DISCOVERY.md or legacy CONTEXT.md does not block review; a missing plan permits analysis, not implementation approval.
+   Done when the on-disk plan is ready for Phase 3.5 or available analysis is reported with gaps.
 
-For a Phase 1 re-run, send its dated delta and plan path to task-planner's Discovery Companion
-procedure before continuing; use the persisted findings as the reviewer digest.
+For a Phase 1 re-run, send its dated delta and plan path for Discovery Companion persistence; continue review with available findings and disclose any persistence gap.
 
 ## Phase 3.5: High Accuracy Plan Review
 
@@ -77,7 +73,7 @@ Append this round's defect-key set to REVIEW HISTORY, read the revised PLAN.md, 
 Loop until `OK` at every depth, with no round cap, skip, or intervening approval question.
 `STALLED: true` takes precedence over another fix: stop and carry the residual list to Phase 3 as unresolved `REJECT`; corvus-auto halts and reports it.
 If execution diverges from the approved plan, stop and re-plan through this workflow.
-Done when review reaches `OK` or a stalled residual list is surfaced; a blocked dispatch holds the workflow.
+Done when review reaches `OK` or unresolved findings are surfaced; missing/malformed reports use bounded report recovery, then continue available analysis with a note, not invented approval.
 
 ## Phase 3: User Approval
 

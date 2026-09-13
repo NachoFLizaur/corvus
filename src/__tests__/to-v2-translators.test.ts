@@ -17,6 +17,7 @@ import { evaluateRules } from "../evaluate-rules"
 
 const corpus = loadAgents(agentDir)
 const ids = Object.keys(corpus)
+type ShellPolicy = Record<string, "allow" | "deny" | "ask">
 
 /** Translate a synthetic single-file corpus without touching the real `agent/`. */
 const translate = (frontmatter: Record<string, unknown>, prompt = "Body") =>
@@ -110,14 +111,28 @@ describe("toV2Agent field mapping", () => {
 })
 
 describe("toV2Permissions", () => {
+  test("discovery preserves the PR tool permission matrix and local state paths", () => {
+    for (const [name, config] of Object.entries(corpus)) {
+      const rules = toV2Permissions(config.permission)
+      const allowed = ["corvus-review", "corvus-review-auto", "pr-context-gatherer", "pr-comment-writer"].includes(name)
+      for (const op of ["find", "local"]) expect(evaluateRules(rules, "corvus_review_pr", op)).toBe(allowed ? "allow" : "deny")
+      for (const op of ["resolve", "pull", "push"]) expect(evaluateRules(rules, "corvus_review_sync", op)).toBe(["corvus-review", "corvus-review-auto"].includes(name) ? "allow" : "deny")
+      if (["corvus-review", "corvus-review-auto"].includes(name)) {
+        for (const action of ["corvus_review_persist", "corvus_review_lock", "corvus_review_verdict"]) {
+          expect(evaluateRules(rules, action, ".corvus/reviews/local__repo__topic-B")).toBe("allow")
+        }
+      }
+    }
+  })
+
   test("real corvus-review keeps both edit/write allow sequences after their denies", () => {
     const rules = toV2Permissions(corpus["corvus-review"].permission)
     const block: ReturnType<typeof toV2Permissions> = [
       { action: "edit", resource: "*", effect: "deny" },
       { action: "edit", resource: ".corvus/reviews/**", effect: "allow" },
       { action: "edit", resource: "**/.corvus/reviews/**", effect: "allow" },
-      { action: "edit", resource: ".corvus/reviews/*/.lock", effect: "allow" },
-      { action: "edit", resource: "**/.corvus/reviews/*/.lock", effect: "allow" },
+      { action: "edit", resource: ".corvus/tasks/*/reviews/**", effect: "allow" },
+      { action: "edit", resource: "**/.corvus/tasks/*/reviews/**", effect: "allow" },
     ]
     expect(rules[0]).toEqual({ action: "*", resource: "*", effect: "deny" })
     expect(rules.filter(rule => rule.action === "edit")).toEqual([...block, ...block])
@@ -133,36 +148,51 @@ describe("toV2Permissions", () => {
   })
 
   test("turns a scalar effect into one rule scoped to `*`", () => {
-    expect(toV2Permissions({ read: "allow", edit: "deny", doom_loop: "ask", corvus_review_payload: "deny", corvus_review_verify: "allow" })).toEqual([
+    expect(toV2Permissions({ read: "allow", edit: "deny", doom_loop: "ask", corvus_review_payload: "deny", corvus_review_verify: "allow", corvus_review_post: "allow", corvus_review_persist: "deny", corvus_review_lock: "deny", corvus_review_pr: "allow", corvus_review_verdict: "deny" })).toEqual([
       { action: "read", resource: "*", effect: "allow" },
       { action: "edit", resource: "*", effect: "deny" },
       { action: "doom_loop", resource: "*", effect: "ask" },
       { action: "corvus_review_payload", resource: "*", effect: "deny" },
       { action: "corvus_review_verify", resource: "*", effect: "allow" },
+      { action: "corvus_review_post", resource: "*", effect: "allow" },
+      { action: "corvus_review_persist", resource: "*", effect: "deny" },
+      { action: "corvus_review_lock", resource: "*", effect: "deny" },
+      { action: "corvus_review_pr", resource: "*", effect: "allow" },
+      { action: "corvus_review_verdict", resource: "*", effect: "deny" },
     ])
   })
 
   test("turns a resource map into one rule per resource in frontmatter order", () => {
     const rules = toV2Permissions(corpus["pr-comment-writer"].permission)
 
-    // `agent/pr-comment-writer.md:12-19`: a `*` deny followed by six allowlisted
+    // The writer's bash map: a `*` deny followed by legacy diagnostics and read
     // commands. Order is the whole precedence model (last match wins), so the
     // deny MUST come first and the allows MUST keep their authored sequence.
-    expect(rules.filter((rule) => rule.action === "shell")).toEqual([
+    const writerShell = rules.filter((rule) => rule.action === "shell")
+    expect(writerShell.slice(0, 4)).toEqual([
       { action: "shell", resource: "*", effect: "deny" },
-      { action: "shell", resource: "gh api --method GET repos/*/pulls/* -H Accept:*", effect: "allow" },
-      { action: "shell", resource: "gh api --method GET --paginate repos/*/pulls/*/files -H Accept:application/vnd.github+json", effect: "allow" },
-      {
-        action: "shell",
-        resource: "gh api --method POST repos/*/pulls/*/reviews --input .corvus/reviews/*/post-request.json",
-        effect: "allow",
-      },
       { action: "shell", resource: "jq . .corvus/reviews/*/post-request.json", effect: "allow" },
       { action: "shell", resource: "python3 -m json.tool .corvus/reviews/*/post-request.json", effect: "allow" },
       { action: "shell", resource: "shasum -a 256 .corvus/reviews/*/post-request.json", effect: "allow" },
     ])
-    // 25 existing rules + one paginated PR-files read allow = 26.
-    expect(rules).toHaveLength(26)
+    expect(writerShell).toEqual(Object.entries(corpus["pr-comment-writer"].permission!.bash as ShellPolicy).map(([resource, effect]) => ({ action: "shell", resource, effect })))
+    expect(writerShell).toHaveLength(59)
+    expect(rules).toHaveLength(82)
+    for (const name of ["corvus-review", "corvus-review-auto"]) {
+      const orchestrator = toV2Permissions(corpus[name].permission)
+      const shell = orchestrator.filter(rule => rule.action === "shell")
+      expect(shell.slice(0, 6)).toEqual([
+        { action: "shell", resource: "*", effect: "deny" },
+        { action: "shell", resource: "date -u +%Y-%m-%dT%H:%M:%SZ", effect: "allow" },
+        { action: "shell", resource: "shasum -a 256 .corvus/reviews/*/post-request.json", effect: "allow" },
+        { action: "shell", resource: "git rev-parse HEAD", effect: "allow" },
+        { action: "shell", resource: "gh auth status", effect: "allow" },
+        { action: "shell", resource: "gh pr checkout * --repo * --detach", effect: "allow" },
+      ])
+      expect(shell).toEqual(Object.entries(corpus[name].permission!.bash as ShellPolicy).map(([resource, effect]) => ({ action: "shell", resource, effect })))
+      expect(shell).toHaveLength(69)
+      expect(orchestrator).toHaveLength(104)
+    }
   })
 
   test("renames v1 actions onto their v2 tool names, collapsing write and patch", () => {
@@ -175,7 +205,7 @@ describe("toV2Permissions", () => {
 
     // Already-v2 names and actions with no v2 tool pass through, so the rename is
     // idempotent and safe to re-apply at hook time.
-    for (const action of ["shell", "subagent", "edit", "read", "lsp", "doom_loop", "corvus_review_payload", "corvus_review_verify"])
+    for (const action of ["shell", "subagent", "edit", "read", "lsp", "doom_loop", "corvus_review_payload", "corvus_review_verify", "corvus_review_post", "corvus_review_persist", "corvus_review_lock", "corvus_review_pr", "corvus_review_verdict", "corvus_review_sync"])
       expect(renameAction(action)).toBe(action)
   })
 

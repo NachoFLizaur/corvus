@@ -11,18 +11,14 @@ Before a question call, apply [Missing Question](state.md#missing-question) if t
 Use question() with Post Review, Edit Comments, Save Locally, and Re-run Review buttons. Post describes the constrained action and total inline count. Post emits decision post only for this final preview; Save Locally emits local_only and `This review was NOT posted to GitHub.` Done when the user has explicitly selected a route.
 
 ## Edit Within Axis Groups
-
-Present findings in their existing Standards/Spec groups, addressable by stable ID. Support remove ID, edit ID, add, change action, and done. Additions require all Finding fields, including explicit axis and dimension/pass, fresh collision-free ID, and cited evidence; a Spec addition requires its spec source/quote. Preserve tags on ordinary edits; an explicit user reclassification records both before/after identities rather than silently moving groups. Done when every edit is schema-valid or its missing input is requested.
-
+Present findings in their existing Standards/Spec groups, addressable by stable ID. Support remove ID, edit ID, add, change action, and done. Additions require all Finding fields, including explicit axis and dimension/pass, fresh collision-free ID, and cited evidence; a Spec addition requires its spec source/quote. Preserve tags on ordinary edits; an explicit user reclassification records both before/after identities rather than silently moving groups. Retain the original finding on an incomplete edit; leave incomplete additions unapplied and note the gap. Done when valid edits proceed and incomplete requests remain visible.
 Store each operation in edit_history with full before/after values and identity. Maintain source_findings unchanged as coverage evidence; apply the edit overlay before R3 filters so removal stays removed without fabricating review completion. A user action request becomes a trusted override inside the canonical caps. Done when modifications can be replayed and audited after resume.
 
-Emit an intermediate edit decision with the non-empty edit list, then run R3's full axis-local filtering, budgets, ordering, action, rendering, and persistence against the unchanged coverage statuses. Restore derived marker/notices from controls. Re-run R4 Preflight: hard rails now terminate locally without another prompt; otherwise show a new complete preview and ask again. Earlier approval does not carry over. Done when any post refers to the final edited bytes and constrained action.
+Emit an intermediate edit decision with the non-empty edit list, then run R3's full axis-local synthesis and `corvus_review_persist` checkpoint/candidate ops against unchanged coverage; restore derived notices and re-run R4 Preflight. Hard rails terminate locally with `corvus_review_lock` op `release`; otherwise show the new complete preview and ask again. Earlier approval never carries over.
 
 ## Dimension-Scoped Rerun
-
 <!-- Rerun invariant: trusted user scope and complete saved source_findings are read before replacement. Missing scope/source state fails local-only. At most two judgment reruns are offered; this limit disables that option only, while R2's separate transport recovery remains available. -->
-Use question() to select the scope; retain dimension names as the wire vocabulary:
-
+Use supplied scope or offer question() once; without a selection retain the existing review, note that no rerun occurred, and return to the preview without a replacement dispatch. Retain dimension names as the wire vocabulary:
 | Option | rerun_scope | Work via R2 |
 |--------|-------------|-------------|
 | Full Review | architecture, correctness, conventions, security | Both children, subject to configured eligibility |

@@ -205,3 +205,9 @@ P1 4b: PASS 2026-09-09 — typecheck and lint clean, see session log
 - 2026-09-09 approved at gate, depth kept at standard
 - 2026-09-09 P1 dispatched T1,T2 as ws-A (files: src/cli/status.ts, src/cli/types.ts), T3 as ws-B (docs/CLI.md)
 ````
+
+## Amendment 2026-09-13: planning records are committed
+
+> `.corvus/` is committed to the repo by default — if we don't commit it we lose track of the files, changes and intent behind what has been built; it's as if we didn't commit the ADRs. Users who want corvus local can only run reviews locally. This repo (corvus itself) is the exception.
+
+- **Decision:** Plans, discovery companions, ledgers, and review state under `.corvus/tasks/<feature>/**` are committed project memory by default, alongside the work, because uncommitted intent is lost just as an uncommitted ADR loses its rationale. This supersedes the three-condition "ADRs in the user's repo" gate as a condition for preserving planning records: these records are always committed, whether or not a separate ADR qualifies for creation. Keeping `.corvus/` local is supported for local reviews only, not planning or implementation; this is distinct from deferring Git delivery to the user. The Corvus repository itself is the sole exception, with `.corvus/` in its parent workspace and `.gitignore` retaining the exclusion here.

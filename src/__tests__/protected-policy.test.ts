@@ -41,11 +41,22 @@ const asCleanup = (value: Cleanup | void): Cleanup => {
 }
 
 describe("enforceProtected permission boundary", () => {
+  test("discovery cannot bypass detector denial or relax a writer ask", async () => {
+    const fake = createFakeContext()
+    await enforceProtected(fake.ctx)
+    for (const op of ["find", "local"]) {
+      for (const agent of ["pr-code-reviewer", "security-reviewer"]) {
+        expect((await fake.evaluate({ agent, action: "corvus_review_pr", resources: [op], effect: "allow" })).effect).toBe("deny")
+      }
+      expect((await fake.evaluate({ agent: "pr-comment-writer", action: "corvus_review_pr", resources: [op], effect: "ask" })).effect).toBe("ask")
+    }
+  })
+
   test("resolves each reviewer action to its authored effect", async () => {
     const fake = createFakeContext()
     await enforceProtected(fake.ctx)
 
-    // The authored policy is a `*` deny with read/glob/grep carved back out, so a
+    // The authored policy is a `*` deny with reads and shell forms carved back out, so a
     // correct hook must both tighten the write side AND leave the read side alone.
     const expected: readonly (readonly [string, "allow" | "deny"])[] = [
       ["read", "allow"],
@@ -57,6 +68,12 @@ describe("enforceProtected permission boundary", () => {
       ["webfetch", "deny"],
       ["corvus_review_payload", "deny"],
       ["corvus_review_verify", "deny"],
+      ["corvus_review_post", "deny"],
+      ["corvus_review_persist", "deny"],
+      ["corvus_review_lock", "deny"],
+      ["corvus_review_pr", "deny"],
+      ["corvus_review_verdict", "deny"],
+      ["corvus_review_sync", "deny"],
     ]
 
     for (const agent of ["pr-code-reviewer", "security-reviewer"])
@@ -77,7 +94,7 @@ describe("enforceProtected permission boundary", () => {
     const decision = await fake.evaluate({
       agent: "pr-code-reviewer",
       action: "bash",
-      resources: ["ls src"],
+      resources: ["rm src/file"],
       effect: "allow",
     })
 
@@ -92,12 +109,22 @@ describe("enforceProtected permission boundary", () => {
     await enforceProtected(fake.ctx)
 
     const allowlisted = [
-      "gh api --method GET repos/o/r/pulls/1 -H Accept:application/vnd.github+json",
-      "gh api --method POST repos/o/r/pulls/1/reviews --input .corvus/reviews/o__r__pr1/post-request.json",
       "jq . .corvus/reviews/o__r__pr1/post-request.json",
       "python3 -m json.tool .corvus/reviews/o__r__pr1/post-request.json",
       "shasum -a 256 .corvus/reviews/o__r__pr1/post-request.json",
+      "gh api --method GET repos/o/r/pulls/1 -H Accept:application/vnd.github+json",
+      "gh api --method GET repos/o/r/pulls/1 -H Accept:application/vnd.github+json --jq .head.sha",
+      "gh api --method GET repos/o/r/pulls/1 -H Accept:application/vnd.github.v3.diff",
       "gh api --method GET --paginate repos/o/r/pulls/1/files -H Accept:application/vnd.github+json",
+      "gh api --method GET --paginate repos/o/r/pulls/1/files -H Accept:application/vnd.github+json --jq .",
+      "gh api --method GET --paginate repos/o/r/pulls/1/files -H Accept:application/vnd.github.v3.diff",
+      "gh api --method GET --paginate repos/o/r/issues/1/files -H Accept:application/vnd.github+json",
+      "shasum -a 256 /tmp/post-request.json",
+      "shasum -a 256 .corvus/tasks/1/post-request.json",
+      "shasum -a 256 .corvus/reviews/o__r__pr1/other.json",
+      "jq . /tmp/post-request.json",
+      "python3 -m json.tool /tmp/post-request.json",
+      "git log --oneline -5", "git show HEAD", "ls src",
     ]
 
     for (const command of allowlisted) {
@@ -113,22 +140,15 @@ describe("enforceProtected permission boundary", () => {
     }
 
     for (const command of [
+      "gh api --method POST repos/o/r/pulls/1/reviews --input .corvus/reviews/o__r__pr1/post-request.json",
       "gh api --method POST --paginate repos/o/r/pulls/1/files -H Accept:application/vnd.github+json",
-      "gh api --method GET --paginate repos/o/r/pulls/1/files -H Accept:application/vnd.github+json --jq .",
-      "gh api --method GET --paginate repos/o/r/pulls/1/files -H Accept:application/vnd.github.v3.diff",
-      "gh api --method GET --paginate repos/o/r/pulls/1/files -H Accept:application/vnd.github+json; pwd",
-      "gh api --method GET --paginate repos/o/r/issues/1/files -H Accept:application/vnd.github+json",
       "gh api --method DELETE repos/o/r/pulls/1",
       "gh api --method POST repos/o/r/issues/1/comments --input .corvus/reviews/o__r__pr1/post-request.json",
       "gh api --method POST repos/o/r/pulls/1/comments --input .corvus/reviews/o__r__pr1/post-request.json",
       "gh api --method POST repos/o/r/pulls/1/reviews --input .corvus/review-payload.json",
       "gh api --method POST repos/o/r/pulls/1/reviews --input /tmp/post-request.json",
       "gh pr review 1 --approve",
-      "shasum -a 256 /tmp/post-request.json",
-      "shasum -a 256 .corvus/tasks/1/post-request.json",
-      "shasum -a 256 .corvus/reviews/o__r__pr1/other.json",
-      "jq . /tmp/post-request.json",
-      "python3 -m json.tool /tmp/post-request.json",
+      "git branch -D main", "git remote remove origin", "git commit -m x", "rm file",
     ]) {
       const denied = await fake.evaluate({ agent: "pr-comment-writer", action: "shell", resources: [command], effect: "allow" })
       expect({ command, effect: denied.effect }).toEqual({ command, effect: "deny" })
@@ -140,11 +160,24 @@ describe("enforceProtected permission boundary", () => {
     const mixed = await fake.evaluate({
       agent: "pr-comment-writer",
       action: "shell",
-      resources: [allowlisted[4], "shasum -a 256 /tmp/post-request.json"],
+      resources: [allowlisted[2], "rm file"],
       effect: "allow",
     })
 
     expect(mixed.effect).toBe("deny")
+  })
+
+  test("both detectors can inspect history and files without gaining gh or explicit write forms", async () => {
+    const fake = createFakeContext()
+    await enforceProtected(fake.ctx)
+    for (const agent of ["pr-code-reviewer", "security-reviewer"]) {
+      for (const command of ["git log --oneline -5", "git show HEAD", "git diff HEAD~1", "git blame src/index.ts", "ls src", "cat src/index.ts"]) {
+        expect((await fake.evaluate({ agent, action: "shell", resources: [command], effect: "allow" })).effect).toBe("allow")
+      }
+      for (const command of ["gh pr view 1", "git branch -D main", "git remote remove origin", "git commit -m x", "rm file"]) {
+        expect((await fake.evaluate({ agent, action: "shell", resources: [command], effect: "allow" })).effect).toBe("deny")
+      }
+    }
   })
 
   test("writer reads the artifact but cannot edit it or reconstruct the retired payload", async () => {
@@ -153,7 +186,8 @@ describe("enforceProtected permission boundary", () => {
     const artifact = ".corvus/reviews/o__r__pr1/post-request.json"
     const read = await fake.evaluate({ agent: "pr-comment-writer", action: "read", resources: [artifact], effect: "allow" })
     expect(read.effect).toBe("allow")
-    for (const [action, effect] of [["corvus_review_verify", "allow"], ["corvus_review_payload", "deny"]] as const) {
+    for (const [action, effect] of [["corvus_review_verify", "allow"], ["corvus_review_post", "allow"], ["corvus_review_pr", "allow"],
+      ["corvus_review_payload", "deny"], ["corvus_review_persist", "deny"], ["corvus_review_lock", "deny"], ["corvus_review_verdict", "deny"], ["corvus_review_sync", "deny"]] as const) {
       const decision = await fake.evaluate({ agent: "pr-comment-writer", action, resources: [artifact], effect: "allow" })
       expect({ action, effect: decision.effect }).toEqual({ action, effect })
     }
@@ -189,7 +223,7 @@ describe("enforceProtected permission boundary", () => {
 
     // `read` is authored `allow` for every protected agent, so this is the exact
     // case where a naive "apply corvus's decision" hook would loosen a host `ask`.
-    const actions = ["read", "glob", "grep", "shell", "edit", "subagent", "webfetch", "list", "skill", "bash", "write", "corvus_review_payload", "corvus_review_verify"]
+    const actions = ["read", "glob", "grep", "shell", "edit", "subagent", "webfetch", "list", "skill", "bash", "write", "corvus_review_payload", "corvus_review_verify", "corvus_review_post", "corvus_review_persist", "corvus_review_lock", "corvus_review_pr", "corvus_review_verdict", "corvus_review_sync"]
 
     for (const agent of PROTECTED_AGENTS)
       for (const action of actions) {

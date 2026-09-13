@@ -1,4 +1,5 @@
 import { Buffer } from "node:buffer"
+import { isLegacyReviewPath, isReviewPath } from "./review-persist"
 import { createHash } from "node:crypto"
 import * as nodeFs from "node:fs"
 import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path"
@@ -217,6 +218,8 @@ function isMissing(error: unknown): boolean {
  * fail closed, and only an absent artifact leaf is permitted for creation.
  * No option disables containment. These preflight checks are not an atomic
  * filesystem snapshot and do not prevent concurrent path replacement.
+ * With a .corvus host root, both the requested and real paths must include the
+ * review layout before I/O; artifact creation also rejects legacy namespaces.
  */
 function checkedPath(
   path: string,
@@ -230,10 +233,13 @@ function checkedPath(
     const configuredRoot = resolve(opts.reviewStateRoot)
     const root = fs.realpathSync(configuredRoot)
     if (!fs.statSync(root).isDirectory()) return reject("path-resolution-error")
-    const absolute = resolve(path)
-    if (!inside(configuredRoot, absolute) && !inside(root, absolute)) return reject("path-outside-root")
+     const absolute = resolve(path)
+     if (!inside(configuredRoot, absolute) && !inside(root, absolute)) return reject("path-outside-root")
+     if (basename(configuredRoot) === ".corvus" && (!isReviewPath(relative(inside(configuredRoot, absolute) ? configuredRoot : root, absolute))
+       || (allowMissing && isLegacyReviewPath(absolute)))) return reject("path-outside-root")
     const parent = fs.realpathSync(dirname(absolute))
-    if (!inside(root, parent)) return reject("path-outside-root")
+     if (!inside(root, parent)) return reject("path-outside-root")
+     if (basename(configuredRoot) === ".corvus" && !isReviewPath(relative(root, parent))) return reject("path-outside-root")
     if (!fs.statSync(parent).isDirectory()) return reject("path-resolution-error")
     const target = resolve(parent, basename(absolute))
     let metadata: ReturnType<ReviewPayloadFs["lstatSync"]>
@@ -396,7 +402,7 @@ export function measureFile(candidatePath: string, opts: ReviewPayloadOptions) {
  */
 export function createReviewToolExecutors(directory: string) {
   const opts = typeof directory === "string" && isAbsolute(directory)
-    ? { reviewStateRoot: resolve(directory, ".corvus", "reviews") } : undefined
+     ? { reviewStateRoot: resolve(directory, ".corvus") } : undefined
   const path = (value: string) => isAbsolute(value) ? value : `${directory}${sep}${value}`
   const validate = (input: unknown, operations: readonly string[]): CandidateRejection | undefined => {
     if (!isRecord(input)) return invalid("arguments")

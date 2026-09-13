@@ -34,8 +34,7 @@ task's done-when with evidence; PASS → 4c; FAIL → the fix loop.
 
 1. Read the current phase and predecessor edges using Plan Format's outgoing `blocks:`
    convention. Overlay verified task completions as `[x]` in session state while disk
-   updates wait for 4c. Hold failed tasks and their dependents; surface an empty frontier
-   with unfinished work as a sequencing or prerequisite gap.
+   updates wait for 4c. Hold failed tasks and their dependents; if the frontier is empty, report the sequencing/prerequisite gap and continue read-only diagnosis or other independent authorized work.
    Done when every candidate has satisfied predecessors and unresolved work is accounted for.
 2. Before each frontier wave, send one scoped code-explorer [ownership resolution](reference/dispatch-templates.md#ownership-resolution)
    with the wave's PLAN.md task lines; derive per-task allowlists from its candidates and overlap matrix.
@@ -74,7 +73,7 @@ Done when the new form serves all consumers and the contract/integration task ha
 Use acceptance-only for either selected Tests policy, following Phase 2 Tests. Dispatch
 code-quality with the whole phase's task lines, done-whens, ownership, changes, and 4a
 evidence via the linked acceptance-check template. This gate exists at every depth.
-<!-- Gate oracle: task criteria, current files, and authorized evidence, read before closing the phase. Missing or failing evidence holds advancement; only PASS admits 4c. The triage below replaces the independent dispatch, not the gate; depth never disables the gate. -->
+<!-- Gate oracle: task criteria, current files, and authorized evidence, read before closing the phase. Missing reports use transport recovery while independent authorized work continues with gaps noted; failing evidence holds advancement and only evidenced PASS admits 4c. The triage below replaces the independent dispatch, not the gate; depth never disables the gate. -->
 Risk-triaged skip: only a single-dispatch phase with all per-task reports PASS, zero
 deviations, and no test or parity surface touched may omit the code-quality dispatch.
 Inspect changed files/hunks and reports; lightweight verification checks every done-when
@@ -116,7 +115,5 @@ phase or [Phase 5](../corvus-phase-5/SKILL.md) when implementation phases are co
 
 ## Recover Child Transport
 
-Use [transport recovery](reference/transport-retry.md) for empty, truncated, or schema-invalid
-child reports: one resume, then one byte-identical redispatch, mutation-aware for implementers.
-Recovery preserves fix budgets; cancellations require `AUDIT INHERITED STATE` before overlap.
-Done when a conforming result is routed or the owning step's failure path holds execution.
+Use [transport recovery](reference/transport-retry.md) for empty, truncated, or malformed reports: one same-session retry, then continue with available results and a note, never inventing PASS or authority. Recovery preserves fix budgets; cancellations require `AUDIT INHERITED STATE` before overlap.
+Done when valid results are routed and gaps reported without blocking independent authorized work.

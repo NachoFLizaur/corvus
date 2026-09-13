@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { existsSync, readdirSync, readFileSync } from "node:fs"
 import { resolve } from "node:path"
 import { evaluateRules } from "../evaluate-rules"
+import v1Plugin from "../index"
 import { loadAgents } from "../load-agents"
 import { loadCommands } from "../load-commands"
 import { loadSkills } from "../load-skills"
@@ -114,6 +115,12 @@ const KNOWN_PERMISSION_ACTIONS: readonly string[] = [
   "web-research_fetch_pages",
   "corvus_review_payload",
   "corvus_review_verify",
+  "corvus_review_post",
+  "corvus_review_persist",
+  "corvus_review_lock",
+  "corvus_review_pr",
+  "corvus_review_verdict",
+  "corvus_review_sync",
 ]
 
 /**
@@ -179,6 +186,16 @@ const invoke = async (definition: { execute: (input: CommandInvocation) => Promi
  * ------------------------------------------------------------------ */
 
 describe("agent corpus frontmatter", () => {
+  test("discovery uses the existing PR tool grant without separate find/local actions", () => {
+    for (const file of markdownFiles(agentDir)) {
+      const permission = frontmatterOf(resolve(agentDir, file)).permission as Record<string, unknown>
+      const allowed = ["corvus-review.md", "corvus-review-auto.md", "pr-context-gatherer.md", "pr-comment-writer.md"].includes(file)
+      expect(permission.corvus_review_pr ?? permission["*"], file).toBe(allowed ? "allow" : "deny")
+      expect(permission).not.toHaveProperty("corvus_review_find")
+      expect(permission).not.toHaveProperty("corvus_review_local")
+    }
+  })
+
   test("carries only the five allowlisted keys, and always the four required ones", () => {
     const files = markdownFiles(agentDir)
     expect(files).toHaveLength(16)
@@ -359,7 +376,7 @@ describe("skill corpus identity", () => {
  * ------------------------------------------------------------------ */
 
 describe("protected agent coverage", () => {
-  test("every protected agent ships, and the read-only reviewers deny shell and edit", () => {
+  test("every protected agent ships, and reviewers allow shell reads but deny explicit writes and edits", () => {
     const agents = loadAgents(agentDir)
 
     // A protected name with no corpus file is the worst failure mode available:
@@ -377,6 +394,7 @@ describe("protected agent coverage", () => {
     const widened: string[] = []
     for (const agent of READ_ONLY_REVIEWERS) {
       const rules = toV2Permissions(agents[agent].permission)
+      for (const command of ["git log --oneline", "git show HEAD", "ls src"]) expect(evaluateRules(rules, "shell", command)).toBe("allow")
 
       for (const action of ["shell", "edit"])
         for (const resource of ["src/index.ts", "rm -rf /", "*"]) {
@@ -387,4 +405,60 @@ describe("protected agent coverage", () => {
 
     expect(widened).toEqual([])
   })
+})
+
+/**
+ * The ordered pre-compaction forms plus approved restorations below are the oracle. Read packaged maps and
+ * v1 config before comparing; changed keys, effects, order or overlong bash lines
+ * fail these assertions. No rollout flag bypasses the preservation checks.
+ */
+test("bash compaction preserves captured entry order and v1 hook allow counts for all six review agents", async () => {
+  const gh = ["gh pr view *", "gh pr diff *", "gh pr checks *", "gh pr list *", "gh pr status*",
+    "gh issue view *", "gh issue list *", "gh repo view *", "gh api --method GET *", "gh api user*",
+    "gh search *", "gh run list *", "gh run view *", "gh auth status"]
+  const git = ["git status*", "git log*", "git show*", "git diff*", "git blame*", "git shortlog*",
+    "git branch --list*", "git branch -a*", "git branch --show-current", "git remote -v", "git remote get-url *",
+    "git rev-parse*", "git merge-base*", "git ls-files*", "git rev-list*", "git cat-file -p *", "git worktree list*", "git fetch *"]
+  const utilities = ["ls *", "wc *", "head *", "tail *", "cat *", "uniq *", "file *", "stat *", "jq *", "shasum *",
+    "sha256sum *", "date *", "python3 -m json.tool *", "test *", "printf *", "echo *", "pwd", "which *", "env", "bun --version", "node --version"]
+  const barePr = ["gh api repos/*/pulls/*", "gh api repos/*/pulls/*/*"]
+  const bareApi = [...barePr, "gh api --paginate repos/*/pulls/*/*", "gh api repos/*/commits/*",
+    "gh api repos/*/compare/*", "gh api repos/*/contents/*", "gh api repos/*/issues/*"]
+  const legacyApi = ["gh api repos/*/pulls/*/reviews --jq *", "gh api --paginate repos/*/pulls/*/reviews --jq *",
+    "gh api repos/*/pulls/*/comments --jq *", "gh api repos/*/compare/* --jq *"]
+  const orchestrator = ["date -u +%Y-%m-%dT%H:%M:%SZ", "shasum -a 256 .corvus/reviews/*/post-request.json",
+    "git rev-parse HEAD", "gh auth status", "gh pr checkout * --repo * --detach", ...gh, ...legacyApi, ...bareApi, ...git, ...utilities]
+  const before: Array<[string, number, string[]]> = [
+    ["corvus-review", 68, orchestrator],
+    ["corvus-review-auto", 68, orchestrator],
+    ["pr-context-gatherer", 61, ["gh api --method GET *", "git log*", "git blame*", "git diff*", "git show*",
+      "git shortlog*", "git rev-parse*", "git ls-files*", "git merge-base*", ...gh, ...bareApi, ...git, ...utilities, "sort *"]],
+    ["pr-comment-writer", 58, ["jq . .corvus/reviews/*/post-request.json",
+      "python3 -m json.tool .corvus/reviews/*/post-request.json", "shasum -a 256 .corvus/reviews/*/post-request.json",
+      ...gh, ...barePr, ...git, ...utilities]],
+    ["pr-code-reviewer", 39, [...git, ...utilities]],
+    ["security-reviewer", 39, [...git, ...utilities]],
+  ]
+  const hooks = await v1Plugin({} as Parameters<typeof v1Plugin>[0])
+  if (!hooks.config) throw new Error("Missing v1 config hook")
+  const config: Parameters<NonNullable<typeof hooks.config>>[0] = {}
+  await hooks.config(config)
+  const loaded = loadAgents(agentDir)
+  for (const [name, count, forms] of before) {
+    const expected: [string, string][] = [["*", "deny"], ...[...new Set(forms)].map((form): [string, string] => [form, "allow"])]
+    const raw = readFileSync(resolve(agentDir, `${name}.md`), "utf8")
+    const permission = parseFrontmatter(raw).frontmatter.permission
+    if (!isRecord(permission)) throw new Error(`Missing permission: ${name}`)
+    for (const bash of [permission.bash, loaded[name].permission?.bash, config.agent?.[name]?.permission?.bash]) {
+      if (!isRecord(bash)) throw new Error(`Missing bash map: ${name}`)
+      expect(Object.entries(bash), name).toEqual(expected)
+    }
+    const hostRules = toV2Permissions(config.agent?.[name]?.permission).filter(rule => rule.action === "shell")
+    expect(hostRules, name).toEqual(toV2Permissions({ bash: Object.fromEntries(expected) }))
+    expect(hostRules.filter(rule => rule.effect === "allow"), name).toHaveLength(count)
+    const block = raw.match(/^  bash: \{\n[\s\S]*?^  \}/m)?.[0]
+    if (!block) throw new Error(`Missing flow mapping: ${name}`)
+    expect(block.split("\n")[1]).toBe('    "*": "deny",')
+    for (const line of block.split("\n")) expect(line.length, `${name}: ${line}`).toBeLessThanOrEqual(110)
+  }
 })

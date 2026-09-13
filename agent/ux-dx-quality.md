@@ -3,6 +3,14 @@ description: "Subjective quality assessment agent for UX (user experience), DX (
 mode: subagent
 temperature: 0.3
 permission:
+  corvus_review_payload: "deny"
+  corvus_review_verify: "deny"
+  corvus_review_post: "deny"
+  corvus_review_persist: "deny"
+  corvus_review_lock: "deny"
+  corvus_review_pr: "deny"
+  corvus_review_verdict: "deny"
+  corvus_review_sync: "deny"
   read: "allow"
   glob: "allow"
   grep: "allow"

@@ -15,7 +15,7 @@ their completed source plan stays read-only, and feature-level extraction is not
 Have task-planner record final completion through its
 PROGRESS_UPDATE mode, supplying the final
 gate outcomes and evidence. Read back the completed PLAN.md and preserve its history.
-Done when required final outcomes and completion are recorded, or missing evidence holds closure.
+If reports or recording are unavailable, use [bounded recovery](../corvus-phase-4/reference/transport-retry.md), then continue to 6b with available results and pending bookkeeping noted; preserve incomplete state. Done when completion is evidenced and recorded or gaps reach a partial summary.
 
 Dispatch task-planner once for the entire feature:
 
@@ -46,7 +46,7 @@ actually run or omitted by policy. If artifacts change after validation, return 
 evidence to Phase 5 before claiming completion.
 
 ```markdown
-## Implementation Complete
+## Implementation Complete / Partial Results
 **Feature**: <name>
 **Depth**: <selected effort and reason>
 **Plan**: <PLAN.md location>
@@ -58,6 +58,7 @@ evidence to Phase 5 before claiming completion.
 | Role | Files and Actions | Outcome |
 |------|-------------------|---------|
 | <product / tests / docs / configuration> | <created, modified, removed paths> | <summary> |
+| Planning records | `.corvus/tasks/<feature>/**` — PLAN.md, DISCOVERY.md, ledgers, and `reviews/` state | Project memory; commit with the product diff |
 
 ### Dispatch History
 <Task → dispatch → resolved file ownership, from the plan's Log.>

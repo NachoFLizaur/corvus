@@ -30,6 +30,7 @@ Structured planning. Delegated execution. Quality gates at every boundary.
   - [Commands (4)](#commands-4)
   - [Skills (18)](#skills-18)
 - [How Corvus Works](#how-corvus-works)
+  - [What Corvus commits to your repo](#what-corvus-commits-to-your-repo)
 - [Corvus PR Review](#corvus-pr-review)
 - [Upgrading from 0.9 to 0.10](#upgrading-from-09-to-010)
 - [Project Structure](#project-structure)
@@ -319,6 +320,10 @@ The model chooses `depth: quick | standard | deep`, recorded as one `**Depth**` 
 <!-- adapted from mattpocock/skills (MIT) -->
 The single plan holds immutable user requirements, acceptance criteria, decisions, unknowns, tasks, gates, and history. Tasks are vertical slices with `blocks:` dependencies and observable done-whens. Implementation paths and code snippets stay out of the plan body; exact file ownership is resolved at dispatch and recorded in its Log. See [Plan Format](agent/task-planner.md#plan-format).
 
+### What Corvus commits to your repo
+
+`.corvus/` is committed to your repo by default: `.corvus/tasks/<feature>/**` contains PLAN.md, DISCOVERY.md, ledgers, and task-scoped `reviews/` state as project memory, not scratch. Keep these records with the product diff so the files, changes, and intent remain traceable. Interactive Corvus lists them in its commit handoff; Corvus Auto includes their exact file paths in opted-in Git delivery and otherwise leaves that commit to you. Keeping Corvus's records local is supported only for local reviews, not the planning/implementation workflow; `delivery_mode: local_only` defers Git delivery rather than opting out of committed planning records. The Corvus repository itself is the exception described in [AGENTS.md](AGENTS.md#planning-records).
+
 ### From Request to Completion
 
 - **Clarify and discover** — [requirements grilling](skill/corvus-phase-0/SKILL.md) returns question batches; [discovery](skill/corvus-phase-1/SKILL.md) grounds the plan at every depth. A spec-complete request can bypass grilling, not discovery.
@@ -360,7 +365,7 @@ Architecture decisions belong in the user's repository at [`docs/decisions/`](do
 
 ## Corvus PR Review
 
-Corvus PR Review is a multi-pass code review system that brings the same structured, multi-agent approach to pull request reviews. It runs two detection children in parallel — Standards (`@pr-code-reviewer`) and Spec plus independent security (`@security-reviewer`) — keeps findings separate by axis through synthesis, and posts formatted reviews to GitHub — either interactively with user gates or fully autonomously.
+Corvus PR Review is a multi-pass code review system for pull requests and local changes. It runs two detection children in parallel — Standards (`@pr-code-reviewer`) and Spec plus independent security (`@security-reviewer`) — keeps findings separate by axis through synthesis, and posts formatted PR reviews to GitHub — either interactively with user gates or fully autonomously. LOCAL reviews finish with a saved document and a chat summary, never a post.
 
 ### When to Use
 
@@ -375,9 +380,19 @@ Corvus PR Review is a multi-pass code review system that brings the same structu
 @corvus-review review PR #123
 @corvus-review review https://github.com/owner/repo/pull/123
 @corvus-review-auto #456    # autonomous; auto-posts only when every rail passes
+@corvus-review-auto review this PR    # discover the current branch's PR
+@corvus-review review my changes      # LOCAL when no PR is found
 ```
 
-**Token scopes:** `repo` covers reading PRs, diffs and reviews and posting reviews; without suitable repository access, required reads or posting fail (public repositories may use narrower access). `read:user` makes identity readable and lifts the unknown-identity `COMMENT_ONLY` cap; if identity is unreadable, R0 tries `gh auth status` once on HTTP 403 and retains the cap if no usable login is found, without bypassing other rails. `checks:read` (Checks read permission for fine-grained tokens) enables CI verification; without check access, CI is reported unavailable, never assumed passing.
+**Intake precedence:** GitHub PR URL → `owner/repo#N` → `#N`/`N` (resolve the repository) → named branch → auto-find the current branch's PR → LOCAL when no PR is found. Branch discovery uses `corvus_review_pr` op `find`; LOCAL evidence uses op `local`. Missing input is not a stop. Ambiguous candidates use an interactive selection when available, otherwise OPEN first and then greatest PR number, with the choice disclosed.
+
+**LOCAL mode:** review the current worktree's changes against the default-branch merge base, including uncommitted edits. State uses the resolved review root described below: namespace-level `review-input.json` plus `<code_head>/REVIEW_DOCUMENT.md` and `meta.yaml` (`mode: local`, dirty state recorded). The local lock, history-only verdict and head verdict still run. PR identity, repository config, CI checks, prior PR reviews and remote-lock semantics are skipped with notes; built-in defaults plus trusted invocation settings apply. R3 creates no candidate or posting artifact, R4 offers no posting choice, and R5 releases the owned lock and prints the document path and separate axis counts to chat without a writer dispatch. A clean default branch with no PR, no commits ahead and no changes ends with a one-sentence no-work result.
+
+**Review state and layout:** review state is committed by default on the feature branch. `corvus_review_sync` resolves `.corvus/tasks/<task>/reviews/pr<N>/` when the unfiltered changed-file inventory identifies exactly one task, otherwise `.corvus/reviews/pr<N>/`; LOCAL substitutes `local-<branch-slug>` for `pr<N>`. Legacy `<owner>__<repo>__pr<N>` and `local__<repo>__<slug>` roots remain readable through `legacy_root` for one release and are never written again. `.corvus/**` is excluded from review scope. `state_sync: false` skips state pull/push, not PR review posting; sync failures retain local state and proceed with a note. Fork PR state is never pushed, and LOCAL sync requires an upstream.
+
+**Friction policy:** recoverable gaps proceed with a note and available evidence, within existing retry bounds. A `refuse_delta: true` verdict is retained and disclosed while the requested review proceeds once; only a trusted invocation supplies `force_delta`. Reviewers may use frontmatter-granted read-only bash; coordinators may perform small read-only checks directly. A/B safety and artifact-integrity stops remain: missing authority, invalid identity, failed verification and lock-ownership failures do not authorize posting or mutation. Diagnostics never substitute for verification, and POST stays tool-only.
+
+**Token scopes:** `repo` covers reading PRs, diffs and reviews and posting reviews; without suitable repository access, required reads or posting fail (public repositories may use narrower access). `corvus_review_pr` op `identity` owns identity lookup and its 403 fallback; unavailable identity retains the `COMMENT_ONLY` cap with `read:user` guidance. `checks:read` (Checks read permission for fine-grained tokens) enables CI verification; without check access, CI is reported unavailable, never assumed passing.
 
 ### Workflow
 
@@ -421,7 +436,7 @@ R5: Descriptor-only dispatch to @pr-comment-writer for file-input posting, or lo
 - **Artifact posting** — R4 persists approved `post-request.json` bytes and their SHA-256; R5 sends only the descriptor. `@pr-comment-writer` verifies digest, schema, current head and anchors before posting from the file; failed verification stays local
 - **Just-in-time context gathering** — no pre-built index needed, works on any repo
 
-Measurement and freezing are plugin tools rather than shell commands: `corvus_review_payload` measures R3's candidate against the posting ceilings and, after R4 authorization, freezes the canonical `post-request.json` with a byte-equal read-back and SHA-256; `corvus_review_verify` re-checks that file at R5 and inside `@pr-comment-writer` immediately before each POST. Both review orchestrators may call both tools, the writer may call verify only, and detection agents call neither. If the review stops local-only — a missing question tool on a headless host, a budget violation, or a tool that is not exposed — the checkpoint is kept and the mode stays interactive; say `post` in a session that has the question tool to resume: R0 revalidates head, base and config, skips R1/R2 when the head is unchanged, re-measures, asks for authorization again and posts. Use `@corvus-review-auto` deliberately when you want posting without a question tool.
+Review state and transport use plugin tools: `corvus_review_persist` writes input, checkpoint, metadata and candidate files and reads document sections; `corvus_review_lock` acquires/releases ownership; `corvus_review_pr` supplies structured PR reads, with writer access limited to head/diff/files. Models never edit review-state files. `corvus_review_payload` measures the candidate and freezes authorized bytes; `corvus_review_verify` checks them before the writer-only `corvus_review_post` rechecks the artifact/head and submits the unchanged file. Rejection stays local-only/not-posted; uncertainty permits read-only reconciliation, not another attempt. Capability failures preserve any complete checkpoint and invocation mode. Say `post` to restart R0, revalidate head/base/config, resume compatible unchanged-head synthesis, remeasure and authorize again; interactive posting requires question. Use `@corvus-review-auto` deliberately for question-free posting. Missing tool storage or projected source evidence is reported explicitly, never repaired with manual writes or invented content.
 
 ### Configuration
 
@@ -447,7 +462,7 @@ path_rules:
 
 ### Convergence and calibration
 
-Review rounds distinguish document counts from the `converged` verdict and human-approval recommendation; [Convergence and Continuation](skill/corvus-review-extras/SKILL.md#convergence-and-continuation) owns the predicate, local-only default, optional `post_converged_summary`, and trusted `force_delta` continuation control. [Configuration](skill/corvus-review-extras/config.md) owns shared nit/minor totals, [R3](skill/corvus-review-r3/SKILL.md) owns allocation and review-fix/delta polish filtering, and [R2](skill/corvus-review-r2/SKILL.md) owns delta scope and the merge-blocking Fowler baseline. [Finding origin](skill/corvus-review-extras/schemas.md#finding) is lineage evidence, not inferred fix intent; [state](skill/corvus-review-extras/state.md) retains local and posted outcomes without changing invocation mode.
+Review rounds distinguish document counts from the `converged` verdict and human-approval recommendation; [Convergence and Continuation](skill/corvus-review-extras/SKILL.md#convergence-and-continuation) owns the predicate, local-only default, optional `post_converged_summary`, and proceed-with-note continuation with trusted-only `force_delta` input. [Configuration](skill/corvus-review-extras/config.md) owns shared nit/minor totals, [R3](skill/corvus-review-r3/SKILL.md) owns allocation and review-fix/delta polish filtering, and [R2](skill/corvus-review-r2/SKILL.md) owns delta scope and the merge-blocking Fowler baseline. [Finding origin](skill/corvus-review-extras/schemas.md#finding) is lineage evidence, not inferred fix intent; [state](skill/corvus-review-extras/state.md) retains local and posted outcomes without changing invocation mode.
 
 ---
 
@@ -529,7 +544,7 @@ bun test
 
 ### Release Gates
 
-After building, run `bun run smoke:review --host v2`, then `bun run smoke:review --host v1 --full`. This paid, real-model gate packs the working tree, clones PR #8 by default, isolates host state, and requires review artifacts plus measure → freeze → verify. By default the writer dispatch is denied by a host permission override; with `--writer` (included in `--full`, v1 only) the real `pr-comment-writer` executes and the gate requires its own `corvus_review_verify` call, the exact `POST` form reaching the read-only `gh` shim and being blocked, no shell measurement commands, and a non-`posted` result. It uses Bedrock/GitHub authentication without logging credentials; the shim blocks posting through that route, not arbitrary network clients. Options: `--pr <url>`, `--model <id>` (default `amazon-bedrock/global.openai.gpt-6-astra`), `--timeout-min <minutes>` (default 40), `--writer`/`--full`, and `--keep`. `bash scripts/smoke-writer.sh` runs only the writer against canned PR reads (no network) for a fast tool-path check. Failures always retain logs/artifacts and private sandbox auth; do not upload the whole sandbox. Exit codes: 0 pass, 3 host/plugin/auth, 4 fixture/GitHub read, 5 incomplete review/unexpected denial, 6 posting barrier breach, 124 timeout.
+After building, run `bun run smoke:review --host v2`, then `bun run smoke:review --host v1 --full`. This paid, real-model gate packs the working tree, clones PR #8 by default, isolates host state, and requires review artifacts plus measure → freeze → verify. By default the writer dispatch is denied by a host permission override; with `--writer` (included in `--full`, v1 only) the real `pr-comment-writer` executes and the gate requires its own `corvus_review_verify` call, one `corvus_review_post` call whose exact `POST` reaches the read-only `gh` shim and is blocked, no shell measurement commands, and a non-`posted` result. It uses Bedrock/GitHub authentication without logging credentials; the shim blocks posting through that route, not arbitrary network clients. Options: `--pr <url>`, `--model <id>` (default `amazon-bedrock/global.openai.gpt-6-astra`), `--timeout-min <minutes>` (default 40), `--writer`/`--full`, and `--keep`. `bash scripts/smoke-writer.sh` runs only the writer against canned PR reads (no network) for a fast tool-path check with a review body longer than the host read tool's 2,000-character line limit; `--head-moved` moves the canned head after the writer's own check so the gate asserts the post tool's `head-moved` rejection with no POST issued. Failures always retain logs/artifacts and private sandbox auth; do not upload the whole sandbox. Exit codes: 0 pass, 3 host/plugin/auth, 4 fixture/GitHub read, 5 incomplete review/unexpected denial, 6 posting barrier breach, 124 timeout.
 
 ### Safe Local Development
 

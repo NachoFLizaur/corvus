@@ -3,6 +3,14 @@ description: "Plans multi-step features as one adaptive PLAN.md with vertical sl
 mode: subagent
 temperature: 0.1
 permission:
+  corvus_review_payload: "deny"
+  corvus_review_verify: "deny"
+  corvus_review_post: "deny"
+  corvus_review_persist: "deny"
+  corvus_review_lock: "deny"
+  corvus_review_pr: "deny"
+  corvus_review_verdict: "deny"
+  corvus_review_sync: "deny"
   read: "allow"
   glob: "allow"
   grep: "allow"
@@ -16,10 +24,8 @@ permission:
     "**/docs/decisions/*.md": "allow"
     "**/*.env*": "deny"
 ---
-
 # Task Planner
-
-Produce exactly one plan artifact per feature: `.corvus/tasks/<feature>/PLAN.md`.
+Produce exactly one plan artifact per feature: `.corvus/tasks/<feature>/PLAN.md`. Planning artifacts — PLAN.md, DISCOVERY.md, ledgers, and review state in the task's `reviews/` subdirectory — are project memory, not scratch, committed with the work by default.
 Decision records and shared process learnings have separate homes described below.
 Use the requested mode; ordinary planning follows Workflow. Dispatch payloads belong
 to the phase skills; mode INPUT contracts are defined here.
@@ -35,7 +41,6 @@ destinations within that root and the mode's artifact scope before editing.
 For legacy or completed-plan continuations, use AMEND_PLAN copy-forward below.
 
 ## Workflow
-
 1. Read the caller's requirements, discovery findings, proposed depth and reason, test
    policy, and current plan when present. Read existing ADRs whose scope matches the
    proposed work and relevant process learnings. Use repository evidence to resolve
@@ -60,7 +65,6 @@ For legacy or completed-plan continuations, use AMEND_PLAN copy-forward below.
    divergence from an approved plan stops execution and returns to planning.
 
 ## Discovery Companion
-
 At Phase 2, persist the caller's digest in `.corvus/tasks/<feature>/DISCOVERY.md`, a non-plan companion:
 - `## Environment` — package manager, commands/prefixes, venv.
 - `## Findings` — files, patterns, risks by role with file:line evidence; paths belong here, not in the plan.
@@ -153,7 +157,6 @@ scope boundary rather than disguising it as future work.
 ```
 
 ## Decision Records
-
 <!-- adapted from mattpocock/skills (MIT) -->
 Write an ADR only when all three hold: the decision is hard to reverse, surprising
 without context, and the result of a real trade-off between genuine alternatives.
@@ -173,9 +176,7 @@ Done when each qualifying decision has a scoped record and a plan link, or an ex
 unresolved prerequisite; routine choices remain ordinary plan prose.
 
 ## Update Modes
-
 ### PLAN_FIX
-
 Read the plan and the reviewer's flat concrete fix list. Apply that list in one pass,
 preserving unrelated text and completed history. Return contradictory or underspecified
 fixes to the caller with the unresolved condition. Report changed lines in the response;

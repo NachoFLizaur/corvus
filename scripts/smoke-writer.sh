@@ -1,14 +1,19 @@
 #!/usr/bin/env bash
 # Direct pr-comment-writer execution proof on OpenCode 1. Runs only the writer
 # against a canned, network-free gh shim whose POST admission is blocked, so the
-# gate observes the real tool path (corvus_review_verify → blocked POST) without
-# a full review and without any remote mutation. Failed runs retain evidence.
+# gate observes the real tool path (corvus_review_verify → corvus_review_post →
+# blocked POST) without a full review and without any remote mutation. The fixture
+# review body is one ≥3,000-character line, so the host read tool truncates it and
+# the run proves the writer treats that as expected. --head-moved moves the canned
+# head after the writer's own GET: the post tool must reject head-moved with no POST.
+# Failed runs retain evidence.
 set -euo pipefail
 umask 077
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 MODEL="amazon-bedrock/global.openai.gpt-6-astra"
 KEEP=0
+HEAD_MOVED=0
 TIMEOUT_MIN=10
 WORK=""
 START=$SECONDS
@@ -17,7 +22,7 @@ HEAD_SHA="$(printf 'a%.0s' $(seq 1 40))"
 
 die() { printf '| preflight | FAIL | %s |\n' "$2" >&2; exit "$1"; }
 cap() { local seconds="$1"; shift; perl -e 'alarm shift; exec @ARGV' "$seconds" "$@"; }
-usage() { printf '%s\n' 'Usage: bash scripts/smoke-writer.sh [--model ID] [--keep] [--timeout-min N=10]'; }
+usage() { printf '%s\n' 'Usage: bash scripts/smoke-writer.sh [--model ID] [--keep] [--head-moved] [--timeout-min N=10]'; }
 while (($#)); do
   case "$1" in
     --model|--timeout-min)
@@ -25,6 +30,7 @@ while (($#)); do
       case "$1" in --model) MODEL="$2" ;; --timeout-min) TIMEOUT_MIN="$2" ;; esac
       shift 2 ;;
     --keep) KEEP=1; shift ;;
+    --head-moved) HEAD_MOVED=1; shift ;;
     --help|-h) usage; exit 0 ;;
     *) usage; die 3 "unknown argument: $1" ;;
   esac
@@ -56,8 +62,8 @@ mkdir -p "$BASE"
 WORK="$(mktemp -d "$BASE/smoke-writer.XXXXXX")"
 WORK="$(cd "$WORK" && pwd -P)"
 export SMOKE_WORK="$WORK" SMOKE_ROOT="$ROOT" SMOKE_MODEL="$MODEL"
-mkdir -p "$WORK"/xdg/{data/opencode,config/opencode,state,cache} "$WORK"/{bin,install,pack,dist,home,canned} "$WORK/fixture/.corvus/reviews/${OWNER}__${REPO}__pr${NUMBER}"
-printf 'Sandbox: %s\nModel: %s; fixture PR: %s/%s#%s @ %s; cap: %sm\n' "$WORK" "$MODEL" "$OWNER" "$REPO" "$NUMBER" "$HEAD_SHA" "$TIMEOUT_MIN"
+mkdir -p "$WORK"/xdg/{data/opencode,config/opencode,state,cache} "$WORK"/{bin,install,pack,dist,home,canned,fixture}
+printf 'Sandbox: %s\nModel: %s; fixture PR: %s/%s#%s @ %s; cap: %sm; mode: %s\n' "$WORK" "$MODEL" "$OWNER" "$REPO" "$NUMBER" "$HEAD_SHA" "$TIMEOUT_MIN" "$([[ $HEAD_MOVED == 1 ]] && printf head-moved || printf blocked-post)"
 
 # Isolate all host state (same posture as smoke-review.sh), preserving AWS env/~/.aws.
 while IFS= read -r name; do unset "$name"; done < <(compgen -v OPENCODE_)
@@ -100,14 +106,28 @@ bun -e '
   await Bun.write(process.env.XDG_CONFIG_HOME + "/opencode/opencode.json", JSON.stringify(config, null, 2) + "\n")
 ' || die 3 'host config generation failed'
 
-# Fixture: a tiny candidate frozen by the built freeze() into the canonical artifact,
-# plus canned PR metadata (head.sha = commit_id) and a diff containing the anchor.
-export SMOKE_OWNER="$OWNER" SMOKE_REPO="$REPO" SMOKE_NUMBER="$NUMBER" SMOKE_HEAD="$HEAD_SHA"
+# Fixture: a candidate frozen by the built freeze() into the canonical artifact, plus
+# canned PR metadata (head.sha = commit_id) and a diff containing the anchor. The body
+# is one line of at least 3,000 characters: canonical JSON keeps it on one line, the
+# host read tool truncates lines at 2,000 characters, and the writer must not treat
+# that as an incomplete read (the field defect behind 0.10.0-beta.8).
+# Root invariant: the shared checker resolver reads existing layouts before fixture
+# writes. Ambiguity or a legacy-only match aborts rather than writing old state;
+# plain/task-scoped new roots are permitted. No smoke flag disables this check.
+export SMOKE_OWNER="$OWNER" SMOKE_REPO="$REPO" SMOKE_NUMBER="$NUMBER" SMOKE_HEAD="$HEAD_SHA" SMOKE_HEAD_MOVED="$HEAD_MOVED"
 bun -e '
+  const { mkdirSync } = await import("node:fs")
+  const { reviewRoot } = await import(process.env.SMOKE_ROOT + "/scripts/check-review-artifacts.ts")
   const { freeze } = await import(process.env.SMOKE_WORK + "/dist/review-payload.js")
-  const root = process.env.SMOKE_WORK + "/fixture/.corvus/reviews"
-  const dir = `${root}/${process.env.SMOKE_OWNER}__${process.env.SMOKE_REPO}__pr${process.env.SMOKE_NUMBER}`
-  const candidate = { commit_id: process.env.SMOKE_HEAD, event: "COMMENT", body: "<!-- corvus-review -->\nSmoke writer body: no mutation is expected to succeed.",
+  const fixture = process.env.SMOKE_WORK + "/fixture"
+  const relative = reviewRoot({ fixture, owner: process.env.SMOKE_OWNER, repo: process.env.SMOKE_REPO, pr: process.env.SMOKE_NUMBER })
+  if (!relative.endsWith(`/reviews/pr${process.env.SMOKE_NUMBER}`)) throw new Error("legacy fixture writes are disabled")
+  const root = fixture + "/.corvus", dir = `${fixture}/${relative}`
+  mkdirSync(dir, { recursive: true })
+  const filler = Array.from({ length: 40 }, (_, i) => `Paragraph ${String(i + 1).padStart(2, "0")}: this sentence pads the review body past the host read tool line limit; `).join("")
+  const body = `<!-- corvus-review v2 path=${relative} head=${process.env.SMOKE_HEAD} round=1 -->\nSmoke writer body: no mutation is expected to succeed. ` + filler
+  if (body.split("\n").some(line => line.length < 3000 && line.startsWith("Smoke"))) { console.error("fixture body line under 3,000 characters"); process.exit(1) }
+  const candidate = { commit_id: process.env.SMOKE_HEAD, event: "COMMENT", body,
     comments: [{ path: "README.md", line: 2, side: "RIGHT", body: "smoke inline anchor" }] }
   await Bun.write(dir + "/candidate.json", JSON.stringify(candidate))
   const result = freeze(dir + "/candidate.json", dir + "/post-request.json", { reviewStateRoot: root })
@@ -122,7 +142,11 @@ bun -e '
   await Bun.write(process.env.SMOKE_WORK + "/canned/files.json", JSON.stringify([{ filename: "README.md", status: "modified",
     patch: "@@ -1,3 +1,3 @@\n # Smoke\n-old line\n+new line\n third line" }]) + "\n")
   await Bun.write(process.env.SMOKE_WORK + "/canned/reviews.json", "[]\n")
-  const descriptor = { artifact_path: `.corvus/reviews/${process.env.SMOKE_OWNER}__${process.env.SMOKE_REPO}__pr${process.env.SMOKE_NUMBER}/post-request.json`,
+  if (process.env.SMOKE_HEAD_MOVED === "1") await Bun.write(process.env.SMOKE_WORK + "/canned/pull.moved.json", JSON.stringify({ number: Number(process.env.SMOKE_NUMBER), state: "open",
+    head: { sha: "c".repeat(40), ref: "smoke" }, base: { sha: "b".repeat(40), ref: "main" } }) + "\n")
+  const longest = Math.max(...(await Bun.file(dir + "/post-request.json").text()).split("\n").map(line => line.length))
+  console.log("Artifact longest line: " + longest + " chars (host read tool truncates at 2,000)")
+  const descriptor = { artifact_path: `${relative}/post-request.json`,
     expected_sha256: digest, repository: { owner: process.env.SMOKE_OWNER, name: process.env.SMOKE_REPO },
     pr_number: Number(process.env.SMOKE_NUMBER), head_sha: process.env.SMOKE_HEAD, event: "COMMENT" }
   await Bun.write(process.env.SMOKE_WORK + "/descriptor.json", JSON.stringify(descriptor) + "\n")
@@ -156,7 +180,9 @@ cap "$((TIMEOUT_MIN * 60))" opencode run --dir "$WORK/fixture" --agent writer-re
 printf 'Writer host exit: %s; duration: %ss\n' "$RUN_STATUS" "$((SECONDS - RUN_START))"
 sleep 2
 CHECK_STATUS=0
-bun run "$ROOT/scripts/check-writer-run.ts" "$WORK/fixture" "$OWNER" "$REPO" "$NUMBER" "$HEAD_SHA" "$EXPECTED_SHA" "$WORK/run.jsonl" "$WORK/gh-audit.log" "$WORK/run.stderr" --db "$XDG_DATA_HOME/opencode/opencode.db" | tee "$WORK/result.txt" || CHECK_STATUS=$?
+CHECK_ARGS=(--db "$XDG_DATA_HOME/opencode/opencode.db")
+((HEAD_MOVED == 0)) || CHECK_ARGS+=(--head-moved)
+bun run "$ROOT/scripts/check-writer-run.ts" "$WORK/fixture" "$OWNER" "$REPO" "$NUMBER" "$HEAD_SHA" "$EXPECTED_SHA" "$WORK/run.jsonl" "$WORK/gh-audit.log" "$WORK/run.stderr" "${CHECK_ARGS[@]}" | tee "$WORK/result.txt" || CHECK_STATUS=$?
 [[ "$RUN_STATUS" != 142 && "$RUN_STATUS" != 124 ]] || exit 124
 ((CHECK_STATUS == 0)) || exit "$CHECK_STATUS"
 ((RUN_STATUS == 0)) || exit 3

@@ -67,4 +67,4 @@ remaining prerequisite; then use the owner rather than inventing another retry l
 
 For a fundamental approach issue, supply evidence, viable alternatives with trade-offs,
 and a recommendation to the caller; it owns the next decision and any user interaction.
-Done when recovery reaches its owning workflow or the caller has a precise blocked report.
+Done when recovery reaches its owner or available results and gaps are reported while independent authorized work continues; approval, mutation, and integrity gates remain in force.

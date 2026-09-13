@@ -105,7 +105,7 @@ describe("plugin.server", () => {
 
     expect(Object.keys(hooks).sort()).toEqual(Object.keys(legacyHooks).sort())
     expect(typeof hooks.config).toBe("function")
-    expect(Object.keys(hooks.tool ?? {}).sort()).toEqual(["corvus_review_payload", "corvus_review_verify"])
+    expect(Object.keys(hooks.tool ?? {}).sort()).toEqual(["corvus_review_lock", "corvus_review_payload", "corvus_review_persist", "corvus_review_post", "corvus_review_pr", "corvus_review_sync", "corvus_review_verdict", "corvus_review_verify"])
     expect(Object.keys(legacyHooks.tool).sort()).toEqual(Object.keys(hooks.tool ?? {}).sort())
   })
 })
@@ -121,10 +121,10 @@ describe("plugin.setup", () => {
     expect([...fake.commands.keys()].sort()).toEqual(COMMANDS)
     expect(fake.skills.size).toBe(18)
     expect([...fake.mcp.keys()]).toEqual(["web-research"])
-    expect([...fake.tools.keys()]).toEqual(["corvus_review_payload", "corvus_review_verify"])
+    expect([...fake.tools.keys()]).toEqual(["corvus_review_payload", "corvus_review_verify", "corvus_review_post", "corvus_review_persist", "corvus_review_lock", "corvus_review_pr", "corvus_review_verdict", "corvus_review_sync"])
     for (const tool of fake.tools.values()) {
       expect(tool.options).toEqual({ codemode: false })
-      expect(tool.input).toMatchObject({ type: "object", additionalProperties: false })
+      expect(tool.input).toMatchObject({ type: "object", additionalProperties: ["corvus_review_persist", "corvus_review_lock", "corvus_review_pr"].includes(tool.name) })
       for (const combinator of ["oneOf", "anyOf", "allOf"]) {
         expect(tool.input).not.toHaveProperty(combinator)
       }
@@ -135,6 +135,45 @@ describe("plugin.setup", () => {
       required: ["op", "candidatePath"],
     })
     expect(fake.tools.get("corvus_review_verify")!.input).toMatchObject({ properties: { op: { const: "verify" } } })
+    for (const [name, ops, required] of [
+      ["corvus_review_persist", ["write_document", "write_input", "write_meta", "write_candidate", "read_document", "write_facts", "read_facts"], ["op", "reviewRoot"]],
+      ["corvus_review_lock", ["acquire", "release", "status"], ["op", "reviewRoot"]],
+      ["corvus_review_pr", ["metadata", "head", "files", "diff", "reviews", "checks", "identity", "config", "repo", "find", "local"], ["op"]],
+      ["corvus_review_verdict", ["compute"], ["op", "reviewRoot", "priorReviews", "config"]],
+      ["corvus_review_sync", ["resolve", "pull", "push"], ["op"]],
+    ] as const) {
+      expect(fake.tools.get(name)!.input).toMatchObject({ properties: { op: { type: "string", enum: ops } }, required })
+    }
+    const postInput = fake.tools.get("corvus_review_post")!.input
+    expect(fake.tools.get("corvus_review_pr")!.input).toMatchObject({
+      properties: { cwd: { type: "string" }, branch: { type: "string" }, base: { type: "string" } },
+    })
+    expect(fake.tools.get("corvus_review_pr")!.description).toContain("find takes optional cwd/branch")
+    expect(fake.tools.get("corvus_review_pr")!.description).toContain("local takes optional cwd/base")
+    expect(fake.tools.get("corvus_review_persist")!.input).toMatchObject({
+      properties: { facts: { type: "object", additionalProperties: true }, name: { type: "string" } },
+    })
+    expect(postInput).toEqual({
+      type: "object",
+      properties: {
+        artifactPath: { type: "string", minLength: 1 },
+        expectedSha256: { type: "string", pattern: "^[a-f0-9]{64}$" },
+        repo: {
+          type: "object",
+          properties: {
+            owner: { type: "string", pattern: "^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$" },
+            name: { type: "string", pattern: "^(?!\\.{1,2}$)[A-Za-z0-9._-]{1,100}$" },
+          },
+          required: ["owner", "name"],
+          additionalProperties: false,
+        },
+        prNumber: { type: "integer", minimum: 1, maximum: Number.MAX_SAFE_INTEGER },
+        headSha: { type: "string", pattern: "^[a-f0-9]{40}$" },
+        event: { type: "string", enum: ["APPROVE", "REQUEST_CHANGES", "COMMENT"] },
+      },
+      required: ["artifactPath", "expectedSha256", "repo", "prNumber", "headSha", "event"],
+      additionalProperties: false,
+    })
 
     expect(fake.registrations.map((registration) => registration.kind)).toEqual(REGISTRATION_ORDER)
     expect(typeof cleanup).toBe("function")
@@ -170,7 +209,7 @@ describe("plugin.setup", () => {
     expect(fake.commands.size).toBe(4)
     expect(fake.skills.size).toBe(18)
     expect(fake.mcp.size).toBe(1)
-    expect(fake.tools.size).toBe(2)
+    expect(fake.tools.size).toBe(8)
   })
 
   test.each(["tool.transform", "mcp.transform"])("unwinds earlier cleanups in reverse when %s throws", async (failAt) => {

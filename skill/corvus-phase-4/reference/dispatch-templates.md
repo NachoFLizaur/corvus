@@ -2,15 +2,16 @@
 
 ## Prepare Dispatch Inputs
 
-<!-- Dispatch invariant: child terminal results and the owning recovery outcome are read before phase advancement or turn end; missing results hold progress or terminate locally after bounded recovery. No mode or tool acknowledgement disables this requirement. -->
-Dispatch children in the FOREGROUND. Never select background/async mode; if the tool exposes `background`, set it `false`. Two parallel calls in one message are fine — parallel is not background. A session id or `status: running` acknowledgement is not a child result. Do not end the turn or advance a phase until every required child has returned a terminal result or the phase's bounded recovery has terminated locally.
+<!-- Dispatch invariant: trusted controls and brief size are read before dispatch; child results and bounded recovery outcomes before phase advancement or turn end. Compact oversized briefs within their cap, preserving controls. Missing/malformed reports use transport-retry.md, then available evidence continues with gaps noted. No mode or acknowledgement supplies PASS or disables an approval, ownership, or validation gate. -->
+Dispatch children in the FOREGROUND. Never select background/async mode; if the tool exposes `background`, set it `false`. Two parallel calls in one message are fine — parallel is not background. A session id or `status: running` acknowledgement is not a child result. Account for each child through its result or bounded recovery before ending the turn.
 
 Read approved PLAN.md and current repository instructions; use [ownership resolution](#ownership-resolution) for per-task write allowlists and resolve environment-derived checks under caller policy and [Tests](../../corvus-phase-2/SKILL.md#tests). Commands belong in dispatches, not the plan.
+Missing companion, CONTEXT.md, or DISCOVERY.md: continue with available context and a note, without inventing approval or ownership. Trim over-cap child briefs by removing redundant prose and using verified evidence pointers; preserve trusted controls, scope, and safety constraints rather than rejecting the brief.
 
 Cite dispatch-authored premises inline with session output or `file:line`; send uncited premises as verification questions. Apply [Evidence and Preservation](../../../agent/code-implementer.md#evidence-and-preservation) to premise verification. For derived constants, supply the governing property and require derivation; pin literals only for sourced external requirements.
 
 For current/previous/outgoing/baseline reasoning, discover the default branch and compute `git merge-base HEAD <default-branch>`; supply its full SHA and provenance, not branch HEAD, for every baseline comparison and fix.
-<!-- Provenance oracle: session-read sources and the computed merge base, checked before dispatch. Unverified claims become questions; an unavailable required baseline blocks comparison. Only a dispatch with no baseline reasoning may mark the SHA not applicable. -->
+<!-- Provenance oracle: session-read sources and the computed merge base, checked before dispatch. Unverified claims become questions; an unavailable required baseline leaves comparison unknown while current-state analysis continues with a note. Only a dispatch with no baseline reasoning may mark the SHA not applicable. -->
 Done when inputs are grounded, concurrent ownership is disjoint, and every task has a validation allowlist with policy omissions.
 
 ## Ownership Resolution

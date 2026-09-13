@@ -21,7 +21,7 @@ Every Phase 1 invocation includes this routing envelope:
 
 Validate the route before dispatch: `PHASE_0A` → `PHASE_0B`; `DIRECT_CALLER` → original
 caller identity. Treat `EXISTING_FINDINGS` as completed work and investigate only the delta.
-<!-- Routing oracle: the supplied origin and target, read before launching children. Missing or inconsistent fields hold discovery for correction; neither depth nor caller disables routing. -->
+<!-- Routing oracle: the supplied origin and target, read before launching children. Missing or inconsistent fields default to DIRECT_CALLER, returning read-only findings to the invoking caller with a note; neither depth nor caller grants further work. -->
 Done when the target and unanswered scope are unambiguous.
 
 ## Discovery Breadth

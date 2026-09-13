@@ -80,10 +80,6 @@ Accept these verdicts, using ux-dx-quality's scoring thresholds:
 - `CRITICAL_ISSUES`: dispatch task-planner `AMEND_PLAN add-fix-tasks` per corvus-phase-7 §AMEND_PLAN Dispatch with plan path, phase,
   task lines, and the 5b gate-report pointer; Phase 4, then rerun both 5a and 5b.
 
-<!-- Subjective oracle: tagged plan tasks and the complete scored report, read before advancing. Missing/malformed status or required sections block completion. Unmet immutable acceptance criteria, security failures, or critical usability failures force the critical-issues path regardless of score. Only absence of tagged tasks disables this review, never its consumer checks. -->
-Apply [child transport recovery](../corvus-phase-4/reference/transport-retry.md) to malformed
-or missing child reports in either step; exhausted 5b recovery remains fail-closed and
-escalates the contract error. Record final evidence for the Phase 6 handoff; that phase
-alone owns success extraction.
-Done when a conforming non-blocking verdict reaches Phase 6, scoped critical fixes return
-to Phase 4, or an unresolved contract error holds completion.
+<!-- Subjective oracle: tagged plan tasks and available scored evidence, read before advancing. Missing/malformed reports use bounded recovery, then continue available results with unknown coverage noted, not a passing verdict. Unmet immutable acceptance criteria, security failures, or critical usability failures force the critical-issues path regardless of score. Only absence of tagged tasks disables this review, never its consumer checks. -->
+Apply [child transport recovery](../corvus-phase-4/reference/transport-retry.md) to missing/malformed reports in either step. After recovery, carry available evidence to Phase 6b as a partial summary if a required verdict remains unknown; no completion recording, success extraction, or delivery until final gates pass.
+Done when evidenced non-blocking verdicts reach Phase 6, critical fixes return to Phase 4, or available results and unresolved coverage reach the partial summary.
