@@ -209,7 +209,7 @@ describe("review post executor", () => {
     const { exec, calls } = recordingExec()
     const expected = await post(invalid, { ...opts, exec })
 
-    const output = await createPostExecutor(opts.reviewStateRoot)(invalid)
+    const output = await createPostExecutor(opts.reviewStateRoot)(invalid, "pr-comment-writer")
 
     expect(typeof output).toBe("string")
     expect(JSON.parse(output)).toEqual(expected)
@@ -218,9 +218,25 @@ describe("review post executor", () => {
   }))
 
   test("rejects a non-absolute review-state root", () => withFixture(async ({ input }) => {
-    const output = await createPostExecutor("relative/review-state")(input)
+    const output = await createPostExecutor("relative/review-state")(input, "pr-comment-writer")
 
     expect(JSON.parse(output)).toEqual({ outcome: "rejected", reason: "invalid-review-state-root", tool_api_calls: 0 })
+  }))
+
+  test("rejects non-writers before inspecting input and cannot be authorized by tool arguments", () => withFixture(async ({ opts, input }) => {
+    let inspected = 0
+    const descriptor = new Proxy({ ...mismatchedDigest(input), agent: "pr-comment-writer", caller: "pr-comment-writer" }, {
+      ownKeys(target) { inspected++; return Reflect.ownKeys(target) },
+    })
+    const expected = { outcome: "rejected", reason: "caller-not-allowed", tool_api_calls: 0 }
+    for (const root of [opts.reviewStateRoot, "relative/review-state"]) {
+      const execute = createPostExecutor(root)
+      for (const caller of ["corvus-review", "corvus-review-auto", "pr-context-gatherer", "pr-code-reviewer", "security-reviewer", "researcher", "unknown", "", null, undefined, { agent: "pr-comment-writer" }]) {
+        expect(JSON.parse(await execute(descriptor, caller))).toEqual(expected)
+      }
+      expect(JSON.parse(await execute(descriptor))).toEqual(expected)
+    }
+    expect(inspected).toBe(0)
   }))
 })
 

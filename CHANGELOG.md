@@ -5,6 +5,12 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.10.0-beta.9 — 2026-09-13
+
+### Fixed
+
+- Permission model: all agents default-allow; the only denies are edit/write on the four leaf review agents, question on the two autonomous agents, and the pre-existing destructive-bash denies on corvus/corvus-auto. Tool ownership is enforced inside the review tools (caller checks), not by frontmatter. Fixes install-root/skill-reference read denials on hosts where the blanket deny beat injected grants.
+
 ## 0.10.0-beta.8 — 2026-09-13
 
 ### Added

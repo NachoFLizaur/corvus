@@ -276,10 +276,18 @@ export async function post(input: PostInput, opts: PostOptions): Promise<Transpo
  * Capture the host-supplied absolute review-state root, never a tool argument.
  * Both hosts receive JSON transport results; invalid context rejects before I/O.
  * No input overrides the root. Artifact paths retain verify's path semantics.
+ *
+ * The caller oracle is host ctx.agent, forwarded separately on each invocation
+ * before artifact I/O or transport. Only pr-comment-writer passes; missing or
+ * other identities reject with zero tool_api_calls for both hosts. No tool
+ * argument or option disables this check.
  */
-export function createPostExecutor(reviewStateRoot: string): (input: unknown) => Promise<string> {
+export function createPostExecutor(reviewStateRoot: string): (input: unknown, caller?: unknown) => Promise<string> {
   const root = typeof reviewStateRoot === "string" && isAbsolute(reviewStateRoot) ? reviewStateRoot : undefined
-  return async input => JSON.stringify(root
-    ? await post(input as PostInput, { reviewStateRoot: root })
-    : rejected("invalid-review-state-root"))
+  return async (input, caller) => {
+    if (caller !== "pr-comment-writer") return JSON.stringify(rejected("caller-not-allowed"))
+    return JSON.stringify(root
+      ? await post(input as PostInput, { reviewStateRoot: root })
+      : rejected("invalid-review-state-root"))
+  }
 }

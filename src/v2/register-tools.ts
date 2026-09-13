@@ -42,7 +42,11 @@ export const registerTools: Registrar = async (ctx) => {
         additionalProperties: false,
       },
       options: { codemode: false },
-      execute: async (args: unknown) => ({ content: review.payload(args) }),
+      /** Host ctx.agent is read before payload I/O; only the two review orchestrators pass. Missing/unknown callers fail closed, and no argument or option disables the check. */
+      execute: async (args: unknown, ctx) => {
+        if (!["corvus-review", "corvus-review-auto"].includes(ctx?.agent)) return { content: JSON.stringify({ ok: false, reason: "caller-not-allowed" }) }
+        return { content: review.payload(args) }
+      },
     })
     draft.add({
       name: "corvus_review_verify",
@@ -58,7 +62,11 @@ export const registerTools: Registrar = async (ctx) => {
         additionalProperties: false,
       },
       options: { codemode: false },
-      execute: async (args: unknown) => ({ content: review.verify(args) }),
+      /** Host ctx.agent is read before artifact I/O; only the review orchestrators and writer pass. Missing/unknown callers fail closed, and no argument or option disables the check. */
+      execute: async (args: unknown, ctx) => {
+        if (!["corvus-review", "corvus-review-auto", "pr-comment-writer"].includes(ctx?.agent)) return { content: JSON.stringify({ ok: false, reason: "caller-not-allowed" }) }
+        return { content: review.verify(args) }
+      },
     })
     draft.add({
       name: "corvus_review_post",
@@ -85,7 +93,7 @@ export const registerTools: Registrar = async (ctx) => {
         additionalProperties: false,
       },
       options: { codemode: false },
-      execute: async (args: unknown) => ({ content: await post(args) }),
+      execute: async (args: unknown, ctx) => ({ content: await post(args, ctx?.agent) }),
     })
     draft.add({
       name: "corvus_review_persist",
@@ -108,7 +116,11 @@ export const registerTools: Registrar = async (ctx) => {
         additionalProperties: true,
       },
       options: { codemode: false },
-      execute: async (args: unknown) => ({ content: persist(args) }),
+      /** Host ctx.agent is read before state I/O; only the two review orchestrators pass. Missing/unknown callers fail closed, and no argument or option disables the check. */
+      execute: async (args: unknown, ctx) => {
+        if (!["corvus-review", "corvus-review-auto"].includes(ctx?.agent)) return { content: JSON.stringify({ ok: false, reason: "caller-not-allowed" }) }
+        return { content: persist(args) }
+      },
     })
     draft.add({
       name: "corvus_review_lock",
@@ -126,7 +138,11 @@ export const registerTools: Registrar = async (ctx) => {
         additionalProperties: true,
       },
       options: { codemode: false },
-      execute: async (args: unknown) => ({ content: lock(args) }),
+      /** Host ctx.agent is read before lock I/O; only the two review orchestrators pass. Missing/unknown callers fail closed, and no argument or option disables the check. */
+      execute: async (args: unknown, ctx) => {
+        if (!["corvus-review", "corvus-review-auto"].includes(ctx?.agent)) return { content: JSON.stringify({ ok: false, reason: "caller-not-allowed" }) }
+        return { content: lock(args) }
+      },
     })
     draft.add({
       name: "corvus_review_pr",

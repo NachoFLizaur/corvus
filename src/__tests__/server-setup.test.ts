@@ -111,6 +111,54 @@ describe("plugin.server", () => {
 })
 
 describe("plugin.setup", () => {
+  test("all registered review tools enforce their caller policy on every invocation", async () => {
+    const fake = createFakeContext()
+    const cleanup = await plugin.setup(fake.ctx)
+    try {
+      const orchestrators = ["corvus-review", "corvus-review-auto"]
+      const policies = [
+        { name: "corvus_review_payload", allowed: orchestrators, args: { op: "measure", candidatePath: "" } },
+        { name: "corvus_review_verify", allowed: [...orchestrators, "pr-comment-writer"], args: { op: "verify", artifactPath: "", expectedSha256: "0".repeat(64) } },
+        { name: "corvus_review_post", allowed: ["pr-comment-writer"], args: {} },
+        { name: "corvus_review_persist", allowed: orchestrators, args: { op: "write_candidate", reviewRoot: "" } },
+        { name: "corvus_review_lock", allowed: orchestrators, args: { op: "acquire", reviewRoot: "" } },
+        { name: "corvus_review_pr", allowed: [...orchestrators, "pr-context-gatherer"], args: { op: "identity", cwd: "relative" } },
+        { name: "corvus_review_verdict", allowed: orchestrators, args: { op: "compute" } },
+        { name: "corvus_review_sync", allowed: orchestrators, args: { op: "pull", cwd: "relative" } },
+      ]
+      const agents = [...fake.agents.keys(), "unknown", "", undefined, null, { agent: "corvus-review" }]
+      for (const { name, allowed, args } of policies) {
+        const tool = fake.tools.get(name)!
+        const rejected = name === "corvus_review_post"
+          ? { outcome: "rejected", reason: "caller-not-allowed", tool_api_calls: 0 }
+          : name === "corvus_review_sync"
+            ? { synced: false, reason: "caller-not-allowed", git_calls: 0 }
+            : { ok: false, reason: "caller-not-allowed", ...(name === "corvus_review_pr" ? { api_calls: 0 } : {}) }
+        for (const agent of agents) {
+          const ctx = { agent } as Parameters<typeof tool.execute>[1]
+          const output = await tool.execute(args, ctx)
+          const result = JSON.parse(output.content as string)
+          if (typeof agent === "string" && allowed.includes(agent)) {
+            expect(result.reason).toMatch(/^invalid-/)
+          } else {
+            expect(result).toEqual(rejected)
+            const spoofed = await tool.execute({ ...args, agent: allowed[0], caller: allowed[0], ctx: { agent: allowed[0] } }, ctx)
+            expect(JSON.parse(spoofed.content as string)).toEqual(rejected)
+          }
+        }
+        const missingContext = await tool.execute(args, undefined as unknown as Parameters<typeof tool.execute>[1])
+        expect(JSON.parse(missingContext.content as string)).toEqual(rejected)
+      }
+      const pr = fake.tools.get("corvus_review_pr")!
+      for (const op of ["head", "diff", "files"]) {
+        const output = await pr.execute({ op, owner: "!", name: "r", pr: 1, paginate: true }, { agent: "pr-comment-writer" } as Parameters<typeof pr.execute>[1])
+        expect(JSON.parse(output.content as string)).toMatchObject({ ok: false, reason: expect.stringMatching(/^invalid-/), api_calls: 0 })
+      }
+    } finally {
+      await cleanup()
+    }
+  })
+
   test("registers the whole packaged corpus in the fixed registrar order", async () => {
     const fake = createFakeContext()
     const traced = traceRegistrations(fake, "")

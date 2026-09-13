@@ -3,49 +3,9 @@ description: "GitHub review posting agent. Verifies an approved artifact's diges
 mode: subagent
 temperature: 0.1
 permission:
-  "*": "deny"
-  corvus_review_verify: "allow"
-  corvus_review_post: "allow"
-  corvus_review_pr: "allow"
-  corvus_review_verdict: "deny"
-  corvus_review_sync: "deny"
-  read: "allow"
-  glob: "allow"
-  grep: "allow"
-  list: "deny"
-  bash: {
-    "*": "deny",
-    "jq . .corvus/reviews/*/post-request.json": allow,
-    "python3 -m json.tool .corvus/reviews/*/post-request.json": allow,
-    "shasum -a 256 .corvus/reviews/*/post-request.json": allow,
-    "gh pr view *": allow, "gh pr diff *": allow, "gh pr checks *": allow, "gh pr list *": allow,
-    "gh pr status*": allow, "gh issue view *": allow, "gh issue list *": allow, "gh repo view *": allow,
-    "gh api --method GET *": allow, "gh api user*": allow, "gh search *": allow, "gh run list *": allow,
-    "gh run view *": allow, "gh auth status": allow,
-    "gh api repos/*/pulls/*": allow, "gh api repos/*/pulls/*/*": allow,
-    "git status*": allow, "git log*": allow, "git show*": allow, "git diff*": allow, "git blame*": allow,
-    "git shortlog*": allow, "git branch --list*": allow, "git branch -a*": allow,
-    "git branch --show-current": allow, "git remote -v": allow, "git remote get-url *": allow,
-    "git rev-parse*": allow, "git merge-base*": allow, "git ls-files*": allow, "git rev-list*": allow,
-    "git cat-file -p *": allow, "git worktree list*": allow, "git fetch *": allow,
-    "ls *": allow, "wc *": allow, "head *": allow, "tail *": allow, "cat *": allow, "uniq *": allow,
-    "file *": allow, "stat *": allow, "jq *": allow, "shasum *": allow, "sha256sum *": allow, "date *": allow,
-    "python3 -m json.tool *": allow, "test *": allow, "printf *": allow, "echo *": allow, "pwd": allow,
-    "which *": allow, "env": allow, "bun --version": allow, "node --version": allow,
-  }
+  "*": "allow"
   edit: "deny"
   write: "deny"
-  task: "deny"
-  question: "deny"
-  external_directory: "deny"
-  todowrite: "deny"
-  todoread: "deny"
-  webfetch: "deny"
-  websearch: "deny"
-  codesearch: "deny"
-  lsp: "deny"
-  doom_loop: "deny"
-  skill: "deny"
 ---
 
 # PR Comment Writer

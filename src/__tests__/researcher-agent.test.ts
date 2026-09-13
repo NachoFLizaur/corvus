@@ -22,19 +22,10 @@ describe("Researcher Agent", () => {
     expect(content).not.toMatch(/exa_web_search|websearch_exa/i)
   })
 
-  test("permission has web-research_multi_search", () => {
-    // Assert
-    expect(permission["web-research_multi_search"]).toBe("allow")
-  })
-
-  test("permission has web-research_fetch_pages", () => {
-    // Assert
-    expect(permission["web-research_fetch_pages"]).toBe("allow")
-  })
-
-  test("curl permission is allow", () => {
-    // Assert - curl must be "allow" for fallback tier 3
-    expect(permission.bash["curl *"]).toBe("allow")
+  test("permission defaults to allow with no denies or per-tool rules", () => {
+    expect(permission["*"]).toBe("allow")
+    expect(Object.keys(permission)).toEqual(["*"])
+    expect(Object.values(permission).filter(effect => effect === "deny")).toEqual([])
   })
 
   test("has complexity router section", () => {
@@ -115,16 +106,6 @@ describe("Researcher Agent", () => {
     expect(content).toContain("ACCUMULATED_FINDINGS")
   })
 
-  test("no git log bash permission", () => {
-    // Assert - git log is code-explorer territory
-    expect(permission.bash["git log*"]).toBeUndefined()
-  })
-
-  test("no git show bash permission", () => {
-    // Assert - git show is code-explorer territory
-    expect(permission.bash["git show*"]).toBeUndefined()
-  })
-
   test("no local codebase research source section", () => {
     // Assert - codebase analysis is code-explorer territory
     expect(content).not.toContain("Local Codebase")
@@ -142,15 +123,4 @@ describe("Researcher Agent", () => {
     expect(frontmatter.description).not.toContain("codebase analysis")
   })
 
-  test("gh bash permission preserved", () => {
-    // Assert - GitHub-wide research is external research
-    expect(permission.bash["gh *"]).toBe("allow")
-  })
-
-  test("read/glob/grep permission rules preserved", () => {
-    // Assert - still needed for quick context checks (e.g., reading package.json)
-    expect(permission.read).toBe("allow")
-    expect(permission.glob).toBe("allow")
-    expect(permission.grep).toBe("allow")
-  })
 })

@@ -3,38 +3,9 @@ description: "PR-optimized context gathering agent. Fetches diffs, reads changed
 mode: subagent
 temperature: 0.1
 permission:
-  "*": "deny"
-  corvus_review_pr: "allow"
-  corvus_review_verdict: "deny"
-  corvus_review_sync: "deny"
-  read: "allow"
-  glob: "allow"
-  grep: "allow"
-  task: "deny"
-  webfetch: "deny"
-  question: "deny"
+  "*": "allow"
   edit: "deny"
   write: "deny"
-  bash: {
-    "*": "deny",
-    "gh api --method GET *": allow,
-    "git log*": allow, "git blame*": allow, "git diff*": allow, "git show*": allow, "git shortlog*": allow,
-    "git rev-parse*": allow, "git ls-files*": allow, "git merge-base*": allow,
-    "gh pr view *": allow, "gh pr diff *": allow, "gh pr checks *": allow, "gh pr list *": allow,
-    "gh pr status*": allow, "gh issue view *": allow, "gh issue list *": allow, "gh repo view *": allow,
-    "gh api user*": allow, "gh search *": allow, "gh run list *": allow, "gh run view *": allow,
-    "gh auth status": allow,
-    "gh api repos/*/pulls/*": allow, "gh api repos/*/pulls/*/*": allow,
-    "gh api --paginate repos/*/pulls/*/*": allow, "gh api repos/*/commits/*": allow,
-    "gh api repos/*/compare/*": allow, "gh api repos/*/contents/*": allow, "gh api repos/*/issues/*": allow,
-    "git status*": allow, "git branch --list*": allow, "git branch -a*": allow,
-    "git branch --show-current": allow, "git remote -v": allow, "git remote get-url *": allow,
-    "git rev-list*": allow, "git cat-file -p *": allow, "git worktree list*": allow, "git fetch *": allow,
-    "ls *": allow, "wc *": allow, "head *": allow, "tail *": allow, "cat *": allow, "uniq *": allow,
-    "file *": allow, "stat *": allow, "jq *": allow, "shasum *": allow, "sha256sum *": allow, "date *": allow,
-    "python3 -m json.tool *": allow, "test *": allow, "printf *": allow, "echo *": allow, "pwd": allow,
-    "which *": allow, "env": allow, "bun --version": allow, "node --version": allow, "sort *": allow,
-  }
 ---
 
 # PR Context Gatherer

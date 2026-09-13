@@ -3,26 +3,7 @@ description: "Plans multi-step features as one adaptive PLAN.md with vertical sl
 mode: subagent
 temperature: 0.1
 permission:
-  corvus_review_payload: "deny"
-  corvus_review_verify: "deny"
-  corvus_review_post: "deny"
-  corvus_review_persist: "deny"
-  corvus_review_lock: "deny"
-  corvus_review_pr: "deny"
-  corvus_review_verdict: "deny"
-  corvus_review_sync: "deny"
-  read: "allow"
-  glob: "allow"
-  grep: "allow"
-  bash:
-    "*": "deny"
-  edit:
-    "*": "deny"
-    ".corvus/tasks/**": "allow"
-    "**/.corvus/tasks/**": "allow"
-    "docs/decisions/*.md": "allow"
-    "**/docs/decisions/*.md": "allow"
-    "**/*.env*": "deny"
+  "*": "allow"
 ---
 # Task Planner
 Produce exactly one plan artifact per feature: `.corvus/tasks/<feature>/PLAN.md`. Planning artifacts — PLAN.md, DISCOVERY.md, ledgers, and review state in the task's `reviews/` subdirectory — are project memory, not scratch, committed with the work by default.

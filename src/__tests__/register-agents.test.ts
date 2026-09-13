@@ -6,7 +6,6 @@ import { loadAgents } from "../load-agents"
 import { agentDir, commandDir, root, skillDir } from "../paths"
 import { toV2Permissions } from "../to-v2-permissions"
 import { evaluateRules } from "../evaluate-rules"
-import { PROTECTED_AGENTS } from "../protected-agents"
 import type { Cleanup } from "../v2/types"
 import { registerAgents } from "../v2/register-agents"
 import { BASELINE_RULES, createFakeContext, defaultInfo } from "./fake-context"
@@ -52,22 +51,16 @@ const withCorpus = async (files: Record<string, string>, body: () => Promise<voi
 }
 
 describe("registerAgents", () => {
-  test("registers last-position root grants without widening protected agents, including replay", async () => {
+  test("registers default-allow reference access for every agent, including replay", async () => {
     const fake = createFakeContext()
     await registerAgents(fake.ctx)
     fake.replay()
     const pattern = `${root.replaceAll("\\", "/")}/*`
-    for (const [name, config] of Object.entries(corpus)) {
+    for (const name of Object.keys(corpus)) {
       const rules = fake.agents.get(name)!.permissions
-      if (config.permission?.skill === "allow") {
-        expect(rules.at(-1)).toEqual({ action: "external_directory", resource: pattern, effect: "allow" })
-        expect(rules.filter(rule => rule.resource === pattern)).toHaveLength(1)
-      } else expect(rules.some(rule => rule.resource === pattern)).toBe(false)
-      if (config.permission?.skill === "allow" || (PROTECTED_AGENTS as readonly string[]).includes(name)) {
-        for (const reference of ["corvus-review-extras/schemas.md", "corvus-phase-4/reference/dispatch-templates.md"])
-          expect(evaluateRules(rules, "external_directory", `${root}/skill/${reference}`))
-            .toBe(config.permission?.skill === "allow" ? "allow" : "deny")
-      }
+      expect(rules.some(rule => rule.resource === pattern)).toBe(false)
+      for (const reference of ["corvus-review-extras/schemas.md", "corvus-phase-4/reference/dispatch-templates.md"])
+        expect(evaluateRules(rules, "external_directory", `${root}/skill/${reference}`)).toBe("allow")
     }
   })
 
@@ -75,7 +68,7 @@ describe("registerAgents", () => {
     const result = Bun.spawnSync([process.execPath, "run", join(root, "scripts/probe-refs.ts")])
     expect(result.stderr.toString()).toBe("")
     expect(result.exitCode).toBe(0)
-    expect(result.stdout.toString()).toContain("stripped runtime grant → deny")
+    expect(result.stdout.toString()).toContain("blanket deny overrides reference grant")
     expect(result.stdout.toString()).toContain("PASS: reference readability")
   })
 
@@ -102,18 +95,21 @@ describe("registerAgents", () => {
     expect(agent.system).toBe(corpus["corvus"].prompt)
   })
 
-  test("keeps the host baseline rules and appends corvus rules after them", async () => {
+  test("retains nonduplicate baseline rules and appends the authored wildcard once", async () => {
     const fake = createFakeContext()
 
     await registerAgents(fake.ctx)
     const permissions = fake.agents.get("pr-comment-writer")!.permissions
     const authored = toV2Permissions(corpus["pr-comment-writer"].permission)
 
-    // Every baseline rule survives: an assignment would have wiped all nine.
-    expect(permissions.slice(0, BASELINE_RULES.length)).toEqual([...BASELINE_RULES])
+    // The duplicate wildcard moves to the authored block; every other baseline rule survives.
+    expect(BASELINE_RULES[0]).toEqual({ action: "*", resource: "*", effect: "allow" })
+    expect(authored[0]).toEqual(BASELINE_RULES[0])
+    const retained = BASELINE_RULES.slice(1)
+    expect(permissions.slice(0, retained.length)).toEqual(retained)
     // Corvus's block is the tail, in authored order, because order is precedence.
-    expect(permissions.slice(BASELINE_RULES.length)).toEqual([...authored])
-    expect(permissions).toHaveLength(BASELINE_RULES.length + authored.length)
+    expect(permissions.slice(retained.length)).toEqual([...authored])
+    expect(permissions).toHaveLength(retained.length + authored.length)
   })
 
   test("assigns into request.body without replacing what the host put there", async () => {

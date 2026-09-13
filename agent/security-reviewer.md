@@ -3,38 +3,9 @@ description: "Dedicated security review agent with deep OWASP/CWE knowledge, tai
 mode: subagent
 temperature: 0.1
 permission:
-  "*": "deny"
-  corvus_review_verdict: "deny"
-  corvus_review_sync: "deny"
-  read: "allow"
-  glob: "allow"
-  grep: "allow"
-  list: "deny"
-  bash: {
-    "*": "deny",
-    "git status*": allow, "git log*": allow, "git show*": allow, "git diff*": allow, "git blame*": allow,
-    "git shortlog*": allow, "git branch --list*": allow, "git branch -a*": allow,
-    "git branch --show-current": allow, "git remote -v": allow, "git remote get-url *": allow,
-    "git rev-parse*": allow, "git merge-base*": allow, "git ls-files*": allow, "git rev-list*": allow,
-    "git cat-file -p *": allow, "git worktree list*": allow, "git fetch *": allow,
-    "ls *": allow, "wc *": allow, "head *": allow, "tail *": allow, "cat *": allow, "uniq *": allow,
-    "file *": allow, "stat *": allow, "jq *": allow, "shasum *": allow, "sha256sum *": allow, "date *": allow,
-    "python3 -m json.tool *": allow, "test *": allow, "printf *": allow, "echo *": allow, "pwd": allow,
-    "which *": allow, "env": allow, "bun --version": allow, "node --version": allow,
-  }
+  "*": "allow"
   edit: "deny"
   write: "deny"
-  task: "deny"
-  question: "deny"
-  external_directory: "deny"
-  todowrite: "deny"
-  todoread: "deny"
-  webfetch: "deny"
-  websearch: "deny"
-  codesearch: "deny"
-  lsp: "deny"
-  doom_loop: "deny"
-  skill: "deny"
 ---
 
 # Security Reviewer

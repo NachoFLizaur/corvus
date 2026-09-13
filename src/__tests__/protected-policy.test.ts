@@ -41,12 +41,12 @@ const asCleanup = (value: Cleanup | void): Cleanup => {
 }
 
 describe("enforceProtected permission boundary", () => {
-  test("discovery cannot bypass detector denial or relax a writer ask", async () => {
+  test("discovery permissions default to allow without relaxing a writer ask", async () => {
     const fake = createFakeContext()
     await enforceProtected(fake.ctx)
     for (const op of ["find", "local"]) {
       for (const agent of ["pr-code-reviewer", "security-reviewer"]) {
-        expect((await fake.evaluate({ agent, action: "corvus_review_pr", resources: [op], effect: "allow" })).effect).toBe("deny")
+        expect((await fake.evaluate({ agent, action: "corvus_review_pr", resources: [op], effect: "allow" })).effect).toBe("allow")
       }
       expect((await fake.evaluate({ agent: "pr-comment-writer", action: "corvus_review_pr", resources: [op], effect: "ask" })).effect).toBe("ask")
     }
@@ -56,24 +56,24 @@ describe("enforceProtected permission boundary", () => {
     const fake = createFakeContext()
     await enforceProtected(fake.ctx)
 
-    // The authored policy is a `*` deny with reads and shell forms carved back out, so a
-    // correct hook must both tighten the write side AND leave the read side alone.
+    // Default allow leaves tool ownership to the tools; only edit/write are denied here.
     const expected: readonly (readonly [string, "allow" | "deny"])[] = [
       ["read", "allow"],
       ["glob", "allow"],
       ["grep", "allow"],
-      ["shell", "deny"],
+      ["shell", "allow"],
       ["edit", "deny"],
-      ["subagent", "deny"],
-      ["webfetch", "deny"],
-      ["corvus_review_payload", "deny"],
-      ["corvus_review_verify", "deny"],
-      ["corvus_review_post", "deny"],
-      ["corvus_review_persist", "deny"],
-      ["corvus_review_lock", "deny"],
-      ["corvus_review_pr", "deny"],
-      ["corvus_review_verdict", "deny"],
-      ["corvus_review_sync", "deny"],
+      ["write", "deny"],
+      ["subagent", "allow"],
+      ["webfetch", "allow"],
+      ["corvus_review_payload", "allow"],
+      ["corvus_review_verify", "allow"],
+      ["corvus_review_post", "allow"],
+      ["corvus_review_persist", "allow"],
+      ["corvus_review_lock", "allow"],
+      ["corvus_review_pr", "allow"],
+      ["corvus_review_verdict", "allow"],
+      ["corvus_review_sync", "allow"],
     ]
 
     for (const agent of ["pr-code-reviewer", "security-reviewer"])
@@ -89,26 +89,26 @@ describe("enforceProtected permission boundary", () => {
     const fake = createFakeContext()
     await enforceProtected(fake.ctx)
 
-    // A v1 action name is normalized to `shell` for evaluation, so it still hits
+    // A v1 action name is normalized to `edit` for evaluation, so it still hits
     // the authored deny — but the message must quote what was actually requested.
     const decision = await fake.evaluate({
       agent: "pr-code-reviewer",
-      action: "bash",
-      resources: ["rm src/file"],
+      action: "write",
+      resources: ["src/file"],
       effect: "allow",
     })
 
     expect(decision.effect).toBe("deny")
     expect(decision.message).toBe(
-      "corvus: pr-code-reviewer is mechanically read-only; bash is denied by the plugin's security boundary.",
+      "corvus: pr-code-reviewer is mechanically read-only; write is denied by the plugin's security boundary.",
     )
   })
 
-  test("honours the pr-comment-writer shell allowlist and denies anything outside it", async () => {
+  test("writer shell permissions allow commands without an allowlist", async () => {
     const fake = createFakeContext()
     await enforceProtected(fake.ctx)
 
-    const allowlisted = [
+    const commands = [
       "jq . .corvus/reviews/o__r__pr1/post-request.json",
       "python3 -m json.tool .corvus/reviews/o__r__pr1/post-request.json",
       "shasum -a 256 .corvus/reviews/o__r__pr1/post-request.json",
@@ -127,7 +127,7 @@ describe("enforceProtected permission boundary", () => {
       "git log --oneline -5", "git show HEAD", "ls src",
     ]
 
-    for (const command of allowlisted) {
+    for (const command of commands) {
       const decision = await fake.evaluate({
         agent: "pr-comment-writer",
         action: "shell",
@@ -150,24 +150,23 @@ describe("enforceProtected permission boundary", () => {
       "gh pr review 1 --approve",
       "git branch -D main", "git remote remove origin", "git commit -m x", "rm file",
     ]) {
-      const denied = await fake.evaluate({ agent: "pr-comment-writer", action: "shell", resources: [command], effect: "allow" })
-      expect({ command, effect: denied.effect }).toEqual({ command, effect: "deny" })
-      expect(denied.message).toBe(boundaryMessage("pr-comment-writer", "shell"))
+      const decision = await fake.evaluate({ agent: "pr-comment-writer", action: "shell", resources: [command], effect: "allow" })
+      expect({ command, effect: decision.effect }).toEqual({ command, effect: "allow" })
+      expect(decision.message).toBeUndefined()
     }
 
-    // Fail closed across a multi-resource request: one denied resource is enough,
-    // even when another resource in the same request is explicitly allowed.
+    // The edit deny applies to every resource in a multi-resource request.
     const mixed = await fake.evaluate({
       agent: "pr-comment-writer",
-      action: "shell",
-      resources: [allowlisted[2], "rm file"],
+      action: "edit",
+      resources: [".corvus/reviews/pr1/post-request.json", "src/file.ts"],
       effect: "allow",
     })
 
     expect(mixed.effect).toBe("deny")
   })
 
-  test("both detectors can inspect history and files without gaining gh or explicit write forms", async () => {
+  test("both detectors default-allow shell commands, including formerly denied forms", async () => {
     const fake = createFakeContext()
     await enforceProtected(fake.ctx)
     for (const agent of ["pr-code-reviewer", "security-reviewer"]) {
@@ -175,19 +174,19 @@ describe("enforceProtected permission boundary", () => {
         expect((await fake.evaluate({ agent, action: "shell", resources: [command], effect: "allow" })).effect).toBe("allow")
       }
       for (const command of ["gh pr view 1", "git branch -D main", "git remote remove origin", "git commit -m x", "rm file"]) {
-        expect((await fake.evaluate({ agent, action: "shell", resources: [command], effect: "allow" })).effect).toBe("deny")
+        expect((await fake.evaluate({ agent, action: "shell", resources: [command], effect: "allow" })).effect).toBe("allow")
       }
     }
   })
 
-  test("writer reads the artifact but cannot edit it or reconstruct the retired payload", async () => {
+  test("writer permissions allow review tools and reads but deny edit aliases", async () => {
     const fake = createFakeContext()
     await enforceProtected(fake.ctx)
     const artifact = ".corvus/reviews/o__r__pr1/post-request.json"
     const read = await fake.evaluate({ agent: "pr-comment-writer", action: "read", resources: [artifact], effect: "allow" })
     expect(read.effect).toBe("allow")
     for (const [action, effect] of [["corvus_review_verify", "allow"], ["corvus_review_post", "allow"], ["corvus_review_pr", "allow"],
-      ["corvus_review_payload", "deny"], ["corvus_review_persist", "deny"], ["corvus_review_lock", "deny"], ["corvus_review_verdict", "deny"], ["corvus_review_sync", "deny"]] as const) {
+      ["corvus_review_payload", "allow"], ["corvus_review_persist", "allow"], ["corvus_review_lock", "allow"], ["corvus_review_verdict", "allow"], ["corvus_review_sync", "allow"]] as const) {
       const decision = await fake.evaluate({ agent: "pr-comment-writer", action, resources: [artifact], effect: "allow" })
       expect({ action, effect: decision.effect }).toEqual({ action, effect })
     }
@@ -295,8 +294,8 @@ describe("enforceProtected registration lifecycle", () => {
     // Teardown is the only thing that disables the boundary.
     const decision = await fake.evaluate({
       agent: "pr-code-reviewer",
-      action: "shell",
-      resources: ["rm -rf /"],
+      action: "edit",
+      resources: ["src/file.ts"],
       effect: "allow",
     })
     expect(decision.effect).toBe("allow")

@@ -297,16 +297,20 @@ fi
 # Barrier invariant: inspect the host-resolved rule before sending the model any
 # PR content. Barrier mode: an absent/non-deny final writer rule aborts both hosts.
 # Writer mode (v1): the final rule must allow, and the writer agent itself must expose
-# corvus_review_verify (and not corvus_review_payload) so the run exercises the real
+# corvus_review_verify and corvus_review_post so the run exercises the real
 # tool path; the shim remains the mutation barrier. This does not grant additional
 # permissions, and neither --keep nor a timeout disables it.
+# Use the last rule in the first populated tier: exact writer, task/subagent
+# wildcard, then global wildcard.
 bun -e '
   const data = await Bun.file(process.env.SMOKE_WORK + "/agents.json").json()
   const v2 = process.env.SMOKE_HOST === "v2"
   const expected = process.env.SMOKE_WRITER === "1" ? "allow" : "deny"
   const agent = v2 ? data.find(a => a.id === "corvus-review-auto") : data
   const rules = v2 ? agent?.permissions : agent?.permission
-  const writer = rules?.filter(r => v2 ? r.action === "subagent" && r.resource === "pr-comment-writer" : r.permission === "task" && r.pattern === "pr-comment-writer").at(-1)
+  const writer = rules?.findLast(r => v2 ? r.action === "subagent" && r.resource === "pr-comment-writer" : r.permission === "task" && r.pattern === "pr-comment-writer")
+    ?? rules?.findLast(r => v2 ? r.action === "subagent" && r.resource === "*" : r.permission === "task" && r.pattern === "*")
+    ?? rules?.findLast(r => v2 ? r.action === "*" : r.permission === "*")
   if ((v2 ? writer?.effect : writer?.action) !== expected) { console.error("Effective writer rule is not " + expected); process.exit(1) }
 ' || die 6 'posting barrier not installed; model was not started'
 if [[ "$WRITER" == 1 ]]; then
@@ -314,10 +318,11 @@ if [[ "$WRITER" == 1 ]]; then
   bun -e '
     const agent = await Bun.file(process.env.SMOKE_WORK + "/writer-agent.json").json()
     const tools = agent.tools ?? {}
-    if (agent.name !== "pr-comment-writer" || tools.corvus_review_verify !== true || tools.corvus_review_payload === true) {
-      console.error("writer exposure: " + JSON.stringify({ name: agent.name, corvus_review_verify: tools.corvus_review_verify, corvus_review_payload: tools.corvus_review_payload })); process.exit(1)
+    const exposure = Object.fromEntries(Object.entries(tools).filter(([name]) => name.startsWith("corvus_review_")))
+    console.info("Writer exposure: " + JSON.stringify(exposure))
+    if (agent.name !== "pr-comment-writer" || tools.corvus_review_verify !== true || tools.corvus_review_post !== true) {
+      console.error("writer exposure failed: " + JSON.stringify({ name: agent.name, ...exposure })); process.exit(1)
     }
-    console.log("Writer exposure: corvus_review_verify=true, corvus_review_payload=" + JSON.stringify(tools.corvus_review_payload))
   ' || die 6 'writer tool exposure failed; model was not started'
 fi
 

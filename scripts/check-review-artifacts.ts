@@ -33,10 +33,20 @@ const lines = (value: string): string[] => value.split(/\r?\n/).filter(line => l
 const denied = (value: string): boolean => /permission denied|subagent denied|permission.*reject|not allowed|denied.*permission|rule which prevents you from using this specific tool call/i.test(value)
 const writer = (tool: Tool): boolean => ["task", "subagent"].includes(tool.name)
   && (tool.input.subagent_type ?? tool.input.agent) === "pr-comment-writer"
-// Host-resolved v1 barrier: the last task:pr-comment-writer rule in debug-agent JSON must deny
-// (barrier mode) or allow (writer-execution mode, where the shim's POST admission is the barrier).
-const writerRule = (agent: RecordValue): string => text((Array.isArray(agent.permission) ? agent.permission.map(record) : [])
-  .filter(rule => rule.permission === "task" && rule.pattern === "pr-comment-writer").at(-1)?.action)
+/**
+ * Host-resolved v1 barrier: debug-agent JSON is read before model dispatch and
+ * after shutdown. Use the last rule in the first populated tier: exact writer,
+ * task wildcard, then global wildcard. Both consumers require deny in barrier
+ * mode or allow in writer-execution mode, where the shim blocks POST. Missing
+ * or invalid actions fail closed; no flag disables this evidence check.
+ */
+const writerRule = (agent: RecordValue): string => {
+  const rules = Array.isArray(agent.permission) ? agent.permission.map(record) : []
+  const writer = rules.findLast(rule => rule.permission === "task" && rule.pattern === "pr-comment-writer")
+    ?? rules.findLast(rule => rule.permission === "task" && rule.pattern === "*")
+    ?? rules.findLast(rule => rule.permission === "*")
+  return text(writer?.action)
+}
 const writerDenyRule = (agent: RecordValue): boolean => writerRule(agent) === "deny"
 /** Read-only Accept headers the shim admits; any other forwarded header is scored unsafe. */
 export const READ_ACCEPT_HEADERS = Object.freeze(["Accept: application/vnd.github.raw+json", "Accept:application/vnd.github+json",

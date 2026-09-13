@@ -68,15 +68,11 @@ function sections(text: string, title: string): string[] {
     headings.slice(i + 1).find(next => next.level <= h.level)?.row ?? rows.length).join("\n").trimEnd()])
 }
 const substantive = (section: string) => lines(section).slice(1).some(line => line.trim() && !/^\s*(?:#|<!--|```|~~~)/.test(line))
-const reviewChildren = ["pr-context-gatherer", "researcher", "pr-code-reviewer", "security-reviewer", "pr-comment-writer"]
-const closed = (names: string[]) => ({ "*": "deny", ...Object.fromEntries(names.map(name => [name, "allow"])) })
 const writer = "agent/pr-comment-writer.md", r2 = "skill/corvus-review-r2/SKILL.md", r4 = "skill/corvus-review-r4/SKILL.md", r5 = "skill/corvus-review-r5/SKILL.md"
 const reviewOrchestrators = ["agent/corvus-review.md", "agent/corvus-review-auto.md"]
-const reviewStatePolicy = closed([".corvus/reviews/**", "**/.corvus/reviews/**", ".corvus/tasks/*/reviews/**", "**/.corvus/tasks/*/reviews/**"])
 const reviewStateResources = [".corvus/reviews/x/lock.yaml", ".corvus/reviews/x/.lock",
   `.corvus/reviews/x/${"a".repeat(40)}/REVIEW_DOCUMENT.md`, ".corvus/reviews/x/candidate.json", ".corvus/reviews/x/review-input.json",
   ".corvus/tasks/topic/reviews/pr1/lock.yaml", ".corvus/tasks/topic/reviews/local-topic/review-input.json"]
-const reviewStateDenied = ["src/foo.ts", ".corvus/tasks/x/PLAN.md"]
 const externalSkillReferences = [
   "/cache/opencode/packages/corvus-ai@0.10.0-beta.1/node_modules/corvus-ai/skill/corvus-review-extras/schemas.md",
   "/home/user/.cache/opencode/packages/corvus-ai@0.10.0-beta.2/node_modules/corvus-ai/skill/corvus-review-extras/config.md",
@@ -88,72 +84,10 @@ const externalSkillReferences = [
   "/custom/config/opencode/skills/corvus-review-extras/schemas.md",
 ]
 const externalSkillResources = externalSkillReferences.flatMap(path => [path, `${posix.dirname(path.replaceAll("\\", "/"))}/*`])
-const artifactHash = "shasum -a 256 .corvus/reviews/*/post-request.json"
-const detachedCheckout = "gh pr checkout * --repo * --detach"
-const reviewGhForms = ["gh pr view *", "gh pr diff *", "gh pr checks *", "gh pr list *", "gh pr status*",
-  "gh issue view *", "gh issue list *", "gh repo view *", "gh api --method GET *", "gh api user*",
-  "gh search *", "gh run list *", "gh run view *", "gh auth status"]
-const reviewGitForms = ["git status*", "git log*", "git show*", "git diff*", "git blame*", "git shortlog*",
-  "git branch --list*", "git branch -a*", "git branch --show-current", "git remote -v", "git remote get-url *",
-  "git rev-parse*", "git merge-base*", "git ls-files*", "git rev-list*", "git cat-file -p *", "git worktree list*", "git fetch *"]
-const reviewUtilityForms = ["ls *", "wc *", "head *", "tail *", "cat *", "uniq *", "file *", "stat *", "jq *", "shasum *",
-  "sha256sum *", "date *", "python3 -m json.tool *", "test *", "printf *", "echo *", "pwd", "which *", "env", "bun --version", "node --version"]
-const reviewReadForms = [...reviewGhForms, ...reviewGitForms, ...reviewUtilityForms]
-const reviewBarePrForms = ["gh api repos/*/pulls/*", "gh api repos/*/pulls/*/*"]
-const reviewBareApiForms = [...reviewBarePrForms, "gh api --paginate repos/*/pulls/*/*", "gh api repos/*/commits/*",
-  "gh api repos/*/compare/*", "gh api repos/*/contents/*", "gh api repos/*/issues/*"]
-const legacyReviewApiForms = ["gh api repos/*/pulls/*/reviews --jq *", "gh api --paginate repos/*/pulls/*/reviews --jq *",
-  "gh api repos/*/pulls/*/comments --jq *", "gh api repos/*/compare/* --jq *"]
-const detectorBash = closed([...reviewGitForms, ...reviewUtilityForms])
-const reviewBash = closed(["date -u +%Y-%m-%dT%H:%M:%SZ", artifactHash, "git rev-parse HEAD", "gh auth status", detachedCheckout,
-  ...reviewReadForms, ...legacyReviewApiForms, ...reviewBareApiForms])
-const reviewMutations = ["gh api --method POST repos/o/r/pulls/1/reviews --input payload.json", "gh api --method PATCH repos/o/r",
-  "gh api --method PUT repos/o/r", "gh api --method DELETE repos/o/r", "gh api -X GET repos/o/r", "gh api repos/o/r -f body=x",
-  "gh pr review 1 --approve", "gh pr comment 1 --body x", "gh pr merge 1", "gh pr close 1", "gh pr edit 1 --title x",
-  "gh issue comment 1 --body x", "gh issue close 1", "git branch -D main", "git remote remove origin",
-  "git add .", "git commit -m x", "git push", "git reset --hard", "git checkout main", "git restore file", "rm file"]
 const reviewTools = ["corvus_review_payload", "corvus_review_verify", "corvus_review_post", "corvus_review_persist", "corvus_review_lock", "corvus_review_pr", "corvus_review_verdict", "corvus_review_sync"]
-const buildSideAgents = ["code-explorer", "code-implementer", "code-quality", "plan-reviewer", "requirements-analyst", "researcher", "task-planner", "ux-dx-quality"]
-const reviewToolDenies = Object.fromEntries(reviewTools.map(tool => [tool, "deny"]))
-const reviewToolGrants: Record<string, string[]> = {
-  ...Object.fromEntries(buildSideAgents.map(name => [name, []])),
-  "corvus-review": ["corvus_review_payload", "corvus_review_verify", "corvus_review_persist", "corvus_review_lock", "corvus_review_pr", "corvus_review_verdict", "corvus_review_sync"],
-  "corvus-review-auto": ["corvus_review_payload", "corvus_review_verify", "corvus_review_persist", "corvus_review_lock", "corvus_review_pr", "corvus_review_verdict", "corvus_review_sync"],
-  "pr-comment-writer": ["corvus_review_verify", "corvus_review_post", "corvus_review_pr"],
-  "pr-context-gatherer": ["corvus_review_pr"],
-  "pr-code-reviewer": [],
-  "security-reviewer": [],
-}
-const permissionPins: Record<string, Record<string, unknown>> = {
-  "agent/corvus-auto.md": { question: "deny" },
-  "agent/corvus-review-auto.md": { "*": "deny", corvus_review_payload: "allow", corvus_review_verify: "allow", corvus_review_persist: "allow", corvus_review_lock: "allow", corvus_review_pr: "allow", corvus_review_verdict: "allow", corvus_review_sync: "allow", question: "deny", task: closed(reviewChildren), edit: reviewStatePolicy, write: reviewStatePolicy, bash: reviewBash },
-  "agent/requirements-analyst.md": { question: "deny" },
-  "agent/corvus-review.md": { "*": "deny", corvus_review_payload: "allow", corvus_review_verify: "allow", corvus_review_persist: "allow", corvus_review_lock: "allow", corvus_review_pr: "allow", corvus_review_verdict: "allow", corvus_review_sync: "allow", question: "allow", task: closed(reviewChildren), edit: reviewStatePolicy, write: reviewStatePolicy, bash: reviewBash },
-  [writer]: {
-    ...closed(["corvus_review_verify", "corvus_review_post", "corvus_review_pr", "read", "glob", "grep"]), corvus_review_verdict: "deny", corvus_review_sync: "deny", list: "deny",
-    bash: closed(["jq . .corvus/reviews/*/post-request.json", "python3 -m json.tool .corvus/reviews/*/post-request.json", artifactHash,
-      ...reviewReadForms, ...reviewBarePrForms]),
-    edit: "deny", write: "deny", task: "deny", question: "deny", external_directory: "deny", todowrite: "deny", todoread: "deny",
-    webfetch: "deny", websearch: "deny", codesearch: "deny", lsp: "deny", doom_loop: "deny", skill: "deny",
-  },
-}
 const detectors = ["agent/pr-code-reviewer.md", "agent/security-reviewer.md"]
-const equalPolicy = (a: unknown, b: unknown): boolean => record(a) && record(b)
-  ? sameNames(Object.keys(a), Object.keys(b)) && Object.keys(a).every(key => equalPolicy(a[key], b[key])) : a === b
-const readOnlyPins: Record<string, Record<string, unknown>> = {
-  "agent/plan-reviewer.md": { ...reviewToolDenies, read: "allow", glob: "allow", grep: "allow", bash: closed([]), edit: { "**/*": "deny" } },
-  "agent/code-explorer.md": {
-    ...reviewToolDenies, read: "allow", glob: "allow", grep: "allow", edit: "deny", task: "deny",
-    bash: closed(["ls *", "find *", "cat *", "head *", "tail *", "wc *", "grep *", "rg *", "tree *",
-      "git log*", "git show*", "git diff*", "git blame*", "git ls-files*", "git shortlog*", "git rev-parse*",
-      "git merge-base*", "git status*", "git grep*", "gh search *", "gh api --method GET *",
-      "gh pr list --state open --json number,title,headRefName,files --limit 20", "gh repo view *"]),
-  },
-  "agent/pr-context-gatherer.md": {
-    ...closed(["corvus_review_pr", "read", "glob", "grep"]), corvus_review_verdict: "deny", corvus_review_sync: "deny", task: "deny", webfetch: "deny", question: "deny", edit: "deny", write: "deny",
-    bash: closed([...reviewReadForms, ...reviewBareApiForms, "sort *"]),
-  },
-}
+const leafReviewers = [...detectors, writer, "agent/pr-context-gatherer.md"]
+const autonomous = ["agent/corvus-auto.md", "agent/corvus-review-auto.md"]
 const orchestrators = ["agent/corvus.md", "agent/corvus-auto.md"]
 const gitDenies: Record<string, string[]> = {
   "git init*": ["git init", "git init --bare repo"],
@@ -161,7 +95,20 @@ const gitDenies: Record<string, string[]> = {
   "git push --force*": ["git push --force", "git push --force-with-lease origin HEAD"],
   "git push -f*": ["git push -f", "git push -f origin HEAD"],
   "git rebase*": ["git rebase", "git rebase origin/topic"],
+  "rm -rf *": ["rm -rf build", "rm -rf build cache"],
+  "rm -rf /*": ["rm -rf /tmp/example"],
+  "rm -fr *": ["rm -fr build"],
+  "rm -r *": ["rm -r build"],
+  "sudo *": ["sudo command"],
 }
+const permissionFor = (path: string): Record<string, unknown> => ({
+  "*": "allow",
+  ...(leafReviewers.includes(path) ? { edit: "deny", write: "deny" } : {}),
+  ...(autonomous.includes(path) ? { question: "deny" } : {}),
+  ...(orchestrators.includes(path) ? { bash: { "*": "allow", ...Object.fromEntries(Object.keys(gitDenies).map(pattern => [pattern, "deny"])) } } : {}),
+})
+const permissionEntries = (permission: Record<string, unknown>): [string, unknown][] => Object.entries(permission)
+  .flatMap(([action, effect]): [string, unknown][] => record(effect) ? Object.entries(effect).map(([pattern, value]) => [`${action}:${pattern}`, value]) : [[action, effect]])
 type BodyPin = { name: string; required?: RegExp; forbidden?: RegExp; section?: string }
 const bodyPins: Record<string, BodyPin[]> = {
   [r2]: [
@@ -173,6 +120,8 @@ const bodyPins: Record<string, BodyPin[]> = {
     { name: "authorized-artifact", required: /For authorized post\/auto_post, call corvus_review_payload with op freeze.*Only ok:true creates a usable POST_ARTIFACT descriptor for R5/i },
   ],
   [r5]: [
+    { name: "metadata-controls", section: "Revalidate Immediately Before Dispatch", required: /Call corvus_review_pr op metadata with \{owner, name, pr\} before dispatch; require ok:true and compare ONLY code_head, base_sha, and state for posting-authorization revalidation\. Changes to these fields, including OPEN→CLOSED\/MERGED, invalidate posting/i },
+    { name: "metadata-notes", section: "Revalidate Immediately Before Dispatch", required: /Mergeability \(mergeable\/mergeStateStatus\) never invalidates posting; record its changes and CI\/check changes only as notes in the terminal summary, never as posting controls\./i },
     { name: "artifact-verification", required: /Call corvus_review_verify with \{op: "verify", artifactPath: <artifact_path>, expectedSha256: <expected_sha256>\} before dispatch, including each permitted re-dispatch.*Require ok:true\s*, sha256Match true, canonical true, no violations, and available measurements/i },
   ],
   [writer]: [
@@ -207,7 +156,8 @@ const bodyPins: Record<string, BodyPin[]> = {
 const safetyFixtureBodies: Corpus = {
   [r2]: "## Evidence Envelope\n<review_root>/review-input.json\nEach complete dispatch prompt is ≤ 12,000 characters. The compaction ladder is: drop pasted hunks → drop file summaries → pointer-only evidence.",
   [r4]: "For authorized post/auto_post, call corvus_review_payload with op freeze. Only ok:true creates a usable POST_ARTIFACT descriptor for R5.",
-  [r5]: '## Dispatch One Artifact\nCall corvus_review_verify with {op: "verify", artifactPath: <artifact_path>, expectedSha256: <expected_sha256>} before dispatch, including each permitted re-dispatch. Require ok:true, sha256Match true, canonical true, no violations, and available measurements.\n```json\n{"artifact_path":"<path>","expected_sha256":"<digest>","repository":{"owner":"<owner>","name":"<name>"},"pr_number":<pr_number>,"head_sha":"<head>","event":"<event>"}\n```',
+  [r5]: '## Dispatch One Artifact\nCall corvus_review_verify with {op: "verify", artifactPath: <artifact_path>, expectedSha256: <expected_sha256>} before dispatch, including each permitted re-dispatch. Require ok:true, sha256Match true, canonical true, no violations, and available measurements.\n```json\n{"artifact_path":"<path>","expected_sha256":"<digest>","repository":{"owner":"<owner>","name":"<name>"},"pr_number":<pr_number>,"head_sha":"<head>","event":"<event>"}\n```'
+    + '\n## Revalidate Immediately Before Dispatch\nCall corvus_review_pr op metadata with {owner, name, pr} before dispatch; require ok:true and compare ONLY code_head, base_sha, and state for posting-authorization revalidation. Changes to these fields, including OPEN→CLOSED/MERGED, invalidate posting. Mergeability (mergeable/mergeStateStatus) never invalidates posting; record its changes and CI/check changes only as notes in the terminal summary, never as posting controls.',
   [writer]: '## Closed Field Sets\nPOST_ARTIFACT POST_REQUEST Comment POST_RESULT\nAn ok:false result ends local-only without posting; a digest mismatch is never accepted. Any anchor mismatch ends local-only without posting. Never re-type, copy, rewrite, relocate or re-encode review content. Call corvus_review_verify once immediately before corvus_review_post, with {op: "verify", artifactPath: <artifact_path>, expectedSha256: <original expected_sha256>}. Require ok:true, sha256Match true, canonical true, no violations, and available measurements. Call corvus_review_post once with {artifactPath: <artifact_path>, expectedSha256: <expected_sha256>, repo: <repository>, prNumber: <pr_number>, headSha: <head_sha>, event: <event>}. Frontmatter-granted read-only bash is available for diagnostics; it never satisfies any verification step. POST stays tool-only.\n### 1. Preflight Tools\nPreflight: before reading the artifact, confirm `corvus_review_pr`, `corvus_review_verify` and `corvus_review_post` are callable. Record absent tools as `not-exposed, cause unknown` with the observed inventory. Diagnostics never substitute for missing verification or posting tools.\n### 2. Validate Descriptor and Payload\nRead the artifact once to extract only the controls anchor validation needs. Body-line truncation is expected, not an incomplete controls read; never reconstruct or re-type content. Granted JSON diagnostics may inspect the unchanged file, not supply verification.',
   "command/git-commit.md": "Commit only the user's already staged changes. Never stage files. Request explicit confirmation.",
   "command/cleanup-subagents.md": "With --list, never invoke deletion. Stop after the preview. Request explicit confirmation only after the complete preview.",
@@ -226,24 +176,21 @@ function definitionMatches(body: string, d: Definition): { valid: boolean }[] {
 /**
  * Oracle: the supplied corpus snapshot, JSON contract and test-owned safety pins, read before validation;
  * validation never mutates its inputs. Missing files, malformed metadata, identity/dispatch
- * loss and pinned capability widening fail in every mode. A false cohort flag disables
+ * loss and permission-contract drift fail in every mode. A false cohort flag disables
  * its size/heading/definition/prohibition checks, not those unconditional checks. References inherit
  * their entry's cohort. Total size binds when all cohorts are on or final mode is requested;
  * final mode additionally rejects every false flag. No consumer treats an absent file as
  * an exemption. Fixtures clone inputs before seeding violations; no fixture writes disk.
  * Safety pins inspect parsed permission maps and whitespace-normalized prompt bodies
- * before any rollout skip; comments cannot satisfy required clauses. Missing clauses, widened maps or
- * ineffective destructive-Git denies fail for every consumer; no flag disables them.
- * Permission order is checked alongside the maps, using translated rules for Git denies and
- * artifact hashing and review tools. R5's dispatch keys and writer artifact guards are pinned before any skip;
+ * before any rollout skip; comments cannot satisfy required clauses. Missing clauses, unexpected rules or
+ * ineffective destructive-bash denies fail for every consumer; no flag disables them.
+ * The top-level wildcard allows all actions except the exact test-owned deny set. Ordered
+ * translation must preserve those denies. R5's dispatch keys and writer artifact guards are pinned before any skip;
  * a missing guard or body-bearing descriptor fails regardless of rollout flags.
- * Posting requires the writer's tool allow while its bash POST form must remain denied.
- * Skill-reference access uses parsed skill allows and the host-mirrored ordered evaluator
+ * Posting and shell discipline are prompt contracts, not frontmatter tool ownership.
+ * Skill-reference access uses the default allow and the host-mirrored ordered evaluator
  * over test-owned install paths, before any corpus mutation or rollout skip. Every consumer
- * fails on a missing or ineffective external-directory allow; no flag disables this pin.
- * Review-state pins read both authored write maps and their ordered translation against
- * test-owned relative/prefixed resources before any mutation or rollout skip. Missing,
- * unequal or ineffective allows fail for every consumer; no flag disables these checks.
+ * fails on ineffective read or external-directory access; no flag disables this pin.
  */
 function validate(corpus: Corpus, c: Contract, final = false): string[] {
   const errors: string[] = [], check = (ok: boolean, code: string) => { if (!ok) errors.push(code) }
@@ -283,54 +230,21 @@ function validate(corpus: Corpus, c: Contract, final = false): string[] {
         check(fm.mode === (posix.basename(path).startsWith("corvus") ? "primary" : "subagent") && typeof fm.temperature === "number" && Number.isFinite(fm.temperature) && record(fm.permission), `frontmatter:${path}`)
         check(fm.color === undefined || typeof fm.color === "string" && /^#[\da-f]{6}$/i.test(fm.color), `frontmatter:${path}`)
         const permission = record(fm.permission) ? fm.permission : {}
-        if (permission.skill === "allow") {
-          const rules = toV2Permissions(permission)
-          check(rules.some(rule => rule.action === "external_directory" && rule.effect === "allow")
-            && externalSkillResources.every(resource => evaluateRules(rules, "external_directory", resource) === "allow"), `safety:${path}:skill-references`)
-        }
-        for (const [key, policy] of Object.entries(permissionPins[path] ?? {})) check(equalPolicy(permission[key], policy), `safety:${path}`)
-        if (path === writer) check(equalPolicy(permission, permissionPins[writer]) && Object.keys(permission)[0] === "*"
-          && record(permission.bash) && Object.keys(permission.bash)[0] === "*", `safety:${path}`)
-        const grants = reviewToolGrants[posix.basename(path, ".md")]
-        if (grants) {
-          const rules = toV2Permissions(permission)
-          const explicit = buildSideAgents.includes(posix.basename(path, ".md"))
-            ? reviewTools.every(tool => permission[tool] === "deny") : Object.keys(permission)[0] === "*"
-          check(explicit && reviewTools.every(tool =>
-            evaluateRules(rules, tool, "*") === (grants.includes(tool) ? "allow" : "deny")), `safety:${path}:review-tools`)
-        }
-        if ([...reviewOrchestrators, writer].includes(path)) {
-          const bash = record(permission.bash) ? permission.bash : {}, rules = toV2Permissions(permission)
-          if (path === writer) check(evaluateRules(rules, "shell", "gh api --method POST repos/o/r/pulls/1/reviews --input .corvus/reviews/o__r__pr1/post-request.json") === "deny", `safety:${path}:bash-post`)
-          if (reviewOrchestrators.includes(path)) {
-            check(evaluateRules(rules, "question", "*")
-              === (path === "agent/corvus-review.md" ? "allow" : "deny"), `safety:${path}:question`)
-            check(equalPolicy(permission.edit, permission.write)
-              && reviewStateResources.every(resource => [resource, `../${resource}`].every(target => evaluateRules(rules, "edit", target) === "allow"))
-              && reviewStateDenied.every(resource => [resource, `../${resource}`].every(target => evaluateRules(rules, "edit", target) === "deny")), `safety:${path}:review-state`)
-          }
-          check(bash["*"] === "deny" && Object.keys(bash)[0] === "*" && bash[artifactHash] === "allow"
-            && evaluateRules(rules, "shell", "shasum -a 256 .corvus/reviews/o__r__pr1/post-request.json") === "allow"
-            && evaluateRules(rules, "shell", "shasum -a 256 /tmp/post-request.json") === "allow", `safety:${path}:artifact-hash`)
-          if (reviewOrchestrators.includes(path)) check(bash[detachedCheckout] === "allow"
-            && evaluateRules(rules, "shell", "gh pr checkout 12 --repo o/r --detach") === "allow"
-            && evaluateRules(rules, "shell", "gh pr checkout 12 --repo o/r") === "deny"
-            && evaluateRules(rules, "shell", "gh pr checkout 12 --repo o/r -b x") === "deny", `safety:${path}:detached-checkout`)
-        }
-        if (detectors.includes(path)) check(permission["*"] === "deny" && sameNames(Object.keys(permission).filter(k => permission[k] !== "deny"), ["read", "glob", "grep", "bash"])
-          && ["read", "glob", "grep"].every(k => permission[k] === "allow") && equalPolicy(permission.bash, detectorBash)
-          && record(permission.bash) && Object.keys(permission.bash)[0] === "*", `safety:${path}`)
-        if ([...reviewOrchestrators, writer, ...detectors, "agent/pr-context-gatherer.md"].includes(path)) {
-          const rules = toV2Permissions(permission)
-          check(reviewMutations.every(command => evaluateRules(rules, "shell", command) === "deny"), `safety:${path}:mutations`)
-        }
-        if (path in readOnlyPins) check(equalPolicy(permission, readOnlyPins[path])
-          && (!("*" in permission) || Object.keys(permission)[0] === "*")
-          && record(permission.bash) && Object.keys(permission.bash)[0] === "*", `safety:${path}:read-only`)
+        const expected = permissionFor(path), entries = permissionEntries(permission), rules = toV2Permissions(permission)
+        check(permission["*"] === "allow" && Object.keys(permission)[0] === "*"
+          && sameNames(Object.keys(permission), Object.keys(expected))
+          && (!orchestrators.includes(path) || record(permission.bash) && Object.keys(permission.bash)[0] === "*")
+          && sameNames(entries.filter(([, effect]) => effect === "deny").map(([key]) => key),
+            permissionEntries(expected).filter(([, effect]) => effect === "deny").map(([key]) => key))
+          && entries.every(([key, effect]) => effect === (key === "*" || key === "bash:*" ? "allow" : "deny")), `safety:${path}`)
+        check(externalSkillResources.every(resource => ["read", "external_directory"].every(action =>
+          evaluateRules(rules, action, resource) === "allow")), `safety:${path}:skill-references`)
+        check(evaluateRules(rules, "edit", "src/file.ts") === (leafReviewers.includes(path) ? "deny" : "allow")
+          && evaluateRules(rules, "question", "*") === (autonomous.includes(path) ? "deny" : "allow"), `safety:${path}`)
         if (orchestrators.includes(path)) {
           const bash = record(permission.bash) ? permission.bash : {}, rules = toV2Permissions(permission)
           for (const [pattern, commands] of Object.entries(gitDenies)) check(bash[pattern] === "deny"
-            && Object.keys(bash)[0] === "*" && commands.every(command => evaluateRules(rules, "shell", command) === "deny"), `safety:${path}:${pattern}`)
+            && bash["*"] === "allow" && Object.keys(bash)[0] === "*" && commands.every(command => evaluateRules(rules, "shell", command) === "deny"), `safety:${path}:${pattern}`)
         }
       }
     } catch { check(false, `frontmatter:${path}`) }
@@ -392,9 +306,7 @@ function fixture(): { corpus: Corpus; contract: Contract } {
   for (const flag of Object.values(contract.enforcementClasses)) flag.enforced = true
   for (const [path, rule] of Object.entries(contract.files)) {
     const kind = kindOf(path), name = path.split("/")[1].replace(/\.md$/, "")
-    const permission = { ...(buildSideAgents.includes(name) ? reviewToolDenies : {}), ...(detectors.includes(path) ? { ...closed(["read", "glob", "grep"]), bash: detectorBash }
-      : readOnlyPins[path] ?? { ...permissionPins[path], ...(orchestrators.includes(path)
-        ? { bash: { "*": "allow", ...Object.fromEntries(Object.keys(gitDenies).map(pattern => [pattern, "deny"])) } } : {}) }) }
+    const permission = permissionFor(path)
     const fm = kind === "agent" ? { description: "Fixture", mode: name.startsWith("corvus") ? "primary" : "subagent", temperature: 0.1, permission }
       : kind === "skill" ? { name, description: "Fixture" } : { description: "Fixture" }
     const parts = new Map(rule.headings.map(h => [h, "Fixture content."]))
@@ -449,16 +361,15 @@ describe("prompt structure", () => {
         expect(sameNames(v1[kind], identities[kind])).toBe(true)
         expect(sameNames(v2[kind], identities[kind])).toBe(true)
       }
-      for (const [name, grants] of Object.entries(reviewToolGrants)) {
+      for (const name of identities.agent) {
         const v1Rules = toV2Permissions(config.agent![name]!.permission)
         const v2Rules = fake.agents.get(name)!.permissions
         if (detectors.includes(`agent/${name}.md`)) for (const rules of [v1Rules, v2Rules]) {
           expect(evaluateRules(rules, "read", ".corvus/reviews/x/review-input.json")).toBe("allow")
         }
         for (const tool of reviewTools) {
-          const effect = grants.includes(tool) ? "allow" : "deny"
-          expect(evaluateRules(v1Rules, tool, "*")).toBe(effect)
-          expect(evaluateRules(v2Rules, tool, "*")).toBe(effect)
+          expect(evaluateRules(v1Rules, tool, "*")).toBe("allow")
+          expect(evaluateRules(v2Rules, tool, "*")).toBe("allow")
         }
       }
     } finally { await cleanup() }
@@ -488,7 +399,7 @@ describe("prompt structure", () => {
     expect(validate(corpus, contract)).toContain(`identity:${phase4}`)
     expect(sameNames(identities.agent.slice(1), identities.agent)).toBe(false)
     expect(sameNames([...identities.command, "extra"], identities.command)).toBe(false)
-    for (const [before, after] of [['"mode":"subagent"', '"mode":"primary"'], ['"temperature":0.1', '"temperature":"cold"'], [`"permission":${JSON.stringify(reviewToolDenies)}`, '"permission":null'], ['"description":"Fixture"', '"description":""']]) {
+    for (const [before, after] of [['"mode":"subagent"', '"mode":"primary"'], ['"temperature":0.1', '"temperature":"cold"'], [`"permission":${JSON.stringify(permissionFor(planner))}`, '"permission":null'], ['"description":"Fixture"', '"description":""']]) {
       const f = fixture(); f.corpus[planner] = f.corpus[planner].replace(before, after)
       expect(validate(f.corpus, f.contract)).toContain(`frontmatter:${planner}`)
     }
@@ -586,7 +497,7 @@ describe("prompt structure", () => {
     }
   })
   test("capability widening and eager command mutations fail before rollout", () => {
-    for (const path of [...Object.keys(permissionPins), ...detectors]) {
+    for (const path of [...autonomous, ...leafReviewers, ...orchestrators]) {
       const { corpus, contract } = fixture()
       contract.enforcementClasses[contract.files[path].class].enforced = false
       corpus[path] = corpus[path].replaceAll('"deny"', '"allow"')
@@ -604,44 +515,13 @@ describe("prompt structure", () => {
     const contract = structuredClone(budgets)
     for (const flag of Object.values(contract.enforcementClasses)) flag.enforced = false
 
-    test.each(reviewOrchestrators)("review-state writes retain exact equal maps and prefixed access: %s", path => {
-      const corpus = readCorpus(), { permission } = parseFrontmatter(corpus[path]).frontmatter
-      if (!record(permission)) throw new Error("Missing permission map")
-      expect(permission.edit).toEqual(permission.write)
-      for (const action of ["edit", "write"]) {
-        const policy = permission[action]
-        if (!record(policy)) throw new Error(`Missing ${action} map`)
-        expect(Object.entries(policy)).toEqual(Object.entries(reviewStatePolicy))
-        const rules = toV2Permissions({ [action]: policy })
-        for (const resource of reviewStateResources) for (const target of [resource, `../${resource}`]) {
-          expect(evaluateRules(rules, "edit", target)).toBe("allow")
-        }
-        for (const resource of reviewStateDenied) for (const target of [resource, `../${resource}`]) {
-          expect(evaluateRules(rules, "edit", target)).toBe("deny")
-        }
-      }
-      const unprefixed = mutatePermission(corpus, path, p => {
-        for (const action of ["edit", "write"]) p[action] = Object.fromEntries(Object.entries(reviewStatePolicy).filter(([key]) => !key.startsWith("**/")))
-      })
-      const rules = toV2Permissions(parseFrontmatter(unprefixed[path]).frontmatter.permission)
-      for (const resource of reviewStateResources) {
-        expect(evaluateRules(rules, "edit", resource)).toBe("allow")
-        expect(evaluateRules(rules, "edit", `../${resource}`)).toBe("deny")
-      }
-      expect(validate(unprefixed, contract)).toContain(`safety:${path}:review-state`)
-      // The mirror expands each * to .*, so ** accepts ../ and does not exclude dotfiles.
-      // Task-scoped permissions must survive in both authored maps.
-      for (const action of ["edit", "write"]) {
-        const missingLegacy = mutatePermission(corpus, path, p => {
-          p[action] = Object.fromEntries(Object.entries(reviewStatePolicy).filter(([key]) => !key.includes("/tasks/")))
-        })
-        expect(validate(missingLegacy, contract)).toContain(`safety:${path}`)
-        const reordered = mutatePermission(corpus, path, p => {
-          p[action] = { ...Object.fromEntries(Object.entries(reviewStatePolicy).slice(1)), "*": "deny" }
-        })
-        const policy = parseFrontmatter(reordered[path]).frontmatter.permission as Record<string, unknown>
-        expect(evaluateRules(toV2Permissions({ [action]: policy[action] }), "edit", reviewStateResources[0])).toBe("deny")
-      }
+    test.each(reviewOrchestrators)("review-state access inherits default allow without path maps: %s", path => {
+      const { permission } = parseFrontmatter(readCorpus()[path]).frontmatter
+      const rules = toV2Permissions(permission)
+      for (const resource of [...reviewStateResources, "src/foo.ts", ".corvus/tasks/x/PLAN.md"])
+        for (const target of [resource, `../${resource}`]) expect(evaluateRules(rules, "edit", target)).toBe("allow")
+      expect(permission).not.toHaveProperty("edit")
+      expect(permission).not.toHaveProperty("write")
     })
 
     test("lock acquisition checks both names and denial terminates with evidence and recovery", () => {
@@ -660,60 +540,37 @@ describe("prompt structure", () => {
       expect(denial).toContain("correct the permission/root mismatch and rerun R0 — existing state preserved")
     })
 
-    test("review tool permissions and interactive question survive only with effective explicit allows", () => {
+    test("every agent defaults to allow with exactly its expected denies and no extra rules", () => {
       const corpus = readCorpus()
-      for (const [name, grants] of Object.entries(reviewToolGrants)) {
-        const path = `agent/${name}.md`
-        const rules = toV2Permissions(parseFrontmatter(corpus[path]).frontmatter.permission)
-        for (const tool of reviewTools) {
-          const allowed = grants.includes(tool)
-          expect(evaluateRules(rules, tool, "*")).toBe(allowed ? "allow" : "deny")
-          if (allowed) {
-            const missing = mutatePermission(corpus, path, p => { delete p[tool] })
-            expect(evaluateRules(toV2Permissions(parseFrontmatter(missing[path]).frontmatter.permission), tool, "*")).toBe("deny")
-            expect(validate(missing, contract)).toContain(`safety:${path}:review-tools`)
-            expect(validate(mutatePermission(corpus, path, p => { delete p["*"]; p["*"] = "deny" }), contract))
-              .toContain(`safety:${path}:review-tools`)
-          } else {
-            expect(validate(mutatePermission(corpus, path, p => { p[tool] = "allow" }), contract))
-              .toContain(`safety:${path}:review-tools`)
-            if (buildSideAgents.includes(name)) {
-              const missing = mutatePermission(corpus, path, p => { delete p[tool] })
-              const inherited = toV2Permissions({ "*": "allow" })
-              expect(evaluateRules([...inherited, ...rules], tool, "*")).toBe("deny")
-              expect(evaluateRules([...inherited, ...toV2Permissions(parseFrontmatter(missing[path]).frontmatter.permission)], tool, "*")).toBe("allow")
-              expect(validate(missing, contract)).toContain(`safety:${path}:review-tools`)
-            }
-          }
-        }
-      }
-      const command = "gh api --method POST repos/o/r/pulls/1/reviews --input .corvus/reviews/o__r__pr1/post-request.json"
-      expect(evaluateRules(toV2Permissions(parseFrontmatter(corpus[writer]).frontmatter.permission), "shell", command)).toBe("deny")
-      const stalePostAllow = mutatePermission(corpus, writer, p => {
-        (p.bash as Record<string, unknown>)["gh api --method POST repos/*/pulls/*/reviews --input .corvus/reviews/*/post-request.json"] = "allow"
-      })
-      expect(evaluateRules(toV2Permissions(parseFrontmatter(stalePostAllow[writer]).frontmatter.permission), "shell", command)).toBe("allow")
-      expect(validate(stalePostAllow, contract)).toContain(`safety:${writer}:bash-post`)
-      for (const path of reviewOrchestrators) {
-        const expected = path === "agent/corvus-review.md" ? "allow" : "deny"
-        expect(evaluateRules(toV2Permissions(parseFrontmatter(corpus[path]).frontmatter.permission), "question", "*")).toBe(expected)
-        for (const mutation of ["remove", "invert"]) {
-          expect(validate(mutatePermission(corpus, path, p => {
-            if (mutation === "remove") delete p.question
-            else p.question = expected === "allow" ? "deny" : "allow"
+      expect(validate(corpus, contract)).toEqual([])
+      for (const name of identities.agent) {
+        const path = `agent/${name}.md`, { permission } = parseFrontmatter(corpus[path]).frontmatter
+        const rules = toV2Permissions(permission)
+        for (const tool of reviewTools) expect(evaluateRules(rules, tool, "*")).toBe("allow")
+        for (const mutate of [
+          (p: Record<string, unknown>) => { delete p["*"] },
+          (p: Record<string, unknown>) => { p["*"] = "deny" },
+          (p: Record<string, unknown>) => { p.skill = "deny" },
+          (p: Record<string, unknown>) => { p.corvus_review_pr = "allow" },
+          (p: Record<string, unknown>) => { p.external_directory = { "/cache/*": "deny" } },
+          (p: Record<string, unknown>) => { p.task = "ask" },
+        ]) expect(validate(mutatePermission(corpus, path, mutate), contract)).toContain(`safety:${path}`)
+        if (!orchestrators.includes(path)) expect(validate(mutatePermission(corpus, path, p => { p.bash = { "*": "allow" } }), contract)).toContain(`safety:${path}`)
+        for (const key of [...(leafReviewers.includes(path) ? ["edit", "write"] : []), ...(autonomous.includes(path) ? ["question"] : [])]) {
+          for (const effect of [undefined, "allow", "ask"]) expect(validate(mutatePermission(corpus, path, p => {
+            if (effect === undefined) delete p[key]
+            else p[key] = effect
           }), contract)).toContain(`safety:${path}`)
         }
       }
-      expect(validate(corpus, contract)).toEqual([])
     })
 
     test.each(reviewOrchestrators)("review orchestrators read external skill references: %s", path => {
       const { frontmatter } = parseFrontmatter(readCorpus()[path])
       const permission = frontmatter.permission as Record<string, unknown>
-      const { external_directory: _removed, ...beforePermission } = permission
       const resource = externalSkillReferences[0]
       const hostAllows = toV2Permissions({ external_directory: { [`${posix.dirname(resource)}/*`]: "allow" } })
-      const beforeRules = [...hostAllows, ...toV2Permissions(beforePermission)]
+      const beforeRules = [...hostAllows, ...toV2Permissions({ ...permission, "*": "deny" })]
       const rules = [...hostAllows, ...toV2Permissions(permission)]
       for (const target of [resource, `${posix.dirname(resource)}/*`]) {
         expect(evaluateRules(hostAllows, "external_directory", target)).toBe("allow")
@@ -724,33 +581,25 @@ describe("prompt structure", () => {
       for (const target of externalSkillResources) {
         expect(evaluateRules(rules, "external_directory", target)).toBe("allow")
         expect(evaluateRules(rules, "read", target)).toBe("allow")
-        expect(evaluateRules(rules, "edit", target)).toBe("deny")
+        expect(evaluateRules(rules, "edit", target)).toBe("allow")
       }
       expect(evaluateRules(rules, "shell", "git rev-parse HEAD")).toBe("allow")
       expect(evaluateRules(rules, "shell", "git rev-parse --show-toplevel")).toBe("allow")
       for (const target of ["/etc/passwd", "/home/user/.ssh/id_ed25519", "/home/user/.config/opencode/opencode.json",
         "/cache/opencode/packages-other/secret", "/cache/opencode2-other/secret", "/custom/config/opencode/agents/reviewer.md"]) {
-        expect(evaluateRules(rules, "external_directory", target)).toBe("deny")
+        expect(evaluateRules(rules, "external_directory", target)).toBe("allow")
       }
     })
 
-    test("every skill-enabled agent requires effective external-directory allows with rollout flags off", () => {
+    test("every agent reads installed references without injected grants with rollout flags off", () => {
       const corpus = readCorpus()
-      const skillAgents = Object.keys(corpus).filter(path => {
-        if (kindOf(path) !== "agent") return false
-        const { permission } = parseFrontmatter(corpus[path]).frontmatter
-        return record(permission) && permission.skill === "allow"
-      })
-      expect(skillAgents.sort()).toEqual([...orchestrators, ...reviewOrchestrators].sort())
-      for (const path of skillAgents) {
+      for (const name of identities.agent) {
+        const path = `agent/${name}.md`
         const code = `safety:${path}:skill-references`
         expect(validate(corpus, contract)).not.toContain(code)
-        for (const mutation of ["remove", "deny", "wrong-path", "reorder"]) {
+        for (const action of ["read", "external_directory", "*"]) {
           const changed = mutatePermission(corpus, path, p => {
-            if (mutation === "remove") delete p.external_directory
-            if (mutation === "deny") p.external_directory = "deny"
-            if (mutation === "wrong-path") p.external_directory = { "/unrelated/*": "allow" }
-            if (mutation === "reorder") { delete p["*"]; p["*"] = "deny" }
+            p[action] = "deny"
           })
           expect(validate(changed, contract)).toContain(code)
         }
@@ -768,6 +617,13 @@ describe("prompt structure", () => {
         [r4, "authorized-artifact", "Only `ok:true` creates a usable POST_ARTIFACT", "Any result creates a usable POST_ARTIFACT"],
         [r5, "artifact-verification", "before dispatch, including each permitted re-dispatch", "after dispatch"],
         [r5, "artifact-verification", "expectedSha256: <expected_sha256>", "expectedSha256: <new_digest>"],
+        [r5, "metadata-controls", "compare ONLY code_head, base_sha, and state for posting-authorization revalidation.", "unchanged code_head/base, state, draft and mergeability controls;"],
+        [r5, "metadata-controls", "code_head, base_sha, and state", "code_head, base_sha, state, and mergeability"],
+        [r5, "metadata-controls", "code_head, base_sha, and state", "code_head, base_sha, state, and draft"],
+        [r5, "metadata-controls", "code_head, base_sha, and state", "code_head and state"],
+        [r5, "metadata-controls", "including OPEN→CLOSED/MERGED, invalidate posting", "including OPEN→CLOSED/MERGED, never invalidate posting"],
+        [r5, "metadata-notes", "Mergeability (mergeable/mergeStateStatus) never invalidates posting", "Mergeability (mergeable/mergeStateStatus) invalidates posting"],
+        [r5, "metadata-notes", "CI/check changes only as notes in the terminal summary", "CI/check changes as posting controls"],
         [writer, "digest-failure", "An `ok:false` result ends local-only without posting", "An `ok:false` result permits posting"],
         [writer, "digest-failure", "a digest mismatch is never accepted", "a digest mismatch is accepted"],
         [writer, "anchor-failure", "any anchor mismatch ends local-only without posting.", "any anchor mismatch permits body relocation."],
@@ -853,11 +709,7 @@ describe("prompt structure", () => {
         expect(changed).not.toBe(prose)
         expect(safetyText(changed)).not.toMatch(guard)
       }
-      const ladder = "gh api --method GET --paginate repos/*/pulls/*/files -H Accept:application/vnd.github+json"
       const command = "gh api --method GET --paginate repos/o/r/pulls/1/files -H Accept:application/vnd.github+json"
-      const before = mutatePermission(corpus, writer, p => { (p.bash as Record<string, unknown>)[ladder] = "allow" })
-      expect(evaluateRules(toV2Permissions(parseFrontmatter(before[writer]).frontmatter.permission), "shell", command)).toBe("allow")
-      expect(validate(before, contract)).toContain(`safety:${writer}`)
       expect(evaluateRules(toV2Permissions(parseFrontmatter(corpus[writer]).frontmatter.permission), "shell", command)).toBe("allow")
       expect(sections(corpus[r2], "Evidence Envelope").join("\n")).not.toMatch(/in ONE call|whole-JSON retry|never write JSON in two halves/)
     })
@@ -968,7 +820,7 @@ describe("prompt structure", () => {
       }
     })
 
-    test("hash diagnostics cover arbitrary paths while legacy grants and writer boundaries stay pinned", () => {
+    test("hash diagnostics cover arbitrary paths while writer edit/write denies stay pinned", () => {
       const corpus = readCorpus()
       for (const path of [...reviewOrchestrators, writer]) {
         const { frontmatter } = parseFrontmatter(corpus[path]), rules = toV2Permissions(frontmatter.permission)
@@ -982,52 +834,37 @@ describe("prompt structure", () => {
           "shasum -a 256 .corvus/reviews/o__r__pr1/other.json"]) {
           expect(evaluateRules(rules, "shell", command)).toBe("allow")
         }
-        expect(validate(mutatePermission(corpus, path, p => { delete (p.bash as Record<string, unknown>)[artifactHash] }), contract))
-          .toContain(`safety:${path}:artifact-hash`)
-        expect(validate(mutatePermission(corpus, path, p => { delete (p.bash as Record<string, unknown>)["shasum *"] }), contract))
-          .toContain(`safety:${path}:artifact-hash`)
       }
-      for (const key of ["edit", "write", "skill", "webfetch"]) {
+      for (const key of ["edit", "write"]) {
         expect(validate(mutatePermission(corpus, writer, p => { p[key] = "allow" }), contract)).toContain(`safety:${writer}`)
       }
       expect(validate(mutatePermission(corpus, writer, p => { p["unlisted-tool"] = "allow" }), contract)).toContain(`safety:${writer}`)
     })
 
-    test("review orchestrators allow detached checkout but deny named-branch forms", () => {
+    test("review orchestrator shell permissions no longer distinguish checkout forms", () => {
       const corpus = readCorpus()
       for (const path of reviewOrchestrators) {
         const { frontmatter } = parseFrontmatter(corpus[path]), rules = toV2Permissions(frontmatter.permission)
         expect(evaluateRules(rules, "shell", "gh pr checkout 12 --repo o/r --detach")).toBe("allow")
         for (const command of ["gh pr checkout 12 --repo o/r", "gh pr checkout 12 --repo o/r -b x"]) {
-          expect(evaluateRules(rules, "shell", command)).toBe("deny")
+          expect(evaluateRules(rules, "shell", command)).toBe("allow")
         }
-        const missing = mutatePermission(corpus, path, p => { delete (p.bash as Record<string, unknown>)[detachedCheckout] })
-        const beforeRules = toV2Permissions(parseFrontmatter(missing[path]).frontmatter.permission)
-        expect(evaluateRules(beforeRules, "shell", "gh pr checkout 12 --repo o/r --detach")).toBe("deny")
-        expect(validate(missing, contract)).toContain(`safety:${path}:detached-checkout`)
+        expect(frontmatter.permission).not.toHaveProperty("bash")
       }
     })
 
-    /**
-     * Identity pins read authored permissions and R0 prose before mutating in-memory copies;
-     * missing fallback access, widened auth access or lost fail-closed guidance fails these
-     * checks regardless of rollout flags. They verify prompt contracts, not live GitHub identity.
-     */
-    test("identity fallback permits only bare auth status in both orchestrators", () => {
+    test("identity fallback inherits unrestricted shell permissions in both orchestrators", () => {
       const corpus = readCorpus(), command = "gh auth status"
       for (const path of reviewOrchestrators) {
         const { permission } = parseFrontmatter(corpus[path]).frontmatter
-        if (!record(permission) || !record(permission.bash)) throw new Error("Missing bash permission map")
         const rules = toV2Permissions(permission)
-        expect(permission.bash[command]).toBe("allow")
+        expect(permission).not.toHaveProperty("bash")
         expect(evaluateRules(rules, "shell", command)).toBe("allow")
         expect(evaluateRules(rules, "shell", "gh api user --jq .login")).toBe("allow")
-        for (const denied of ["gh auth login", "gh auth logout", "gh auth status --show-token",
+        for (const command of ["gh auth login", "gh auth logout", "gh auth status --show-token",
           "gh auth status --hostname github.com", "gh auth status --json hosts"]) {
-          expect(evaluateRules(rules, "shell", denied), `${path}: ${denied}`).toBe("deny")
+          expect(evaluateRules(rules, "shell", command), `${path}: ${command}`).toBe("allow")
         }
-        const missing = mutatePermission(corpus, path, p => { delete (p.bash as Record<string, unknown>)[command] })
-        expect(evaluateRules(toV2Permissions(parseFrontmatter(missing[path]).frontmatter.permission), "shell", command)).toBe("deny")
       }
     })
 
@@ -1051,7 +888,7 @@ describe("prompt structure", () => {
       expect(safetyText(uncapped)).not.toMatch(unavailable)
     })
 
-    test("review shell maps admit the approved reads and keep explicit mutation forms denied", () => {
+    test("review shell permissions default to allow rather than maintaining command allowlists", () => {
       const corpus = readCorpus()
       const reads = [
         ["gh pr list --repo * --state * --json *", "gh pr list --repo o/r --state open --json number,title,files"],
@@ -1063,29 +900,26 @@ describe("prompt structure", () => {
       ]
       for (const path of [...reviewOrchestrators, writer, "agent/pr-context-gatherer.md"]) {
         const { permission } = parseFrontmatter(corpus[path]).frontmatter
-        if (!record(permission) || !record(permission.bash)) throw new Error("Missing bash permission map")
+        expect(permission).not.toHaveProperty("bash")
         const rules = toV2Permissions(permission)
         for (const [key, command] of reads) {
           expect(evaluateRules(rules, "shell", command), `${path}: ${command}`).toBe("allow")
-          expect(permission.bash[key]).toBeUndefined()
-          const widened = mutatePermission(corpus, path, p => { (p.bash as Record<string, unknown>)[key] = "allow" })
-          expect(validate(widened, contract)).toContain(path === "agent/pr-context-gatherer.md" ? `safety:${path}:read-only` : `safety:${path}`)
+          const extra = mutatePermission(corpus, path, p => { p.bash = { [key]: "allow" } })
+          expect(validate(extra, contract)).toContain(`safety:${path}`)
           if (command.startsWith("gh api")) for (const method of ["-X POST", "--method POST"]) {
-            expect(evaluateRules(rules, "shell", command.replace("--method GET", method))).toBe("deny")
+            expect(evaluateRules(rules, "shell", command.replace("--method GET", method))).toBe("allow")
           }
         }
         for (const command of ["gh pr list --repo o/r --state open", "gh issue view 8 --repo o/r"]) {
           expect(evaluateRules(rules, "shell", command)).toBe("allow")
         }
-        for (const command of reviewMutations) expect(evaluateRules(rules, "shell", command)).toBe("deny")
       }
       for (const path of detectors) {
         const { permission } = parseFrontmatter(corpus[path]).frontmatter
         const rules = toV2Permissions(permission)
-        for (const command of [...reviewGitForms, ...reviewUtilityForms].map(form => form.replaceAll("*", "fixture"))) {
+        for (const command of ["git log", "ls src", "gh pr view 1", "git commit -m x", "rm file"]) {
           expect(evaluateRules(rules, "shell", command)).toBe("allow")
         }
-        for (const command of ["gh pr view 1", ...reviewMutations]) expect(evaluateRules(rules, "shell", command)).toBe("deny")
       }
     })
 
@@ -1252,38 +1086,23 @@ describe("prompt structure", () => {
       expect(validate({ ...corpus, [auto]: corpus[auto] + "\n## Progress\nUse per-phase commits as a rejected example.\n" }, contract)).toEqual([])
     })
 
-    test.each(Object.keys(readOnlyPins))("%s pins its permission map and rejects mutation allows", path => {
-      const corpus = readCorpus(), code = `safety:${path}:read-only`
-      expect(validate(corpus, contract)).not.toContain(code)
-      for (const key of ["edit", "write", "bash", "task", "webfetch", "question", "*"]) {
-        expect(validate(mutatePermission(corpus, path, p => { p[key] = "allow" }), contract)).toContain(code)
-      }
-      for (const pattern of ["git *", "gh *", "gh api *"]) {
-        expect(validate(mutatePermission(corpus, path, p => { (p.bash as Record<string, unknown>)[pattern] = "allow" }), contract)).toContain(code)
-      }
-      expect(validate(mutatePermission(corpus, path, p => {
-        const bash = p.bash as Record<string, unknown>
-        delete bash["*"]; bash["*"] = "allow"
-      }), contract)).toContain(code)
-    })
-
-    test("gatherer denies unspecified tools and both edit aliases without losing safe reads", () => {
-      const corpus = readCorpus(), path = "agent/pr-context-gatherer.md", code = `safety:${path}:read-only`
+    test.each(leafReviewers)("%s denies both edit aliases without restricting other actions", path => {
+      const corpus = readCorpus(), code = `safety:${path}`
       const { frontmatter } = parseFrontmatter(corpus[path]), rules = toV2Permissions(frontmatter.permission)
-      for (const action of ["edit", "subagent", "webfetch", "question", "unlisted-tool"]) {
-        expect(evaluateRules(rules, action, "file.ts")).toBe("deny")
+      for (const action of ["subagent", "webfetch", "question", "unlisted-tool"]) {
+        expect(evaluateRules(rules, action, "file.ts")).toBe("allow")
       }
       expect(rules.filter(rule => rule.action === "edit")).toEqual([
         { action: "edit", resource: "*", effect: "deny" }, { action: "edit", resource: "*", effect: "deny" },
       ])
       for (const action of ["read", "glob", "grep"]) expect(evaluateRules(rules, action, "file.ts")).toBe("allow")
       expect(evaluateRules(rules, "shell", "gh api --method GET repos/o/r/pulls/1")).toBe("allow")
-      expect(evaluateRules(rules, "shell", "gh api --method POST repos/o/r/pulls/1/reviews")).toBe("deny")
+      expect(evaluateRules(rules, "shell", "gh api --method POST repos/o/r/pulls/1/reviews")).toBe("allow")
       expect(validate(mutatePermission(corpus, path, p => { delete p["*"] }), contract)).toContain(code)
       expect(validate(mutatePermission(corpus, path, p => { delete p["*"]; p["*"] = "deny" }), contract)).toContain(code)
     })
 
-    test("both orchestrators require effective trailing-star destructive-git denies", () => {
+    test("both orchestrators require effective trailing-star destructive-bash denies", () => {
       const corpus = readCorpus()
       for (const path of orchestrators) {
         const rule = /<rule id="always_delegate">([\s\S]*?)<\/rule>/.exec(corpus[path])?.[1] ?? ""
@@ -1306,7 +1125,7 @@ describe("prompt structure", () => {
             if (mutation === "reorder") { delete bash["*"]; bash["*"] = "allow" }
             if (mutation === "override") bash[gitDenies[pattern][0]] = "allow"
           })
-          expect(validate(changed, contract)).toContain(code)
+          expect(validate(changed, contract)).toContain(`safety:${path}`)
         }
       }
     })

@@ -129,7 +129,11 @@ const plugin: Plugin = async (input) => {
           candidatePath: z.string().min(1),
           artifactPath: z.string().min(1).optional(),
         },
-        execute: async (args) => review.payload(args),
+        /** Host ctx.agent is read before payload I/O; only the two review orchestrators pass. Missing/unknown callers fail closed, and no argument or option disables the check. */
+        execute: async (args, ctx) => {
+          if (!["corvus-review", "corvus-review-auto"].includes(ctx?.agent)) return JSON.stringify({ ok: false, reason: "caller-not-allowed" })
+          return review.payload(args)
+        },
       },
       corvus_review_verify: {
         description: "Verify a frozen review artifact and its expected SHA-256 under .corvus/reviews or .corvus/tasks/<task>/reviews without writing. Paths are session-relative or absolute.",
@@ -138,7 +142,11 @@ const plugin: Plugin = async (input) => {
           artifactPath: z.string().min(1),
           expectedSha256: z.string().regex(/^[a-f0-9]{64}$/),
         },
-        execute: async (args) => review.verify(args),
+        /** Host ctx.agent is read before artifact I/O; only the review orchestrators and writer pass. Missing/unknown callers fail closed, and no argument or option disables the check. */
+        execute: async (args, ctx) => {
+          if (!["corvus-review", "corvus-review-auto", "pr-comment-writer"].includes(ctx?.agent)) return JSON.stringify({ ok: false, reason: "caller-not-allowed" })
+          return review.verify(args)
+        },
       },
       corvus_review_post: {
         description: "Post a frozen review artifact under .corvus/reviews or .corvus/tasks/<task>/reviews after verifying its digest and current PR code_head. Use the absolute artifactPath returned by freeze.",
@@ -153,7 +161,7 @@ const plugin: Plugin = async (input) => {
           headSha: z.string().regex(/^[a-f0-9]{40}$/),
           event: z.enum(["APPROVE", "REQUEST_CHANGES", "COMMENT"]),
         },
-        execute: async (args) => post(args),
+        execute: async (args, ctx) => post(args, ctx?.agent),
       },
       corvus_review_persist: {
         description: "Write or read review state under the host's .corvus/reviews or .corvus/tasks/<task>/reviews roots. Supply op and reviewRoot plus only that op's fields: write_document(headSha, sections, optional frontmatterYaml), write_input(input), write_meta(headSha, meta, optional name: meta.yaml/decision.yaml/completion.yaml/authorization.yaml/review-action.yaml), write_candidate(candidate), read_document(headSha), write_facts(facts), read_facts(). The module validates operation-specific arguments.",
@@ -169,7 +177,11 @@ const plugin: Plugin = async (input) => {
           facts: z.object({}).passthrough().optional(),
           candidate: z.object({}).passthrough().optional(),
         },
-        execute: async (args) => persist(args),
+        /** Host ctx.agent is read before state I/O; only the two review orchestrators pass. Missing/unknown callers fail closed, and no argument or option disables the check. */
+        execute: async (args, ctx) => {
+          if (!["corvus-review", "corvus-review-auto"].includes(ctx?.agent)) return JSON.stringify({ ok: false, reason: "caller-not-allowed" })
+          return persist(args)
+        },
       },
       corvus_review_lock: {
         description: "Manage review locks under the host's .corvus/reviews or .corvus/tasks/<task>/reviews roots. Supply op and reviewRoot; acquire also needs runId and optional force, release needs runId and mode (delete or complete), status needs no other fields. The module validates operation-specific arguments.",
@@ -180,7 +192,11 @@ const plugin: Plugin = async (input) => {
           force: z.boolean().optional(),
           mode: z.enum(["delete", "complete"]).optional(),
         },
-        execute: async (args) => lock(args),
+        /** Host ctx.agent is read before lock I/O; only the two review orchestrators pass. Missing/unknown callers fail closed, and no argument or option disables the check. */
+        execute: async (args, ctx) => {
+          if (!["corvus-review", "corvus-review-auto"].includes(ctx?.agent)) return JSON.stringify({ ok: false, reason: "caller-not-allowed" })
+          return lock(args)
+        },
       },
       corvus_review_pr: {
         description: "Read GitHub PR data with validated, fixed operations. metadata/head/diff/reviews/checks take owner, name, pr; files also requires paginate:true and accepts include_corvus/names_only booleans (include_corvus implies names-only). Files and diffs exclude .corvus by default and report excluded_corvus; local changed_files stays unfiltered. metadata/head/local return raw head_sha and code_head skipping state commits. config takes owner, name, ref (base SHA); identity takes no fields; repo resolves owner/name from gh or origin with optional cwd (defaults to the session directory). find takes optional cwd/branch to discover the current or named branch's PR; local takes optional cwd/base for a bounded local diff including tracked uncommitted changes, branch (null when detached), default_branch, merge_base, ahead, changed_files, stat, dirty and oversized. Caller policy uses the host agent: pr-comment-writer may call only head, diff, files; corvus-review, corvus-review-auto and pr-context-gatherer may call any op. Unknown callers return caller-not-allowed.",

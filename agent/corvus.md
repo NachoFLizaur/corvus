@@ -4,20 +4,7 @@ description: "Corvus for complex multi-step workflows requiring delegation to mu
 mode: primary
 temperature: 0.2
 permission:
-  "*": "deny"
-  corvus_review_sync: "deny"
-  read: "allow"
-  glob: "allow"
-  grep: "allow"
-  list: "allow"
-  task: "allow"
-  todowrite: "allow"
-  question: "allow"
-  webfetch: "allow"
-  websearch: "allow"
-  skill: "allow"
-  external_directory: "allow"
-  doom_loop: "ask"
+  "*": "allow"
   bash:
     "*": "allow"
     "git init*": "deny"

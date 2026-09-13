@@ -24,18 +24,15 @@ const translate = (frontmatter: Record<string, unknown>, prompt = "Body") =>
   toV2Agent({ name: "fixture", config: { ...frontmatter, prompt } })
 
 describe("toV2Agent over the real corpus", () => {
-  test("keeps the runtime grant last across translation and denies after its removal", () => {
+  test("allows installed references through the wildcard without a runtime grant", () => {
     const pattern = `${root.replaceAll("\\", "/")}/*`
     for (const [name, config] of Object.entries(corpus)) {
       const rules = toV2Agent({ name, config }).fields.permissions!
-      if (config.permission?.skill === "allow")
-        expect(rules.at(-1)).toEqual({ action: "external_directory", resource: pattern, effect: "allow" })
-      else expect(rules.some(rule => rule.resource === pattern)).toBe(false)
-    }
-    const rules = toV2Agent({ name: "corvus-review", config: corpus["corvus-review"] }).fields.permissions!
-    for (const resource of [`${root}/skill/corvus-review-extras/schemas.md`, `${root}/skill/corvus-review-extras/*`]) {
-      expect(evaluateRules(rules, "external_directory", resource)).toBe("allow")
-      expect(evaluateRules(rules.slice(0, -1), "external_directory", resource)).toBe("deny")
+      expect(rules.some(rule => rule.resource === pattern)).toBe(false)
+      for (const resource of [`${root}/skill/corvus-review-extras/schemas.md`, `${root}/skill/corvus-review-extras/*`]) {
+        expect(evaluateRules(rules, "external_directory", resource)).toBe("allow")
+        expect(evaluateRules(rules, "read", resource)).toBe("allow")
+      }
     }
   })
 
@@ -111,40 +108,23 @@ describe("toV2Agent field mapping", () => {
 })
 
 describe("toV2Permissions", () => {
-  test("discovery preserves the PR tool permission matrix and local state paths", () => {
-    for (const [name, config] of Object.entries(corpus)) {
+  test("review tools inherit default allow; caller checks are not frontmatter rules", () => {
+    for (const config of Object.values(corpus)) {
       const rules = toV2Permissions(config.permission)
-      const allowed = ["corvus-review", "corvus-review-auto", "pr-context-gatherer", "pr-comment-writer"].includes(name)
-      for (const op of ["find", "local"]) expect(evaluateRules(rules, "corvus_review_pr", op)).toBe(allowed ? "allow" : "deny")
-      for (const op of ["resolve", "pull", "push"]) expect(evaluateRules(rules, "corvus_review_sync", op)).toBe(["corvus-review", "corvus-review-auto"].includes(name) ? "allow" : "deny")
-      if (["corvus-review", "corvus-review-auto"].includes(name)) {
-        for (const action of ["corvus_review_persist", "corvus_review_lock", "corvus_review_verdict"]) {
-          expect(evaluateRules(rules, action, ".corvus/reviews/local__repo__topic-B")).toBe("allow")
-        }
-      }
+      for (const op of ["find", "local"]) expect(evaluateRules(rules, "corvus_review_pr", op)).toBe("allow")
+      for (const op of ["resolve", "pull", "push"]) expect(evaluateRules(rules, "corvus_review_sync", op)).toBe("allow")
+      expect(rules.some(rule => rule.action.startsWith("corvus_review_"))).toBe(false)
     }
   })
 
-  test("real corvus-review keeps both edit/write allow sequences after their denies", () => {
+  test("real corvus-review uses a single wildcard for state and project access", () => {
     const rules = toV2Permissions(corpus["corvus-review"].permission)
-    const block: ReturnType<typeof toV2Permissions> = [
-      { action: "edit", resource: "*", effect: "deny" },
-      { action: "edit", resource: ".corvus/reviews/**", effect: "allow" },
-      { action: "edit", resource: "**/.corvus/reviews/**", effect: "allow" },
-      { action: "edit", resource: ".corvus/tasks/*/reviews/**", effect: "allow" },
-      { action: "edit", resource: "**/.corvus/tasks/*/reviews/**", effect: "allow" },
-    ]
-    expect(rules[0]).toEqual({ action: "*", resource: "*", effect: "deny" })
-    expect(rules.filter(rule => rule.action === "edit")).toEqual([...block, ...block])
-    expect(rules.some(rule => rule.action === "write")).toBe(false)
+    expect(rules).toEqual([{ action: "*", resource: "*", effect: "allow" }])
     for (const resource of [".corvus/reviews/x/lock.yaml", ".corvus/reviews/x/.lock",
       `.corvus/reviews/x/${"a".repeat(40)}/REVIEW_DOCUMENT.md`, ".corvus/reviews/x/candidate.json"]) {
       for (const target of [resource, `../${resource}`]) expect(evaluateRules(rules, "edit", target)).toBe("allow")
     }
-    for (const resource of ["src/foo.ts", ".corvus/tasks/x/PLAN.md"]) expect(evaluateRules(rules, "edit", resource)).toBe("deny")
-    // Reproduce an incomplete migration: the later legacy write block cancels prefixed allows.
-    const staleWrite = toV2Permissions({ ...corpus["corvus-review"].permission, write: { "*": "deny", ".corvus/reviews/**": "allow" } })
-    expect(evaluateRules(staleWrite, "edit", "../.corvus/reviews/x/lock.yaml")).toBe("deny")
+    for (const resource of ["src/foo.ts", ".corvus/tasks/x/PLAN.md"]) expect(evaluateRules(rules, "edit", resource)).toBe("allow")
   })
 
   test("turns a scalar effect into one rule scoped to `*`", () => {
@@ -163,35 +143,22 @@ describe("toV2Permissions", () => {
   })
 
   test("turns a resource map into one rule per resource in frontmatter order", () => {
-    const rules = toV2Permissions(corpus["pr-comment-writer"].permission)
-
-    // The writer's bash map: a `*` deny followed by legacy diagnostics and read
-    // commands. Order is the whole precedence model (last match wins), so the
-    // deny MUST come first and the allows MUST keep their authored sequence.
-    const writerShell = rules.filter((rule) => rule.action === "shell")
-    expect(writerShell.slice(0, 4)).toEqual([
-      { action: "shell", resource: "*", effect: "deny" },
-      { action: "shell", resource: "jq . .corvus/reviews/*/post-request.json", effect: "allow" },
-      { action: "shell", resource: "python3 -m json.tool .corvus/reviews/*/post-request.json", effect: "allow" },
-      { action: "shell", resource: "shasum -a 256 .corvus/reviews/*/post-request.json", effect: "allow" },
-    ])
-    expect(writerShell).toEqual(Object.entries(corpus["pr-comment-writer"].permission!.bash as ShellPolicy).map(([resource, effect]) => ({ action: "shell", resource, effect })))
-    expect(writerShell).toHaveLength(59)
-    expect(rules).toHaveLength(82)
-    for (const name of ["corvus-review", "corvus-review-auto"]) {
-      const orchestrator = toV2Permissions(corpus[name].permission)
-      const shell = orchestrator.filter(rule => rule.action === "shell")
-      expect(shell.slice(0, 6)).toEqual([
-        { action: "shell", resource: "*", effect: "deny" },
-        { action: "shell", resource: "date -u +%Y-%m-%dT%H:%M:%SZ", effect: "allow" },
-        { action: "shell", resource: "shasum -a 256 .corvus/reviews/*/post-request.json", effect: "allow" },
-        { action: "shell", resource: "git rev-parse HEAD", effect: "allow" },
-        { action: "shell", resource: "gh auth status", effect: "allow" },
-        { action: "shell", resource: "gh pr checkout * --repo * --detach", effect: "allow" },
-      ])
+    for (const name of ids) {
+      const rules = toV2Permissions(corpus[name].permission)
+      const shell = rules.filter(rule => rule.action === "shell")
+      const orchestrator = ["corvus", "corvus-auto"].includes(name)
+      const leaf = ["pr-context-gatherer", "pr-comment-writer", "pr-code-reviewer", "security-reviewer"].includes(name)
+      const autonomous = ["corvus-auto", "corvus-review-auto"].includes(name)
+      expect(rules[0]).toEqual({ action: "*", resource: "*", effect: "allow" })
+      expect(rules).toHaveLength(1 + (orchestrator ? 11 : 0) + (leaf ? 2 : 0) + (autonomous ? 1 : 0))
+      expect(rules.filter(rule => rule.effect === "deny")).toHaveLength((orchestrator ? 10 : 0) + (leaf ? 2 : 0) + (autonomous ? 1 : 0))
+      if (!orchestrator) {
+        expect(shell).toEqual([])
+        continue
+      }
+      expect(shell[0]).toEqual({ action: "shell", resource: "*", effect: "allow" })
       expect(shell).toEqual(Object.entries(corpus[name].permission!.bash as ShellPolicy).map(([resource, effect]) => ({ action: "shell", resource, effect })))
-      expect(shell).toHaveLength(69)
-      expect(orchestrator).toHaveLength(104)
+      expect(shell).toHaveLength(11)
     }
   })
 

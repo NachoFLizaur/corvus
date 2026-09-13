@@ -48,7 +48,7 @@ describe("matchWildcard", () => {
 
   test("makes a trailing argument list optional only when a space precedes the `*`", () => {
     // `core/util/wildcard.ts:11` rewrites a compiled trailing `" .*"` to `"( .*)?"`,
-    // so the corpus pattern `"ls *"` (`agent/code-explorer.md:13`) also matches the
+    // so the synthetic pattern `"ls *"` also matches the
     // bare command. Without the special case `ls` alone would fall through to the
     // preceding `*` deny. A trailing `*` with no preceding space is unaffected and
     // stays greedy.
@@ -75,7 +75,7 @@ describe("matchWildcard", () => {
     ])
   })
 
-  test("honours the authored pr-comment-writer allowlist patterns", () => {
+  test("honours synthetic GitHub command patterns", () => {
     check([
       [
         "gh api --method GET repos/o/r/pulls/1 -H Accept:application/vnd.github+json",
@@ -122,11 +122,11 @@ describe("evaluateRules", () => {
     expect(evaluateRules([{ action: "read", resource: "*.env", effect: "ask" }], "read", "src/index.ts")).toBeUndefined()
   })
 
-  test("resolves the real code-explorer shell allowlist", () => {
+  test("resolves the real code-explorer default allow", () => {
     const explorer = toV2Permissions(corpus["code-explorer"].permission)
 
     expect(evaluateRules(explorer, "shell", "ls")).toBe("allow")
     expect(evaluateRules(explorer, "shell", "ls src")).toBe("allow")
-    expect(evaluateRules(explorer, "shell", "lsof")).toBe("deny")
+    expect(evaluateRules(explorer, "shell", "lsof")).toBe("allow")
   })
 })

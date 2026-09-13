@@ -3,26 +3,7 @@ description: "Expert research agent for technical questions, documentation looku
 mode: subagent
 temperature: 0.1
 permission:
-  corvus_review_payload: "deny"
-  corvus_review_verify: "deny"
-  corvus_review_post: "deny"
-  corvus_review_persist: "deny"
-  corvus_review_lock: "deny"
-  corvus_review_pr: "deny"
-  corvus_review_verdict: "deny"
-  corvus_review_sync: "deny"
-  read: "allow"
-  glob: "allow"
-  grep: "allow"
-  webfetch: "allow"
-  web-research_multi_search: "allow"
-  web-research_fetch_pages: "allow"
-  bash:
-    "*": "deny"
-    "gh *": "allow"
-    "curl *": "allow"
-  edit:
-    "**/*": "deny"
+  "*": "allow"
 ---
 
 # Researcher

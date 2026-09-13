@@ -4,68 +4,7 @@ description: "Interactive PR review orchestrator. Coordinates R0-R5 review phase
 mode: primary
 temperature: 0.2
 permission:
-  "*": "deny"
-  corvus_review_payload: "allow"
-  corvus_review_verify: "allow"
-  corvus_review_persist: "allow"
-  corvus_review_lock: "allow"
-  corvus_review_pr: "allow"
-  corvus_review_verdict: "allow"
-  corvus_review_sync: "allow"
-  external_directory:
-    "*/opencode/packages/*": "allow"
-    "*/opencode/npm/*": "allow"
-    "*/opencode2/*": "allow"
-    "*/opencode/skill*/*": "allow"
-  read: "allow"
-  glob: "allow"
-  grep: "allow"
-  edit:
-    "*": "deny"
-    ".corvus/reviews/**": "allow"
-    "**/.corvus/reviews/**": "allow"
-    ".corvus/tasks/*/reviews/**": "allow"
-    "**/.corvus/tasks/*/reviews/**": "allow"
-  write:
-    "*": "deny"
-    ".corvus/reviews/**": "allow"
-    "**/.corvus/reviews/**": "allow"
-    ".corvus/tasks/*/reviews/**": "allow"
-    "**/.corvus/tasks/*/reviews/**": "allow"
-  task:
-    "*": "deny"
-    "pr-context-gatherer": "allow"
-    "researcher": "allow"
-    "pr-code-reviewer": "allow"
-    "security-reviewer": "allow"
-    "pr-comment-writer": "allow"
-  todowrite: "allow"
-  question: "allow"
-  skill: "allow"
-  bash: {
-    "*": "deny",
-    "date -u +%Y-%m-%dT%H:%M:%SZ": allow, "shasum -a 256 .corvus/reviews/*/post-request.json": allow,
-    "git rev-parse HEAD": allow,
-    "gh auth status": allow, "gh pr checkout * --repo * --detach": allow, "gh pr view *": allow,
-    "gh pr diff *": allow, "gh pr checks *": allow, "gh pr list *": allow, "gh pr status*": allow,
-    "gh issue view *": allow, "gh issue list *": allow, "gh repo view *": allow,
-    "gh api --method GET *": allow, "gh api user*": allow, "gh search *": allow, "gh run list *": allow,
-    "gh run view *": allow,
-    "gh api repos/*/pulls/*/reviews --jq *": allow, "gh api --paginate repos/*/pulls/*/reviews --jq *": allow,
-    "gh api repos/*/pulls/*/comments --jq *": allow, "gh api repos/*/compare/* --jq *": allow,
-    "gh api repos/*/pulls/*": allow, "gh api repos/*/pulls/*/*": allow,
-    "gh api --paginate repos/*/pulls/*/*": allow, "gh api repos/*/commits/*": allow,
-    "gh api repos/*/compare/*": allow, "gh api repos/*/contents/*": allow, "gh api repos/*/issues/*": allow,
-    "git status*": allow, "git log*": allow, "git show*": allow, "git diff*": allow, "git blame*": allow,
-    "git shortlog*": allow, "git branch --list*": allow, "git branch -a*": allow,
-    "git branch --show-current": allow, "git remote -v": allow, "git remote get-url *": allow,
-    "git rev-parse*": allow, "git merge-base*": allow, "git ls-files*": allow, "git rev-list*": allow,
-    "git cat-file -p *": allow, "git worktree list*": allow, "git fetch *": allow,
-    "ls *": allow, "wc *": allow, "head *": allow, "tail *": allow, "cat *": allow, "uniq *": allow,
-    "file *": allow, "stat *": allow, "jq *": allow, "shasum *": allow, "sha256sum *": allow, "date *": allow,
-    "python3 -m json.tool *": allow, "test *": allow, "printf *": allow, "echo *": allow, "pwd": allow,
-    "which *": allow, "env": allow, "bun --version": allow, "node --version": allow,
-  }
+  "*": "allow"
 ---
 
 # Corvus Review — Interactive Orchestrator

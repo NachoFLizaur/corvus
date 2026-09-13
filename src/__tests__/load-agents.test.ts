@@ -5,7 +5,6 @@ import { tmpdir } from "node:os"
 import { loadAgents } from "../load-agents"
 import { root } from "../paths"
 import { parseFrontmatter } from "../parse-frontmatter"
-import { PROTECTED_AGENTS } from "../protected-agents"
 import { evaluateRules } from "../evaluate-rules"
 import { toV2Permissions } from "../to-v2-permissions"
 
@@ -51,7 +50,10 @@ describe("loadAgents", () => {
         typeof authoredExternal === "string" ? [["*", authoredExternal]] : Object.entries(authoredExternal as object),
       )
     }
-    for (const name of PROTECTED_AGENTS) expect(agents[name].permission?.skill).toBe("deny")
+    for (const agent of Object.values(agents)) {
+      expect(agent.permission?.["*"]).toBe("allow")
+      expect(agent.permission).not.toHaveProperty("skill")
+    }
   })
 
   test("moves an existing root entry and external action after later authored denies", () => {

@@ -28,7 +28,7 @@ R0 resolves and pulls before acquiring the lock; R5 writes metadata before pushi
 
 ## Friction Policy
 
-Recoverable gaps proceed-with-note using available evidence and bounded recovery; they do not become invented success. A/B safety and deterministic artifact/ownership stops remain: authorization, trust boundaries, lock ownership, unchanged artifact bytes and verify-before-post are still required. Frontmatter-granted read-only bash is available to reviewers, and coordinators handle small read-only checks directly while delegating substantial exploration and implementation. Prose no longer narrows these grants to read/glob/grep alone; diagnostics never replace verification and POST remains tool-only.
+Recoverable gaps proceed-with-note using available evidence and bounded recovery; they do not become invented success. A/B safety and deterministic artifact/ownership stops remain: authorization, trust boundaries, lock ownership, unchanged artifact bytes and verify-before-post are still required. Frontmatter defaults to allow, with only the [explicit deny exceptions](../README.md#protected-agents-under-v2); review shell discipline is a prompt obligation, not a command allowlist. Coordinators handle small read-only checks directly while delegating substantial exploration and implementation; diagnostics never replace verification and POST remains tool-only.
 
 ## Two Axes, Four Dimensions
 
@@ -51,9 +51,9 @@ IDs are `<dim>-<axis>-NNN`: `dim` is `arch`, `logic`, `conv` or `sec`; `axis` is
 
 The real-host [release gate](../README.md#release-gates) exercises artifact creation, verification, and denied writer dispatch on v1/v2 without changing the packaged prompts.
 
-The eight review tools below serve `corvus-review` and `corvus-review-auto` (Orchestrators) and the explicitly listed children.
+The eight review tools below have these workflow owners: `corvus-review` and `corvus-review-auto` (Orchestrators) and the listed children. Frontmatter does not isolate tools; PR/verdict/sync caller checks are enforced by the tool adapters.
 
-| Tool | Operations | Allowed agents |
+| Tool | Operations | Workflow owners |
 |------|------------|----------------|
 | `corvus_review_payload` | `measure`, `freeze` — candidate measurement and [authorized artifact freezing](../skill/corvus-review-extras/state.md#freeze-at-r4) | Orchestrators |
 | `corvus_review_verify` | `verify` — digest, closed schema, canonical bytes and limits before descriptor-only dispatch and posting | Orchestrators, `pr-comment-writer` |

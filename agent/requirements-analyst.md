@@ -3,22 +3,7 @@ description: "Read-only requirements analysis agent for intelligent clarificatio
 mode: subagent
 temperature: 0.1
 permission:
-  corvus_review_payload: "deny"
-  corvus_review_verify: "deny"
-  corvus_review_post: "deny"
-  corvus_review_persist: "deny"
-  corvus_review_lock: "deny"
-  corvus_review_pr: "deny"
-  corvus_review_verdict: "deny"
-  corvus_review_sync: "deny"
-  read: "allow"
-  glob: "allow"
-  grep: "allow"
-  bash: "deny"
-  webfetch: "deny"
-  question: "deny"
-  edit:
-    "**/*": "deny"
+  "*": "allow"
 ---
 
 # Requirements Analyst

@@ -2,6 +2,7 @@ import { afterEach, expect, test } from "bun:test"
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
+import { checkPluginLoaded } from "../../scripts/check-review-artifacts"
 import { createPrExecutor, type PrExecResult, type PrInput } from "../review-pr"
 import { push, resolve as resolveSync } from "../review-sync"
 
@@ -78,6 +79,54 @@ test.each([
   }
   expect(git("--git-dir", join(directory, "bare.git"), "rev-parse", branch)).toBe(crossRepo ? head : synced.state_commit!)
   expect(git("diff", "--name-only")).toBe(".gitignore")
+})
+
+test.each(["v1", "v2"] as const)("%s writer preflight resolves wildcard fallbacks and fails closed without the expected action", host => {
+  const directory = mkdtempSync(join(tmpdir(), "corvus-harness-permissions-"))
+  directories.push(directory)
+  const agents = join(directory, "agents.json"), install = join(directory, "install/node_modules/corvus-ai")
+  const harness = readFileSync(resolve(import.meta.dirname, "../../scripts/smoke-review.sh"), "utf8")
+  const preflight = /bun -e '(\n  const data = await Bun\.file[\s\S]*?)\n' \|\| die 6 'posting barrier not installed; model was not started'/.exec(harness)?.[1]
+  if (!preflight) throw new Error("Writer preflight snippet not found")
+  type Action = "allow" | "deny" | "ask"
+  const rule = (permission: string, pattern: string, action: Action) => ({ permission, pattern, action })
+  const cases: Array<[string, ReturnType<typeof rule>[] | undefined, Action | undefined]> = [
+    ["global wildcard fallback", [rule("*", "*", "allow"), rule("question", "*", "deny")], "allow"],
+    ["last global wildcard", [rule("*", "*", "allow"), rule("*", "*", "deny")], "deny"],
+    ["task wildcard fallback", [rule("*", "*", "deny"), rule("task", "*", "allow"), rule("read", "pr-comment-writer", "deny")], "allow"],
+    ["last task wildcard", [rule("task", "*", "allow"), rule("task", "*", "deny"), rule("*", "*", "allow")], "deny"],
+    ["explicit deny overrides wildcards", [rule("task", "pr-comment-writer", "deny"), rule("task", "*", "allow"), rule("*", "*", "allow")], "deny"],
+    ["last explicit writer rule", [rule("task", "pr-comment-writer", "deny"), rule("task", "pr-comment-writer", "allow"), rule("task", "*", "deny"), rule("*", "*", "deny")], "allow"],
+    ["explicit ask does not fall through", [rule("*", "*", "allow"), rule("task", "pr-comment-writer", "ask")], "ask"],
+    ["unrelated rules", [rule("task", "researcher", "allow"), rule("read", "pr-comment-writer", "allow")], undefined],
+    ["missing rules", undefined, undefined],
+    ["empty rules", [], undefined],
+  ]
+  for (const [name, rules, action] of cases) {
+    const permission = rules && [...rules, rule("external_directory", `${install}/*`, "allow")]
+    const agent = {
+      name: "corvus-review-auto", native: false, prompt: "# Corvus Review Auto\n",
+      tools: { corvus_review_payload: true, corvus_review_verify: true, corvus_review_persist: true,
+        corvus_review_lock: true, corvus_review_pr: true, corvus_review_verdict: true, corvus_review_sync: true },
+      permission,
+    }
+    writeFileSync(agents, JSON.stringify(host === "v1" ? agent : [{ id: agent.name,
+      permissions: permission?.map(({ permission, pattern, action }) => ({
+        action: permission === "task" ? "subagent" : permission, resource: pattern, effect: action,
+      })),
+    }]))
+    for (const writer of [false, true]) {
+      const allowed = action === (writer ? "allow" : "deny")
+      const result = Bun.spawnSync([process.execPath, "-e", preflight], {
+        env: { ...process.env, SMOKE_WORK: directory, SMOKE_HOST: host, SMOKE_WRITER: writer ? "1" : "0" },
+      })
+      expect(result.exitCode, `${name}, writer=${writer}: ${result.stderr}`).toBe(allowed ? 0 : 1)
+      if (host === "v1") {
+        const loaded = checkPluginLoaded({ host, agents, install, writer, hostlog: join(directory, "host.log") })
+        expect(loaded.ok, `${name}, writer=${writer}: ${loaded.detail}`).toBe(allowed)
+      }
+    }
+  }
 })
 
 test("gh decision table forwards only reads, with one unforgeable argv audit record per call", () => {
