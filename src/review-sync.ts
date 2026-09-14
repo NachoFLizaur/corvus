@@ -98,6 +98,7 @@ function snapshotRoot(path: string): Map<string, { bytes: Buffer; mode: number }
   const files = new Map<string, { bytes: Buffer; mode: number }>()
   const visit = (directory: string) => {
     for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      if (entry.name === ".staging") continue
       const target = resolvePath(directory, entry.name)
       if (entry.isDirectory()) visit(target)
       else if (entry.isFile()) files.set(target, { bytes: fs.readFileSync(target), mode: fs.statSync(target).mode })
@@ -184,19 +185,21 @@ async function pushState(args: Record<string, unknown>, branch: string, remote: 
     const value = await ctx.run(["config", "--get", key])
     if (value.code !== 0 || !value.stdout.trim()) return { synced: false, reason: "no-identity" }
   }
-  const changed = await ctx.read(["--no-optional-locks", "status", "--porcelain", "-z", "--", root])
+  /** Fixed pathspecs are shared by the pre-mutation status oracle and every add/commit; staging is never eligible, including replay, with no bypass. */
+  const paths = [root, `:(exclude)${root}/**/.staging/**`, `:(exclude)${root}/.staging/**`]
+  const changed = await ctx.read(["--no-optional-locks", "status", "--porcelain", "-z", "--", ...paths])
   if (!changed && !(await ctx.read(["log", "-1", "--format=%s", "HEAD", "--"])).startsWith(`corvus(review-state): ${suffix(pr)} @ `)) return { synced: true, reason: "unchanged" }
   const snapshot = snapshotRoot(path)
   if (changed) {
-    if ((await ctx.run(["add", "--", root])).code !== 0) return { synced: false, reason: "add-refused" }
+    if ((await ctx.run(["add", "--", ...paths])).code !== 0) return { synced: false, reason: "add-refused" }
     const message = `corvus(review-state): ${suffix(pr)} @ ${args.head_sha.slice(0, 7)} [skip ci]`
-    if ((await ctx.run(["commit", "--only", "-m", message, "--", root])).code !== 0) return { synced: false, reason: "commit-refused" }
+    if ((await ctx.run(["commit", "--only", "-m", message, "--", ...paths])).code !== 0) return { synced: false, reason: "commit-refused" }
   } else parent = (await ctx.read(["rev-parse", "HEAD^"])).trim()
   let state_commit = (await ctx.read(["rev-parse", "HEAD"])).trim()
   if (!matches(state_commit, SHA)) return fail("invalid-state-commit")
   for (let retry = 0; ; retry++) {
     const changedPaths = (await ctx.read(["diff-tree", "--no-commit-id", "--name-only", "-r", "-z", state_commit, "--"])).split("\0").filter(Boolean)
-    if (!changedPaths.length || changedPaths.some(name => !name.startsWith(`${root}/`))) return { synced: false, state_commit, reason: "commit-outside-root" }
+    if (!changedPaths.length || changedPaths.some(name => !name.startsWith(`${root}/`) || name.split("/").includes(".staging"))) return { synced: false, state_commit, reason: "commit-outside-root" }
     const pushed = await ctx.run(["push", remote, `HEAD:${branch}`])
     if (pushed.code === 0) return { synced: true, state_commit }
     if (!/non-fast-forward|fetch first/i.test(pushed.stderr + pushed.stdout)) return { synced: false, state_commit,
@@ -212,7 +215,7 @@ async function pushState(args: Record<string, unknown>, branch: string, remote: 
     const rebased = await ctx.run(["rebase", "--no-autostash", "--no-update-refs", "--onto", tip, parent])
     if (rebased.code !== 0) {
       const conflicts = (await ctx.read(["diff", "--name-only", "--diff-filter=U", "-z", "--"])).split("\0").filter(Boolean)
-      if (!conflicts.length || conflicts.some(name => !name.startsWith(`${root}/`) || name.split("/").includes(".."))) {
+      if (!conflicts.length || conflicts.some(name => !name.startsWith(`${root}/`) || name.split("/").some(part => part === ".." || part === ".staging"))) {
         await ctx.run(["rebase", "--abort"])
         return { synced: false, state_commit, reason: "replay-refused" }
       }
@@ -230,7 +233,7 @@ async function pushState(args: Record<string, unknown>, branch: string, remote: 
         if (saved) fs.writeFileSync(target, saved.bytes, { mode: saved.mode })
         else if (fs.existsSync(target)) fs.unlinkSync(target)
       }
-      if ((await ctx.run(["add", "--", root])).code !== 0 || (await ctx.run(["-c", "core.editor=true", "rebase", "--continue"])).code !== 0) {
+      if ((await ctx.run(["add", "--", ...paths])).code !== 0 || (await ctx.run(["-c", "core.editor=true", "rebase", "--continue"])).code !== 0) {
         await ctx.run(["rebase", "--abort"])
         return { synced: false, state_commit, reason: "replay-refused" }
       }

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import {
-  checks, config, createPrExecutor, diff, files, find, head, identity, local, metadata, repo, reviews,
+  checks, config, createPrExecutor, diff, files, find, head, identity, isPrCallerAllowed, local, metadata, repo, reviews,
   type PrExec, type PrExecResult,
 } from "../review-pr"
 
@@ -29,6 +29,15 @@ function recordingExec(...responses: Array<PrExecResult | Promise<PrExecResult>>
 }
 
 describe("review PR metadata, head and files", () => {
+  test("detectors can recover PR evidence but cannot read invocation controls", () => {
+    for (const caller of ["pr-code-reviewer", "security-reviewer"]) {
+      for (const op of ["metadata", "head", "files", "diff", "reviews", "checks"]) expect(isPrCallerAllowed(caller, op)).toBe(true)
+      for (const op of ["identity", "config", "find", "local", "repo", "post", undefined]) expect(isPrCallerAllowed(caller, op)).toBe(false)
+    }
+    for (const caller of [undefined, null, "unknown", { agent: "security-reviewer" }]) expect(isPrCallerAllowed(caller, "metadata")).toBe(false)
+    for (const op of ["head", "diff", "files", "reviews"]) expect(isPrCallerAllowed("pr-comment-writer", op)).toBe(true)
+    for (const op of ["metadata", "checks", "identity", "config", "find", "local", "repo"]) expect(isPrCallerAllowed("pr-comment-writer", op)).toBe(false)
+  })
   test("uses the exact metadata argv and preserves untrusted PR source evidence", async () => {
     const data = {
       number: 42, url: "https://github.com/example/project/pull/42", title: "A change", state: "OPEN",

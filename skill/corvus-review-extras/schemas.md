@@ -21,7 +21,7 @@ confidence: <finite number 0-1>
 related_to: ["<finding id>"]
 suppressed: false
 ```
-R2 assigns collision-free dimension/axis IDs and leaves suppression false. Origin comes from the [gatherer's lineage](../../agent/pr-context-gatherer.md#5-resolve-prior-review-delta-when-present), not inferred author intent; both children emit it on every finding. Missing origin gets one correction under R2's recovery bound; unresolved observations stay in local summaries with a provenance gap while valid findings proceed. R3 retains source identity, including origin, through all transformations; manual additions use the same shape. Spec findings cite the exact requirement and source. Label semantics live in [the entry](SKILL.md#conventional-comments).
+R2 assigns collision-free dimension/axis IDs and leaves suppression false. Origin comes from the [gatherer's lineage](../../agent/pr-context-gatherer.md#5-resolve-prior-review-delta-when-present), not inferred author intent; both children emit it on every finding. For missing origin, retry while progress is made under R2 recovery; unresolved observations stay in summaries with a provenance gap while valid findings proceed. R3 retains source identity, including origin, through all transformations; manual additions use the same shape. Spec findings cite the exact requirement and source. Label semantics live in [the entry](SKILL.md#conventional-comments).
 
 ## PR_CONTEXT — R0
 | Fields | Shape |
@@ -31,7 +31,7 @@ R2 assigns collision-free dimension/axis IDs and leaves suppression false. Origi
 | base_sha, head_sha, code_head; branch, default_branch, merge_base, dirty | Lowercase 40-hex OIDs: head_sha is observed tip, code_head is newest non-review-state commit from pr.metadata/head/local and review identity; LOCAL base_sha = merge_base, with branch (string or null if detached), default_branch, merge_base and dirty from `pr.local`; these four local-only fields are null in PR |
 | review_root, remote, task; legacy_root? | sync.resolve root and remote strings, task string or null, optional read-only legacy root; see [state layouts](state.md#namespace-and-lock) |
 | base_branch, head_branch, author, title; labels, reviewers_requested, linked_issues | Evidence strings; string lists respectively |
-| description; self_review | String or null for absent/empty/unavailable body (distinguished in rail_inputs); true, false, or unknown respectively |
+| description; self_review | Complete PR description verbatim from metadata.body, including an empty string; null only when unavailable (distinguished in rail_inputs); true, false, or unknown respectively |
 | state, is_merged, is_draft, mergeable | open/closed/merged; booleans; mergeable may be null |
 | ci_status, ci_checks | pass/fail/pending/none; list of `{name, status: pass|fail|pending, url}` |
 | files_changed, additions, deletions, changed_files | Non-negative counts, path list |
@@ -73,7 +73,7 @@ R2 persists shared evidence separately from briefs and trusted controls. REVIEW_
 
 | Field | Shape |
 |-------|-------|
-| REVIEW_INPUT-file | `<review_root>/review-input.json`: one pretty-printed (2-space) JSON object produced by `corvus_review_persist` op `write_input`, read by both children with the read tool; physical lines ≤1,900 characters, strings ≤1,500 characters, longer fields represented as `<field>_chunks` (`description_chunks`, `body_chunks`) or `hunk_lines`; children concatenate chunks in order, preserving delimiters; the tool owns chunk boundaries and R2 owns validation/retry lifetime |
+| REVIEW_INPUT-file | `<review_root>/review-input.json`: one pretty-printed (2-space) JSON object produced by `corvus_review_persist` using `write_input` or staged persistence, read by both children with the read tool; physical lines ≤1,900 characters, strings ≤1,500 characters, longer fields represented as `<field>_chunks` (`description_chunks`, `body_chunks`) or `hunk_lines`; children concatenate chunks in order, preserving delimiters; the tool owns chunk boundaries and R2 owns validation/retry lifetime |
 | pr_number, pr_url, repo, head_sha, description, changed_files, ci_status, ci_checks, flags | Corresponding PR_CONTEXT fields, except compatibility head_sha = PR_CONTEXT.code_head |
 | file_map, dependency_graph, conventions, test_coverage, linked_issues_detail, ci_failure_analysis, related_prs | Corresponding REVIEW_CONTEXT fields; include complete relevant hunks, per-file origin_ranges (the gatherer's review-fix line ranges) and git_history, callers/tests, and cited standards/requirements |
 | worktree_head_accuracy, head_excerpts, verified_facts, open_questions | Corresponding REVIEW_CONTEXT fields; pointers or inline excerpts as selected by evidence_mode |
@@ -169,7 +169,7 @@ Multi-line comments include paired `start_line` and `start_side` before body; om
 
 The tool serializes in the listed key order as UTF-8 JSON, two-space indentation, LF line endings, no BOM, and one final LF (equivalent to `JSON.stringify(payload, null, 2) + "\n"`). Preserve decoded strings exactly and array order (Standards then Spec); escape strings as JSON data, never shell text. Map APPROVE→APPROVE, REQUEST_CHANGES→REQUEST_CHANGES, COMMENT_ONLY→COMMENT; commit_id is PR_CONTEXT.code_head, body is exact review_body, comments map exact inline_comments with only the API keys above.
 
-<!-- Size invariant: decoded bodies and the full canonical serialization are the tool's oracle at R3 measurement, before R4 writes, and before R5/writer dispatch/POST. Overflow returns to R3; unavailable measurement or irreducible overflow fails local-only. No config, approval, resume, or empty comments disables the limits. -->
+<!-- Size invariant: decoded bodies and canonical serialization are checked at R3 measurement before R4 writes and R5 dispatch. Overflow returns to R3 for a concise summary, not a delivery veto. No config, approval, resume or empty comments disables tool limits; the Delivery Principle governs recovery. -->
 Posting-size limits are owned by `corvus_review_payload` (`LIMITS`), reported with violations in its results alongside measurements in code points and UTF-8 bytes. Local source findings and overflow_log retain full text outside the posting budget. Use [R3 overflow](../corvus-review-r3/SKILL.md#size-overflow) before authorization, never writer-side trimming.
 
 R5 sends only the closed POST_ARTIFACT descriptor below. The writer carries these field sets inline because it has no skill access:
@@ -193,7 +193,7 @@ POST_RESULT:
   remote_state: "posted | not_posted | unknown"
   inline_comments_posted: <non-negative integer>
   comments_moved_to_body: <non-negative integer>
-  unverifiable_anchors: [{path: <string>, line_start: <positive safe integer>, line_end: <safe integer >= line_start>}] # required only for status not_posted; otherwise omitted
+  unverifiable_anchors: [{path: <string>, line_start: <positive safe integer>, line_end: <safe integer >= line_start>}] # required only for reason anchors-unverifiable; otherwise omitted
   api_calls: <non-negative integer>
 ```
-Posted requires remote_state posted, a usable review URL and null reason; local_only requires a reason, null URL and truthful not_posted/unknown state. Status not_posted requires reason anchors-unverifiable, remote_state not_posted, null URL, zero inline_comments_posted and non-empty unverifiable_anchors matching submitted anchors exactly. api_calls sums each writer `corvus_review_pr` result's api_calls and post tool_api_calls; file reads/hashes/validators are not API calls. inline_comments_posted is the artifact's comments count only when posted, otherwise 0. The writer's comments_moved_to_body is 0; R5 tracks relocation totals separately using [Conventional Comments](SKILL.md#conventional-comments). Done when identity, evidence, coverage, and authorization remain separate.
+Posted requires remote_state posted, a usable review URL and null reason; local_only requires a reason, null URL and truthful not_posted/unknown state. Status not_posted requires remote_state not_posted, null URL, zero inline_comments_posted and reason anchors-unverifiable, verify: <diagnostic>, head-moved or not-exposed: <inventory>. Only anchors-unverifiable includes non-empty unverifiable_anchors matching submitted anchors exactly; other reasons omit them and select R4 repair or the host exception. api_calls sums each writer `corvus_review_pr` result's api_calls and post tool_api_calls; reads/hashes/validators are not API calls. Count newly posted inline comments only; marker reuse reports 0 for this invocation. The writer's comments_moved_to_body is 0; R5 tracks relocation via [Conventional Comments](SKILL.md#conventional-comments). Done when identity, evidence, coverage and authorization remain separate.

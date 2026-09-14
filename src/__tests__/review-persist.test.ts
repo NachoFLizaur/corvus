@@ -7,6 +7,7 @@ import { basename, dirname, join } from "node:path"
 import yaml from "js-yaml"
 import { createReviewToolExecutors, type CandidateRequest } from "../review-payload"
 import {
+  abort, append, begin, finalize, status, type StagingResult,
   createPersistExecutor, read_document, read_facts, write_candidate, write_document, write_facts, write_input, write_meta,
   type PersistOptions, type ReviewPersistFs, type WriteResult,
 } from "../review-persist"
@@ -139,6 +140,124 @@ describe("review persist documents", () => {
     const result = write_document({ reviewRoot, headSha: HEAD_SHA, sections: [{ heading: "Summary", body: BODY }] }, { ...opts, fs: io })
     expect(result).toEqual({ ok: false, reason: "readback-mismatch", expectedBytes, actualBytes: expectedBytes })
     expect(JSON.stringify(result)).not.toContain(BODY)
+  }))
+})
+
+function stagingId(result: StagingResult): string {
+  expect(result.ok).toBe(true)
+  if (!result.ok || !("staging_id" in result)) throw new Error(`Expected staging session, got ${JSON.stringify(result)}`)
+  expect(typeof result.staging_id).toBe("string")
+  return result.staging_id
+}
+
+describe("review persist staging", () => {
+  test("finalizes byte-identically to a single document write and roundtrips sections", () => withFixture(({ opts, reviewRoot }) => {
+    const frontmatterYaml = 'title: "Staged review"'
+    const sections = [{ heading: "", body: "# Review 👍" }, { heading: "Findings", body: "```yaml\nitems:\n  - verified\n```" }]
+    const direct = written(write_document({ reviewRoot, headSha: HEAD_SHA, sections, frontmatterYaml }, opts))
+    const bytes = fs.readFileSync(direct.path)
+    const session = { reviewRoot, staging_id: stagingId(begin({ reviewRoot, target: "document", headSha: HEAD_SHA, expected_sections: 2, frontmatterYaml }, opts)) }
+    for (const index of [1, 0]) expect(append({ ...session, index, ...sections[index] }, opts)).toMatchObject({ ok: true })
+    expect(finalize(session, opts)).toMatchObject({ ok: true, path: direct.path, sha256: direct.sha256, bytes: bytes.length, sections: 2, parts: 2 })
+    expect(fs.readFileSync(direct.path)).toEqual(bytes)
+    expect(read_document({ reviewRoot, headSha: HEAD_SHA }, opts)).toEqual({ ok: true, sections, frontmatterYaml, sha256: direct.sha256, lines: direct.lines })
+  }))
+
+  test("concatenates section parts in numeric order without inserting delimiters", () => withFixture(({ opts, reviewRoot }) => {
+    const bodies = ["Before\n```ya", "ml\nvalue: 👍\n", "```\nAfter"]
+    const session = { reviewRoot, staging_id: stagingId(begin({ reviewRoot, target: "document", headSha: HEAD_SHA, expected_sections: 1 }, opts)) }
+    for (const part of [2, 0, 1]) expect(append({ ...session, index: 0, heading: "Summary", part, parts: 3, body: bodies[part] }, opts)).toMatchObject({ ok: true })
+    expect(finalize(session, opts)).toMatchObject({ ok: true, sections: 1, parts: 3 })
+    expect(read_document({ reviewRoot, headSha: HEAD_SHA }, opts)).toMatchObject({ ok: true, sections: [{ heading: "Summary", body: bodies.join("") }] })
+  }))
+
+  test.each(["document", "input"] as const)("rejects an oversized %s chunk without changing staging", target => withFixture(({ opts, reviewRoot }) => {
+    const session = { reviewRoot, staging_id: stagingId(begin({ reviewRoot, target, ...(target === "document" ? { headSha: HEAD_SHA, expected_sections: 1 } : {}) }, opts)) }
+    const chunk = (length: number) => target === "document" ? { index: 0, body: "x".repeat(length) } : { key: "body", value: "x".repeat(length - 2) }
+    expect(append({ ...session, ...chunk(6_000) }, opts)).toMatchObject({ ok: true })
+    const before = status(session, opts)
+    expect(append({ ...session, ...chunk(6_001) }, opts)).toEqual({ ok: false, reason: "chunk-too-large", length: 6_001 })
+    expect(status(session, opts)).toEqual(before)
+  }))
+
+  test("reports a missing part on finalize and preserves the existing document bytes", () => withFixture(({ opts, reviewRoot }) => {
+    const previous = written(write_document({ reviewRoot, headSha: HEAD_SHA, sections: [{ heading: "Summary", body: "Existing review 👍" }] }, opts))
+    const bytes = fs.readFileSync(previous.path)
+    const session = { reviewRoot, staging_id: stagingId(begin({ reviewRoot, target: "document", headSha: HEAD_SHA, expected_sections: 1 }, opts)) }
+    expect(append({ ...session, index: 0, heading: "Summary", part: 0, parts: 2, body: "Replacement" }, opts)).toMatchObject({ ok: true })
+    expect(finalize(session, opts)).toEqual({ ok: false, reason: "incomplete-staging", missing: [{ index: 0, parts: [1] }], unexpected: [] })
+    expect(fs.readFileSync(previous.path)).toEqual(bytes)
+  }))
+
+  test("re-appending the same part replaces rather than duplicates it", () => withFixture(({ opts, reviewRoot }) => {
+    const session = { reviewRoot, staging_id: stagingId(begin({ reviewRoot, target: "document", headSha: HEAD_SHA, expected_sections: 1 }, opts)) }
+    for (const body of ["Old", "Replacement", "Replacement"]) expect(append({ ...session, index: 0, heading: "Summary", body }, opts)).toMatchObject({ ok: true })
+    expect(status(session, opts)).toMatchObject({ ok: true, received: [expect.objectContaining({ index: 0, part: 0, parts: 1 })], missing: [] })
+    expect(finalize(session, opts)).toMatchObject({ ok: true, parts: 1 })
+    expect(read_document({ reviewRoot, headSha: HEAD_SHA }, opts)).toMatchObject({ ok: true, sections: [{ heading: "Summary", body: "Replacement" }] })
+  }))
+
+  test("abort removes the staging session and its parts without creating a document", () => withFixture(({ opts, reviewRoot, reviewPath }) => {
+    const session = { reviewRoot, staging_id: stagingId(begin({ reviewRoot, target: "document", headSha: HEAD_SHA, expected_sections: 1 }, opts)) }
+    expect(append({ ...session, index: 0, heading: "Summary", body: "Unfinished" }, opts)).toMatchObject({ ok: true })
+    const directory = join(reviewPath, HEAD_SHA, ".staging", "document")
+    expect(fs.existsSync(directory)).toBe(true)
+    expect(abort(session, opts)).toEqual({ ok: true, staging_id: session.staging_id })
+    expect(fs.existsSync(directory)).toBe(false)
+    expect(status(session, opts)).toEqual({ ok: false, reason: "unknown-staging" })
+    expect(fs.existsSync(join(reviewPath, HEAD_SHA, "REVIEW_DOCUMENT.md"))).toBe(false)
+  }))
+
+  test("merges string, array and object input parts identically to a single write", () => withFixture(({ opts, reviewRoot }) => {
+    const input = { description: "word ".repeat(400) + "end 👍", files: [{ path: "a.ts" }, { path: "b.ts" }], metadata: { first: true, second: 2 } }
+    const direct = written(write_input({ reviewRoot, input }, opts))
+    const bytes = fs.readFileSync(direct.path)
+    const session = { reviewRoot, staging_id: stagingId(begin({ reviewRoot, target: "input" }, opts)) }
+    const chunks = [
+      { key: "description", values: ["word ".repeat(400), "end 👍"] },
+      { key: "files", values: [[{ path: "a.ts" }], [{ path: "b.ts" }]] },
+      { key: "metadata", values: [{ first: true }, { second: 2 }] },
+    ]
+    for (const { key, values } of chunks) for (const part of [1, 0]) {
+      expect(append({ ...session, key, part, parts: 2, value: values[part] }, opts)).toMatchObject({ ok: true })
+    }
+    expect(finalize({ ...session, expected_keys: Object.keys(input) }, opts)).toMatchObject({ ok: true, path: direct.path, sha256: direct.sha256, keys: Object.keys(input), parts: 6 })
+    expect(fs.readFileSync(direct.path)).toEqual(bytes)
+  }))
+
+  test("roundtrips a nested path split and repeated object string keys in part order", () => withFixture(({ opts, reviewRoot }) => {
+    const patch = "line 👍\n".repeat(900)
+    const input = { file_map: { "src/a.ts": { patch, labels: ["a", "b"], note: "firstlast" } } }
+    const direct = written(write_input({ reviewRoot, input }, opts))
+    const session = { reviewRoot, staging_id: stagingId(begin({ reviewRoot, target: "input" }, opts)) }
+    const parts = [
+      { value: { "src/a.ts": { labels: ["a"], note: "first" } } },
+      { path: ["src/a.ts", "patch"], chunk: patch.slice(0, 3500) },
+      { path: ["src/a.ts", "patch"], chunk: patch.slice(3500) },
+      { value: { "src/a.ts": { labels: ["b"], note: "last" } } },
+    ]
+    for (const part of [3, 2, 1, 0]) expect(append({ ...session, key: "file_map", part, parts: parts.length, ...parts[part] }, opts)).toMatchObject({ ok: true })
+    const result = finalize({ ...session, expected_keys: ["file_map"] }, opts)
+    expect(result).toMatchObject({ ok: true })
+    expect(JSON.parse(fs.readFileSync(direct.path, "utf8"))).toEqual(JSON.parse(direct.text))
+  }))
+
+  test("rejects conflicting non-string scalars without replacing an input checkpoint", () => withFixture(({ opts, reviewRoot }) => {
+    const direct = written(write_input({ reviewRoot, input: { metadata: { count: 1 } } }, opts))
+    const session = { reviewRoot, staging_id: stagingId(begin({ reviewRoot, target: "input" }, opts)) }
+    expect(append({ ...session, key: "metadata", part: 0, parts: 2, value: { count: 1 } }, opts)).toMatchObject({ ok: true })
+    expect(append({ ...session, key: "metadata", part: 1, parts: 2, value: { count: 2 } }, opts)).toEqual({ ok: false, reason: "merge-conflict" })
+    expect(fs.readFileSync(direct.path, "utf8")).toBe(direct.text)
+  }))
+
+  test("status lists received parts, missing parts and missing sections", () => withFixture(({ opts, reviewRoot }) => {
+    const session = { reviewRoot, staging_id: stagingId(begin({ reviewRoot, target: "document", headSha: HEAD_SHA, expected_sections: 3 }, opts)) }
+    expect(append({ ...session, index: 1, part: 1, parts: 3, body: "Middle" }, opts)).toMatchObject({ ok: true })
+    expect(append({ ...session, index: 0, heading: "Summary", body: "Complete" }, opts)).toMatchObject({ ok: true })
+    expect(status(session, opts)).toMatchObject({ ok: true, staging_id: session.staging_id,
+      received: [{ index: 1, part: 1, parts: 3, bytes: 6, sha256: sha256(Buffer.from("Middle")) }, { index: 0, part: 0, parts: 1 }],
+      missing: [{ index: 1, parts: [0, 2] }, { index: 2 }],
+    })
   }))
 })
 

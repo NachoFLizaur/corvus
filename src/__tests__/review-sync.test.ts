@@ -27,7 +27,11 @@ function assertAllowed(argv: string[]): void {
   expect(argv).not.toContain("clean")
   const args = argv.slice(1), [op] = args
   const exact = (...forms: string[][]) => expect(forms).toContainEqual(args)
-  const root = args.at(-1)!
+  const paths = args.slice(args.indexOf("--") + 1), root = paths[0]
+  const reviewPaths = () => {
+    expect([ROOT, ".corvus/reviews/local-feature"]).toContain(root)
+    expect(paths).toEqual([root, `:(exclude)${root}/**/.staging/**`, `:(exclude)${root}/.staging/**`])
+  }
   switch (op) {
     case "remote":
       if (args.length === 1) return
@@ -44,8 +48,9 @@ function assertAllowed(argv: string[]): void {
       return
     case "config": exact([op, "--get", "user.name"], [op, "--get", "user.email"]); return
     case "--no-optional-locks":
-      expect([".corvus/", ROOT, ".corvus/reviews/local-feature"]).toContain(root)
-      exact([op, "status", "--porcelain", "-z", "--", root]); return
+      if (root === ".corvus/") expect(paths).toEqual([root])
+      else reviewPaths()
+      exact([op, "status", "--porcelain", "-z", "--", ...paths]); return
     case "log":
       if (args[1] === "-50") {
         expect(args[4]).toMatch(sha)
@@ -53,12 +58,12 @@ function assertAllowed(argv: string[]): void {
       } else exact([op, "-1", "--format=%s", "HEAD", "--"])
       return
     case "add":
-      expect([ROOT, ".corvus/reviews/local-feature"]).toContain(root)
-      exact([op, "--", root]); return
+      reviewPaths()
+      exact([op, "--", ...paths]); return
     case "commit":
-      expect([ROOT, ".corvus/reviews/local-feature"]).toContain(root)
+      reviewPaths()
       expect(args[3]).toMatch(/^corvus\(review-state\): (pr42|local-feature) @ [a-f0-9]{7} \[skip ci\]$/)
-      exact([op, "--only", "-m", args[3], "--", root]); return
+      exact([op, "--only", "-m", args[3], "--", ...paths]); return
     case "fetch": case "push":
       expect(["origin", "publish"]).toContain(args[1])
       exact([op, args[1], op === "push" ? `HEAD:${BRANCH}` : BRANCH], ["fetch", "origin", "missing"]); return
@@ -248,6 +253,18 @@ describe("review sync pull", () => {
 })
 
 describe("review sync push", () => {
+  test("pushes only non-staging paths while leftover input and document staging stays local", () => withRepo(async f => {
+    const leftovers = [`${ROOT}/.staging/input/manifest.json`, `${ROOT}/${f.head}/.staging/document/chunk.part`]
+    for (const path of leftovers) f.write(f.workspace, path, "Unfinished staging\n")
+    f.write(f.workspace, STATE, STATE_BYTES)
+    const result = await push(pushInput(f), { exec: f.exec })
+    expect(result).toEqual({ synced: true, state_commit: expect.stringMatching(sha), git_calls: f.calls.length })
+    assertStateCommit(f, result.state_commit!, f.head)
+    expect(f.git(f.workspace, "ls-tree", "-r", "--name-only", result.state_commit!, "--", ROOT)).toBe(STATE)
+    expect(f.git(f.workspace, "diff", "--cached", "--name-only")).toBe("")
+    for (const path of leftovers) expect(fs.readFileSync(join(f.workspace, path), "utf8")).toBe("Unfinished staging\n")
+  }))
+
   test("commits only the review root from detached PR HEAD, preserves unrelated staging, and resumes without a second commit", () => withRepo(async f => {
     f.git(f.workspace, "checkout", "--detach", f.head)
     f.write(f.workspace, "product.txt", "Staged unrelated product\n")

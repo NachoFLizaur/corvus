@@ -184,7 +184,7 @@ describe("plugin.setup", () => {
     })
     expect(fake.tools.get("corvus_review_verify")!.input).toMatchObject({ properties: { op: { const: "verify" } } })
     for (const [name, ops, required] of [
-      ["corvus_review_persist", ["write_document", "write_input", "write_meta", "write_candidate", "read_document", "write_facts", "read_facts"], ["op", "reviewRoot"]],
+      ["corvus_review_persist", ["write_document", "write_input", "write_meta", "write_candidate", "read_document", "write_facts", "read_facts", "begin", "append", "finalize", "abort", "status"], ["op", "reviewRoot"]],
       ["corvus_review_lock", ["acquire", "release", "status"], ["op", "reviewRoot"]],
       ["corvus_review_pr", ["metadata", "head", "files", "diff", "reviews", "checks", "identity", "config", "repo", "find", "local"], ["op"]],
       ["corvus_review_verdict", ["compute"], ["op", "reviewRoot", "priorReviews", "config"]],

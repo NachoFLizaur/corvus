@@ -76,6 +76,20 @@ export type PrData = {
   config: { present: false; http_status: 404 } | { present: true; yaml: string }
 }
 export type PrOperation = keyof PrData
+/**
+ * Host agent identity and the requested operation are read before PR I/O by both
+ * hosts. Unknown callers/ops reject; detectors get only the six evidence reads,
+ * writer only anchor/history reads, and orchestrators/gatherer all listed operations.
+ * No tool argument or option disables this caller fence.
+ */
+export function isPrCallerAllowed(caller: unknown, op: unknown): boolean {
+  if (typeof op !== "string" || !Object.hasOwn(KEYS, op)) return false
+  if (caller === "pr-comment-writer") return ["head", "diff", "files", "reviews"].includes(op)
+  if (caller === "pr-code-reviewer" || caller === "security-reviewer") {
+    return ["metadata", "head", "files", "diff", "reviews", "checks"].includes(op)
+  }
+  return typeof caller === "string" && ["corvus-review", "corvus-review-auto", "pr-context-gatherer"].includes(caller)
+}
 export type PrFailure = {
   reason: string; http_status?: number; unavailable?: true; login?: null
   files?: PrFile[] | string[]; excluded_corvus?: number; reviews?: PrReview[]; threads?: PrThread[]; dispositions?: PrDisposition[]

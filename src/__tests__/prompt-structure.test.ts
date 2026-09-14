@@ -120,17 +120,17 @@ const bodyPins: Record<string, BodyPin[]> = {
     { name: "authorized-artifact", required: /For authorized post\/auto_post, call corvus_review_payload with op freeze.*Only ok:true creates a usable POST_ARTIFACT descriptor for R5/i },
   ],
   [r5]: [
-    { name: "metadata-controls", section: "Revalidate Immediately Before Dispatch", required: /Call corvus_review_pr op metadata with \{owner, name, pr\} before dispatch; require ok:true and compare ONLY code_head, base_sha, and state for posting-authorization revalidation\. Changes to these fields, including OPEN→CLOSED\/MERGED, invalidate posting/i },
+    { name: "metadata-controls", section: "Revalidate Immediately Before Dispatch", required: /Call corvus_review_pr op metadata with \{owner, name, pr\} before dispatch; compare ONLY code_head, base_sha, and state for posting-authorization revalidation.*CLOSED\/MERGED selects the Delivery Principle exception/i },
     { name: "metadata-notes", section: "Revalidate Immediately Before Dispatch", required: /Mergeability \(mergeable\/mergeStateStatus\) never invalidates posting; record its changes and CI\/check changes only as notes in the terminal summary, never as posting controls\./i },
     { name: "artifact-verification", required: /Call corvus_review_verify with \{op: "verify", artifactPath: <artifact_path>, expectedSha256: <expected_sha256>\} before dispatch, including each permitted re-dispatch.*Require ok:true\s*, sha256Match true, canonical true, no violations, and available measurements/i },
   ],
   [writer]: [
     { name: "inline-schema", section: "Closed Field Sets", required: /POST_ARTIFACT.*POST_REQUEST.*Comment.*POST_RESULT/ },
     { name: "no-skill-read", forbidden: /\.\.\/skill\// },
-    { name: "digest-failure", required: /An ok:false result ends local-only without posting.*a digest mismatch is never accepted/i },
-    { name: "anchor-failure", required: /any anchor mismatch ends local-only without posting\./i },
+    { name: "digest-failure", required: /re-run verify once with the same descriptor; a digest mismatch is never accepted.*If it still fails, return not_posted\s*, reason verify: <tool diagnostic>/i },
+    { name: "anchor-failure", required: /any anchor mismatch requests R5 relocation without changing the artifact\./i },
     { name: "no-retyping", required: /Never re-type, copy, rewrite, relocate or re-encode review content\./i },
-    { name: "final-verification", required: /Call corvus_review_verify once immediately before corvus_review_post\s*, with \{op: "verify", artifactPath: <artifact_path>, expectedSha256: <original expected_sha256>\}/i },
+    { name: "final-verification", required: /Call corvus_review_verify immediately before corvus_review_post\s*, with \{op: "verify", artifactPath: <artifact_path>, expectedSha256: <original expected_sha256>\}/i },
     { name: "verification-success", required: /Require ok:true\s*, sha256Match true, canonical true, no violations, and available measurements/i },
     { name: "tool-preflight", section: "1. Preflight Tools", required: /Preflight: before reading the artifact, confirm.*corvus_review_pr.*corvus_review_verify.*corvus_review_post.*callable.*not-exposed, cause unknown.*observed inventory.*Diagnostics never substitute for missing verification or posting tools/i },
     { name: "post-tool", required: /Call corvus_review_post once with \{artifactPath: <artifact_path>, expectedSha256: <expected_sha256>, repo: <repository>, prNumber: <pr_number>, headSha: <head_sha>, event: <event>\}/i },
@@ -157,8 +157,8 @@ const safetyFixtureBodies: Corpus = {
   [r2]: "## Evidence Envelope\n<review_root>/review-input.json\nEach complete dispatch prompt is ≤ 12,000 characters. The compaction ladder is: drop pasted hunks → drop file summaries → pointer-only evidence.",
   [r4]: "For authorized post/auto_post, call corvus_review_payload with op freeze. Only ok:true creates a usable POST_ARTIFACT descriptor for R5.",
   [r5]: '## Dispatch One Artifact\nCall corvus_review_verify with {op: "verify", artifactPath: <artifact_path>, expectedSha256: <expected_sha256>} before dispatch, including each permitted re-dispatch. Require ok:true, sha256Match true, canonical true, no violations, and available measurements.\n```json\n{"artifact_path":"<path>","expected_sha256":"<digest>","repository":{"owner":"<owner>","name":"<name>"},"pr_number":<pr_number>,"head_sha":"<head>","event":"<event>"}\n```'
-    + '\n## Revalidate Immediately Before Dispatch\nCall corvus_review_pr op metadata with {owner, name, pr} before dispatch; require ok:true and compare ONLY code_head, base_sha, and state for posting-authorization revalidation. Changes to these fields, including OPEN→CLOSED/MERGED, invalidate posting. Mergeability (mergeable/mergeStateStatus) never invalidates posting; record its changes and CI/check changes only as notes in the terminal summary, never as posting controls.',
-  [writer]: '## Closed Field Sets\nPOST_ARTIFACT POST_REQUEST Comment POST_RESULT\nAn ok:false result ends local-only without posting; a digest mismatch is never accepted. Any anchor mismatch ends local-only without posting. Never re-type, copy, rewrite, relocate or re-encode review content. Call corvus_review_verify once immediately before corvus_review_post, with {op: "verify", artifactPath: <artifact_path>, expectedSha256: <original expected_sha256>}. Require ok:true, sha256Match true, canonical true, no violations, and available measurements. Call corvus_review_post once with {artifactPath: <artifact_path>, expectedSha256: <expected_sha256>, repo: <repository>, prNumber: <pr_number>, headSha: <head_sha>, event: <event>}. Frontmatter-granted read-only bash is available for diagnostics; it never satisfies any verification step. POST stays tool-only.\n### 1. Preflight Tools\nPreflight: before reading the artifact, confirm `corvus_review_pr`, `corvus_review_verify` and `corvus_review_post` are callable. Record absent tools as `not-exposed, cause unknown` with the observed inventory. Diagnostics never substitute for missing verification or posting tools.\n### 2. Validate Descriptor and Payload\nRead the artifact once to extract only the controls anchor validation needs. Body-line truncation is expected, not an incomplete controls read; never reconstruct or re-type content. Granted JSON diagnostics may inspect the unchanged file, not supply verification.',
+    + '\n## Revalidate Immediately Before Dispatch\nCall corvus_review_pr op metadata with {owner, name, pr} before dispatch; compare ONLY code_head, base_sha, and state for posting-authorization revalidation. CLOSED/MERGED selects the Delivery Principle exception. Mergeability (mergeable/mergeStateStatus) never invalidates posting; record its changes and CI/check changes only as notes in the terminal summary, never as posting controls.',
+  [writer]: '## Closed Field Sets\nPOST_ARTIFACT POST_REQUEST Comment POST_RESULT\nRe-run verify once with the same descriptor; a digest mismatch is never accepted. If it still fails, return not_posted, reason verify: <tool diagnostic>. Any anchor mismatch requests R5 relocation without changing the artifact. Never re-type, copy, rewrite, relocate or re-encode review content. Call corvus_review_verify immediately before corvus_review_post, with {op: "verify", artifactPath: <artifact_path>, expectedSha256: <original expected_sha256>}. Require ok:true, sha256Match true, canonical true, no violations, and available measurements. Call corvus_review_post once with {artifactPath: <artifact_path>, expectedSha256: <expected_sha256>, repo: <repository>, prNumber: <pr_number>, headSha: <head_sha>, event: <event>}. Frontmatter-granted read-only bash is available for diagnostics; it never satisfies any verification step. POST stays tool-only.\n### 1. Preflight Tools\nPreflight: before reading the artifact, confirm `corvus_review_pr`, `corvus_review_verify` and `corvus_review_post` are callable. Record absent tools as `not-exposed, cause unknown` with the observed inventory. Diagnostics never substitute for missing verification or posting tools.\n### 2. Validate Descriptor and Payload\nRead the artifact to extract only the controls anchor validation needs. Body-line truncation is expected, not an incomplete controls read; never reconstruct or re-type content. Granted JSON diagnostics may inspect the unchanged file, not supply verification.',
   "command/git-commit.md": "Commit only the user's already staged changes. Never stage files. Request explicit confirmation.",
   "command/cleanup-subagents.md": "With --list, never invoke deletion. Stop after the preview. Request explicit confirmation only after the complete preview.",
   "agent/corvus-auto.md": "## Git Delivery\nStage exact task-owned paths; use the discovered base and commit after final validation.",
@@ -333,6 +333,63 @@ function mutatePermission(corpus: Corpus, path: string, mutate: (permission: Rec
 }
 
 describe("prompt structure", () => {
+  test("delivery principle is canonical and rejects an added coverage no-post trigger", () => {
+    const corpus = readCorpus(), extras = "skill/corvus-review-extras/SKILL.md"
+    const principle = "Delivery is the default. Once R3 synthesis exists, the review IS posted in autonomous mode (COMMENT event when identity/config cap applies)."
+    const reasons = ["LOCAL mode (no PR)", "PR state CLOSED/MERGED at R5 revalidation", "the writer agent or its required tools are not exposed by the host", "GitHub rejected the POST after the writer's attempt", "frozen artifact fails verification after re-freeze"]
+    const delivery = sections(corpus[extras], "Delivery Principle")[0].replace(/<!--[^]*?-->/g, "")
+    expect(delivery).toContain(principle)
+    expect(delivery.match(/The ONLY reasons not to post: ([^]*?)\. Everything else/)?.[1].split("; ")).toEqual(reasons)
+    expect(delivery).toContain("stop retrying only when two consecutive attempts yield the identical result, then proceed with what exists")
+    expect(Object.values(corpus).filter(text => text.includes(principle))).toHaveLength(1)
+    // The owning R4 prose is the oracle before in-memory seeding; unlisted no-post
+    // clauses reject, with no rollout exemption and no writes from this check.
+    const invalidTrigger = (text: string) => text.split(/\n/).some(line => /local_only/.test(line)
+      && !/For LOCAL,.*Emit REVIEW_ACTION `local_only`, reason `LOCAL review — posting is not applicable`/.test(line))
+    expect(invalidTrigger(corpus[r4])).toBe(false)
+    expect(invalidTrigger(corpus[r4] + "\nIf coverage is incomplete, emit local_only.\n")).toBe(true)
+    expect(corpus[r4]).toContain("writer_capability_not_exposed")
+    for (let phase = 0; phase <= 5; phase++) expect(corpus[`skill/corvus-review-r${phase}/SKILL.md`]).toContain("Delivery Principle")
+    expect(corpus[r2]).toContain("complete PR description verbatim")
+    for (const path of detectors) {
+      const sentence = "If the brief lacks evidence you need, fetch it yourself with corvus_review_pr read ops `metadata|head|files|diff|reviews|checks`; note what you fetched."
+      expect(corpus[path]).toContain(sentence)
+      expect(corpus[path].replace(sentence, "")).not.toContain(sentence)
+    }
+  })
+  test("review recovery removes old stop rails and fixed retry limits at every consumer", () => {
+    const corpus = readCorpus()
+    const obsolete = /stop locally|terminate|local[- ]only unless|at most (one|once|two)|single (retry|correction)|exactly one retry/i
+    for (const [path, text] of Object.entries(corpus).filter(([path]) => path.startsWith("skill/corvus-review-")
+      || /^agent\/(?:corvus-review.*|pr-.*|security-reviewer)\.md$/.test(path))) expect(text, path).not.toMatch(obsolete)
+    for (const seed of ["stop locally", "terminate", "local-only unless", "at most once", "single retry", "single correction", "exactly one retry"])
+      expect(corpus[r4] + `\nOn a coverage gap, ${seed}.`).toMatch(obsolete)
+  })
+  test("writer verification repair and ambiguous transport recovery preserve delivery and remote truth", () => {
+    const corpus = readCorpus()
+    // Owning prose is read before seeded changes; missing recovery, marker identity,
+    // or verification fails regardless of rollout flags. These probes never write files.
+    const cases: [string, string, RegExp, string, string][] = [
+      [writer, "3. Verify Current Head", /op: "head".*Missing head evidence is fetched.*retry while progress is made.*post tool perform its independent head read/,
+        "retry while progress is made", "give up immediately"],
+      [writer, "5. Verify the Artifact", /re-run verify once with the same descriptor.*If it still fails, return not_posted\s*, reason verify: <tool diagnostic>.*R4's re-freeze checkpoint/,
+        "re-run verify once", "accept verification failure"],
+      [r4, "Verification Recovery", /On writer not_posted with reason verify: <diagnostic>.*re-freeze once.*verification_refreeze_attempted.*new expected digest.*frozen artifact fails verification after re-freeze/,
+        "re-freeze once", "reuse invalid bytes"],
+      [writer, "6. Submit Through the Tool", /Before POST, check corvus_review_pr op reviews.*exact body_marker and commit_id with matching event.*return a matching usable html_url instead of posting again/,
+        "commit_id with matching event", "marker alone"],
+      [r5, "Reconcile Writer Transport", /Require ok:true and complete_pagination:true to prove absence.*Complete evidence proving no matching review after unknown\/malformed transport: make ONE more writer dispatch.*transport_repost_attempted.*without another ambiguous-transport POST/,
+        "complete_pagination:true to prove absence", "incomplete pagination proves absence"],
+    ]
+    for (const [path, section, pattern, before, after] of cases) {
+      const text = sections(corpus[path], section).join("\n").replace(/<!--[^]*?-->/g, "")
+      expect(safetyText(text), `${path}: ${section}`).toMatch(pattern)
+      const changed = text.replace(before, after)
+      expect(changed).not.toBe(text)
+      expect(safetyText(changed)).not.toMatch(pattern)
+    }
+    expect(corpus[writer]).toContain("not an idempotency guarantee")
+  })
   test("validates the corpus at its rollout flags; CORVUS_PROMPT_FINAL=1 requires convergence", () => {
     const corpus = readCorpus()
     expect(validate(corpus, budgets, process.env.CORVUS_PROMPT_FINAL === "1")).toEqual([])
@@ -341,7 +398,7 @@ describe("prompt structure", () => {
     if (process.env.CORVUS_PROMPT_FINAL === "1") {
       console.info(`Prompt corpus: ${total}/4800 lines`)
       for (const [path, text] of Object.entries(corpus).filter(([path]) => reviewOrchestrators.includes(path)
-        || [writer, "agent/pr-context-gatherer.md"].includes(path) || /^skill\/corvus-review-(?:r[0-5]\/SKILL|extras\/(?:SKILL|state|schemas|config))\.md$/.test(path))) {
+        || [...detectors, writer, "agent/pr-context-gatherer.md"].includes(path) || /^skill\/corvus-review-(?:r[0-5]\/SKILL|extras\/(?:SKILL|state|schemas|config|interactive))\.md$/.test(path))) {
         const rule = ruleOf(path, budgets), cap = budgets.budgetClasses[kindOf(path) === "reference" ? "reference" : rule.budget]
         console.info(`${path}: ${countLines(text)}/${cap} lines`)
       }
@@ -524,20 +581,20 @@ describe("prompt structure", () => {
       expect(permission).not.toHaveProperty("write")
     })
 
-    test("lock acquisition checks both names and denial terminates with evidence and recovery", () => {
+    test("lock acquisition checks both names and denial preserves evidence without halting analysis", () => {
       const lock = sections(readCorpus()["skill/corvus-review-extras/state.md"], "Namespace and Lock")[0]
       expect(lock).toContain("lock_path = <review_root>/lock.yaml")
       expect(lock).toContain("legacy_lock_path = <review_root>/.lock")
       const instructions = safetyText(lock.replace(/<!--[\s\S]*?-->/g, ""))
       expect(instructions).toMatch(/corvus_review_lock with \{op: "acquire", reviewRoot: review_root, runId\}/)
-      expect(instructions).toMatch(/interactive question explicitly authorizes one retry with force:true/)
+      expect(instructions).toMatch(/Only interactive question explicitly authorizes force:true/)
       expect(instructions).toMatch(/Every terminal branch calls corvus_review_lock with \{op: "release"/)
       expect(instructions).not.toMatch(/date -u|write the active YAML|Read BOTH/)
       const denial = safetyText(sections(lock, "Lock Permission Denial")[0])
-      expect(denial).toMatch(/stop local-only without an alternate path or unlocked continuation/)
+      expect(denial).toMatch(/disclose and continue analysis in memory/)
       for (const field of ["attempted path", "resolved path/resource", "session/workspace root", "verbatim denial text", "unverified"])
         expect(denial).toContain(field)
-      expect(denial).toContain("correct the permission/root mismatch and rerun R0 — existing state preserved")
+      expect(denial).toContain("without claiming lock ownership or durability")
     })
 
     test("every agent defaults to allow with exactly its expected denies and no extra rules", () => {
@@ -617,18 +674,18 @@ describe("prompt structure", () => {
         [r4, "authorized-artifact", "Only `ok:true` creates a usable POST_ARTIFACT", "Any result creates a usable POST_ARTIFACT"],
         [r5, "artifact-verification", "before dispatch, including each permitted re-dispatch", "after dispatch"],
         [r5, "artifact-verification", "expectedSha256: <expected_sha256>", "expectedSha256: <new_digest>"],
-        [r5, "metadata-controls", "compare ONLY code_head, base_sha, and state for posting-authorization revalidation.", "unchanged code_head/base, state, draft and mergeability controls;"],
+        [r5, "metadata-controls", "compare ONLY code_head, base_sha, and state for posting-authorization revalidation", "unchanged code_head/base, state, draft and mergeability controls;"],
         [r5, "metadata-controls", "code_head, base_sha, and state", "code_head, base_sha, state, and mergeability"],
         [r5, "metadata-controls", "code_head, base_sha, and state", "code_head, base_sha, state, and draft"],
         [r5, "metadata-controls", "code_head, base_sha, and state", "code_head and state"],
-        [r5, "metadata-controls", "including OPEN→CLOSED/MERGED, invalidate posting", "including OPEN→CLOSED/MERGED, never invalidate posting"],
+        [r5, "metadata-controls", "CLOSED/MERGED selects the Delivery Principle exception", "CLOSED/MERGED never selects an exception"],
         [r5, "metadata-notes", "Mergeability (mergeable/mergeStateStatus) never invalidates posting", "Mergeability (mergeable/mergeStateStatus) invalidates posting"],
         [r5, "metadata-notes", "CI/check changes only as notes in the terminal summary", "CI/check changes as posting controls"],
-        [writer, "digest-failure", "An `ok:false` result ends local-only without posting", "An `ok:false` result permits posting"],
+        [writer, "digest-failure", "re-run verify once with the same descriptor", "accept the failed artifact"],
         [writer, "digest-failure", "a digest mismatch is never accepted", "a digest mismatch is accepted"],
-        [writer, "anchor-failure", "any anchor mismatch ends local-only without posting.", "any anchor mismatch permits body relocation."],
+        [writer, "anchor-failure", "any anchor mismatch requests R5 relocation without changing the artifact.", "any anchor mismatch permits guessed positions."],
         [writer, "no-retyping", "Never re-type, copy, rewrite, relocate or re-encode review content.", "Reconstruct the payload with the write tool."],
-        [writer, "final-verification", "Call `corvus_review_verify` once immediately before `corvus_review_post`", "Trust the earlier digest before submission"],
+        [writer, "final-verification", "Call `corvus_review_verify` immediately before `corvus_review_post`", "Trust the earlier digest before submission"],
         [writer, "final-verification", "expectedSha256: <original expected_sha256>", "expectedSha256: <new_digest>"],
         [writer, "verification-success", "sha256Match true", "sha256Match false"],
         [writer, "verification-success", "canonical true", "canonical false"],
@@ -644,7 +701,7 @@ describe("prompt structure", () => {
         [writer, "controls-only-read", "Body-line truncation is expected, not an incomplete controls read", "an incomplete read fails local-only"],
         [writer, "controls-only-read", "never reconstruct or re-type content", "use consecutive windows for large files"],
         [writer, "controls-only-read", "not supply verification", "supply verification"],
-        [writer, "controls-only-read", "Read the artifact once with the read tool to extract ONLY the small controls", "Read the artifact once with the read tool to extract ONLY the small controls (an incomplete read fails local-only)"],
+        [writer, "controls-only-read", "Read the artifact with the read tool to extract ONLY the small controls", "Read the artifact with the read tool to extract ONLY the small controls (an incomplete read fails local-only)"],
       ]
       expect(validate(corpus, contract)).toEqual([])
       for (const [path, pin, before, after] of cases) {
@@ -654,7 +711,7 @@ describe("prompt structure", () => {
       }
     })
 
-    test("writer maps transport outcomes into the closed result and R5 reconciles uncertainty without retrying", () => {
+    test("writer maps transport outcomes into the closed result and R5 reconciles before a recovery POST", () => {
       const corpus = readCorpus()
       const mapping = safetyText(sections(corpus[writer], "7. Map Remote Truth").join("\n"))
       for (const row of [
@@ -663,29 +720,29 @@ describe("prompt structure", () => {
         /unknown \| status local_only, remote_state unknown, review_url null, reason from tool/,
         /api_calls = sum of corvus_review_pr result api_calls \+ post tool_api_calls/,
         /Body-only success includes commit-history reads; use reported counts, not a fixed total/,
-        /When posted, inline_comments_posted is the artifact's comments count; otherwise 0\. comments_moved_to_body is always 0/,
+        /When newly posted, inline_comments_posted is the artifact's comments count; otherwise 0, including marker reuse\. comments_moved_to_body is always 0/,
       ]) expect(mapping).toMatch(row)
       const reconcile = safetyText(sections(corpus[r5], "Reconcile Writer Transport").join("\n"))
-      expect(reconcile).toMatch(/Valid POST_RESULT local_only, remote_state not_posted \| Terminal as reported, including tool rejection/)
-      expect(reconcile).toMatch(/Valid POST_RESULT local_only, remote_state unknown \| Terminal-uncertain; use the listing below to reconcile, never re-dispatch even on verified absence/)
+      expect(reconcile).toMatch(/confirmed GitHub POST rejection is the delivery exception/)
+      expect(reconcile).toMatch(/disclose uncertainty rather than claiming rejection or absence/)
       expect(reconcile).toMatch(/Empty\/malformed\/truncated\/schema-invalid result \| Child-transport failure/)
-      expect(reconcile).toMatch(/Complete evidence proving no matching review: only for a transport-invalid return, re-dispatch/)
+      expect(reconcile).toMatch(/Complete evidence proving no matching review after unknown\/malformed transport: make ONE more writer dispatch/)
     })
 
-    test("large-diff recovery keeps evidence, relocation and bounded persistence contracts", () => {
+    test("large-diff recovery keeps evidence, progress-based relocation and bounded persistence payloads", () => {
       const corpus = readCorpus(), schemas = "skill/corvus-review-extras/schemas.md"
       const cases: [string, string, RegExp, string, string][] = [
         [writer, "4. Validate Inline Locations", /canonical diff.*oversized:true \(HTTP 406\/413\) or partial\/truncated diff text.*corvus_review_pr op files.*paginate: true/,
           "oversized:true", "oversized:false"],
         [writer, "4. Validate Inline Locations", /each file's complete patch.*path membership.*complete hunk counts.*added\/context RIGHT-side lines.*multi-line span in one hunk/,
           "added/context RIGHT-side lines", "estimated local lines"],
-        [writer, "4. Validate Inline Locations", /absent patch.*truncated patch.*incomplete pagination makes that anchor unverifiable.*If ALL anchors verify, proceed; otherwise finish available anchor diagnostics and hand off to R5's bounded relocation with status not_posted\s*, reason anchors-unverifiable\s*, and unverifiable_anchors: \[\{path,line_start,line_end\}\].*only unresolved anchors.*no POST attempted/,
+        [writer, "4. Validate Inline Locations", /absent patch.*truncated patch.*incomplete pagination makes that anchor unverifiable.*If ALL anchors verify, proceed; otherwise finish available anchor diagnostics and hand off to R5's relocation with status not_posted\s*, reason anchors-unverifiable\s*, and unverifiable_anchors: \[\{path,line_start,line_end\}\].*only unresolved anchors.*no POST attempted/,
           "only unresolved anchors", "all anchors"],
-        [writer, "4. Validate Inline Locations", /If ALL anchors verify, proceed; otherwise finish available anchor diagnostics and hand off to R5's bounded relocation/,
+        [writer, "4. Validate Inline Locations", /If ALL anchors verify, proceed; otherwise finish available anchor diagnostics and hand off to R5's relocation/,
           "If ALL anchors verify, proceed", "Proceed even with unverifiable anchors"],
-        [writer, "Closed Field Sets", /Status not_posted requires reason anchors-unverifiable, remote_state not_posted, null URL, zero inline_comments_posted and a non-empty unverifiable_anchors array/,
-          "reason anchors-unverifiable", "reason unknown"],
-        [schemas, "POST_REQUEST and POST_RESULT — R5/Writer", /status: "posted \| not_posted \| local_only".*unverifiable_anchors:.*line_start:.*line_end:.*required only for status not_posted; otherwise omitted/,
+        [writer, "Closed Field Sets", /Status not_posted requires remote_state not_posted, null URL, zero inline_comments_posted and a reason: anchors-unverifiable, verify: <diagnostic>, head-moved or not-exposed: <inventory>.*Only anchors-unverifiable includes a non-empty unverifiable_anchors array/,
+          "Only anchors-unverifiable", "Every reason"],
+        [schemas, "POST_REQUEST and POST_RESULT — R5/Writer", /status: "posted \| not_posted \| local_only".*unverifiable_anchors:.*line_start:.*line_end:.*required only for reason anchors-unverifiable; otherwise omitted/,
           "unverifiable_anchors:", "missing_positions:"],
         [r5, "Reconcile Writer Transport", /Valid POST_RESULT not_posted, reason anchors-unverifiable \| Follow Anchor Relocation, not transport recovery/,
           "Follow Anchor Relocation", "Terminate local_only"],
@@ -693,13 +750,13 @@ describe("prompt structure", () => {
           "Relocate ONLY those matching inline comments", "Relocate every inline comment"],
         [r5, "Anchor Relocation", /increment R5's cumulative comments_moved_to_body by the number moved, not the number of unique anchors.*independently of the writer's zero count/,
           "number moved, not the number of unique anchors", "number of unique anchors"],
-        [r5, "Anchor Relocation", /autonomous mode needs no new authorization because content is unchanged, only placement; interactive mode shows the relocation in one question.*explicit consent/,
-          "in one question", "without a question"],
-        [r5, "Anchor Relocation", /Invalidate the old descriptor.*persist the revised complete checkpoint and candidate.*corvus_review_payload measure → freeze.*corvus_review_verify with the new digest.*revalidate authorization\/current PR controls.*re-dispatch the writer ONCE.*second attempt.*non-transport reason, end local_only.*without resetting the relocation bound/,
-          "re-dispatch the writer ONCE", "re-dispatch until posted"],
+        [r5, "Anchor Relocation", /autonomous mode needs no new authorization because content is unchanged, only placement; interactive mode shows the relocation in a question.*explicit consent/,
+          "in a question", "without a question"],
+        [r5, "Anchor Relocation", /Invalidate the old descriptor.*persist the revised complete checkpoint and candidate.*corvus_review_payload measure → freeze.*corvus_review_verify with the new digest.*revalidate authorization\/current PR controls.*re-dispatch the writer\. Retry while progress is made/,
+          "Retry while progress is made", "Abandon delivery after a fixed count"],
         ["skill/corvus-review-r3/SKILL.md", "Render and Persist", /gatherer reports an oversized\/truncated diff.*additions\+deletions exceeds 20,000.*prefer body placement.*patches are unavailable in review-input\.json.*R4 needs no new payload-tool preflight/,
           "prefer body placement", "guess inline positions"],
-        [r2, "Evidence Envelope", /corvus_review_persist with \{op: "write_input".*require ok:true.*before either child launches/,
+        [r2, "Evidence Envelope", /corvus_review_persist.*op: "write_input".*Require ok:true.*before advertising the file to either child/,
           'op: "write_input"', 'op: "write_document"'],
       ]
       for (const [path, section, guard, before, after] of cases) {
@@ -723,8 +780,8 @@ describe("prompt structure", () => {
         [r0, "Establish State and Gather Rail Inputs", "corvus_review_pr", ["identity", "checks"]],
         [r0, "Prior-Review Evidence", "corvus_review_pr", ["reviews"]],
         [r0, "Load Config", "corvus_review_pr", ["config"]],
-        [r2, "Evidence Envelope", "corvus_review_persist", ["write_input"]],
-        [r3, "Render and Persist", "corvus_review_persist", ["write_document", "read_document", "write_meta"]],
+        [r2, "Evidence Envelope", "corvus_review_persist", ["write_input", "begin", "append", "finalize"]],
+        [r3, "Render and Persist", "corvus_review_persist", ["begin", "append", "finalize", "read_document", "write_meta"]],
         [r3, "Measure Candidate", "corvus_review_persist", ["write_candidate"]],
         [r3, "Size Overflow", "corvus_review_persist", ["write_candidate"]],
         [r5, "Revalidate Immediately Before Dispatch", "corvus_review_pr", ["metadata"]],
@@ -732,7 +789,7 @@ describe("prompt structure", () => {
         [r5, "Anchor Relocation", "corvus_review_persist", ["write_candidate"]],
         [r5, "Complete Locally or Remotely", "corvus_review_sync", ["push"]],
         [`${extras}state.md`, "Namespace and Lock", "corvus_review_lock", ["acquire", "release"]],
-        [`${extras}state.md`, "Persist at R3", "corvus_review_persist", ["write_document", "read_document", "write_meta"]],
+        [`${extras}state.md`, "Persist at R3", "corvus_review_persist", ["begin", "append", "finalize", "read_document", "write_meta"]],
         [writer, "3. Verify Current Head", "corvus_review_pr", ["head"]],
         [writer, "4. Validate Inline Locations", "corvus_review_pr", ["diff", "files"]],
       ]
@@ -928,7 +985,7 @@ describe("prompt structure", () => {
       const cases: [string, string, RegExp, string, string][] = [
         [`${extras}config.md`, "Defaults and Validation", /max_nits: 3\b/, "max_nits: 3", "max_nits: 4"],
         [`${extras}schemas.md`, "PR_CONTEXT — R0", /\bmode: pr \\\| local/, "mode:", "removed_mode:"],
-        ["skill/corvus-review-r3/SKILL.md", "Render and Persist", /LOCAL mode: after write_document \/ write_meta\s*, skip candidate construction, write_candidate\s*, measure and freeze; hand off to \[R4 Local Summary\]/, "skip candidate construction", "construct a candidate"],
+        ["skill/corvus-review-r3/SKILL.md", "Render and Persist", /LOCAL mode: after finalize \/ read_document \/ write_meta\s*, skip candidate construction, write_candidate\s*, measure and freeze; hand off to \[R4 Local Summary\]/, "skip candidate construction", "construct a candidate"],
         [`${extras}config.md`, "Defaults and Validation", /max_minors: 6\b/, "max_minors: 6", "max_minors: 10"],
         [`${extras}config.md`, "Defaults and Validation", /hard totals across both axes/, "hard totals across both axes", "independent allowances"],
         [`${extras}config.md`, "Defaults and Validation", /post_converged_summary \| false \| Boolean/, "post_converged_summary", "removed_summary"],
@@ -937,8 +994,8 @@ describe("prompt structure", () => {
         [`${extras}schemas.md`, "REVIEW_INPUT — R2 Children", /one pretty-printed \(2-space\) JSON object/, "pretty-printed (2-space)", "compact"],
         [`${extras}schemas.md`, "REVIEW_INPUT — R2 Children", /strings ≤1,500 characters/, "1,500 characters", "any length"],
         [`${extras}schemas.md`, "REVIEW_INPUT — R2 Children", /description_chunks.*hunk_lines.*children concatenate chunks in order/, "description_chunks", "description"],
-        [r2, "Evidence Envelope", /corvus_review_persist with \{op: "write_input".*require ok:true/, 'op: "write_input"', 'op: "write_meta"'],
-        [r2, "Bounded Recovery", /Allow one corrective retry per child.*stale\/truncated review-input\.json\s*, call corvus_review_persist op write_input again and require ok:true before re-dispatch/, "require ok:true before re-dispatch", "re-dispatch regardless of the result"],
+        [r2, "Evidence Envelope", /corvus_review_persist.*op: "write_input".*Require ok:true/, 'op: "write_input"', 'op: "write_meta"'],
+        [r2, "Progress-Based Recovery", /Malformed\/partial child reports get re-dispatched with the same brief.*while progress is made.*two identical consecutive results, synthesize from what exists/, "same brief", "unrelated brief"],
         ["agent/pr-code-reviewer.md", "Trust and Capability Boundary", /Concatenate _chunks arrays and hunk_lines in order/, "Concatenate", "Ignore"],
         ["agent/security-reviewer.md", "Trust and Capability Boundary", /Concatenate _chunks arrays and hunk_lines in order.*description_chunks/, "Concatenate", "Ignore"],
         [r2, "Detection and Report Contract", /\borigin: "<pr-code\|review-fix>"/, "origin:", "removed_origin:"],
@@ -954,16 +1011,15 @@ describe("prompt structure", () => {
         [`${extras}SKILL.md`, "Convergence and Continuation", /Verdict is computed by corvus_review_verdict.*converged exactly when two consecutive rounds.*zero retained unsuppressed blocker\/critical\/major.*full coverage/, "computed by `corvus_review_verdict`", "computed by the model"],
         [`${extras}SKILL.md`, "Convergence and Continuation", /Minors, nitpicks, dispositions and posted status do not enter this predicate/, "Minors, nitpicks, dispositions and posted status do not enter this predicate", "Minor findings and unresolved dispositions prevent convergence"],
         [`${extras}SKILL.md`, "Convergence and Continuation", /Converged — no blocking findings in two consecutive rounds; recommend human approval\./, "recommend human approval", "approve automatically"],
-        [`${extras}SKILL.md`, "Convergence and Continuation", /R4 defaults to local_only\s*; only post_converged_summary: true permits a one-line summary/, "R4 defaults to `local_only`", "R4 defaults to `auto_post`"],
         [`${extras}SKILL.md`, "Convergence and Continuation", /At R0, record the tool's refuse_delta and reason unchanged.*Continue the requested review once with that note.*Pass force_delta: true only from explicit trusted invocation, never as recovery/, "Continue the requested review once with that note", "Refuse the requested review"],
         [`${extras}SKILL.md`, "Convergence and Continuation", /Pass force_delta: true only from explicit trusted invocation, never as recovery/, "only from explicit trusted invocation", "from model recovery"],
         [`${extras}state.md`, "Resume at R0", /Apply shared Convergence and Continuation before admitting another delta at R0/, "before admitting another delta", "after admitting another delta"],
-        [`${extras}state.md`, "Persist at R3", /op write_document.*op read_document.*op write_meta/, "op `read_document`", "op `write_input`"],
+        [`${extras}state.md`, "Persist at R3", /op begin.*op append.*op finalize.*op read_document.*op write_meta/, "op `read_document`", "op `write_input`"],
         [`${extras}state.md`, "Namespace and Lock", /For PR, record mode: pr in meta/, "mode: pr", "mode: local"],
         [`${extras}state.md`, "Complete at R5", /including local-only, the verdict tool persists verdict\.yaml.*without clearing convergence/, "including local-only", "only when posted"],
         ["skill/corvus-review-r0/SKILL.md", "Prior-Review Evidence", /Then call corvus_review_verdict.*op: "compute".*without headSha or code_head \(history-only\).*Before R1\/R2, record refuse_delta \/refuse_reason unchanged.*review once with a note/, "Before R1/R2", "After R1/R2"],
         ["skill/corvus-review-r0/SKILL.md", "Prior-Review Evidence", /record refuse_delta \/refuse_reason unchanged.*review once with a note/, "review once with a note", "stop without reviewing"],
-        [r4, "Preflight", /Call corvus_review_verdict.*headSha: code_head.*use returned counts, round and caps_applied unchanged.*tool's converged for the posting default/, "use returned counts, round and caps_applied unchanged", "Compute counts for the summary"],
+        [r4, "Preflight", /Call corvus_review_verdict.*headSha: code_head.*never invent tool counts/, "never invent tool counts", "invent tool counts"],
         [`${extras}state.md`, "Complete at R5", /write_meta retains the Persist at R3 field set — never copy counts/, "never copy counts", "copy counts"],
         ...([[r5, "Complete Locally or Remotely"], [`${extras}state.md`, "Persist at R3"]] as const)
           .map(([path, section]): [string, string, RegExp, string, string] => [path, section,
@@ -990,13 +1046,46 @@ describe("prompt structure", () => {
       }
     })
 
+    test("staged checkpoints gate downstream calls and failed persistence cleans up in order", () => {
+      const corpus = readCorpus(), r3 = "skill/corvus-review-r3/SKILL.md", state = "skill/corvus-review-extras/state.md"
+      // Oracle: owning procedure clauses, read before seeded in-memory mutations.
+      // Missing staging, bounds or failure gates fail these pins; no rollout flag disables them.
+      const cases: [string, string, RegExp, string, string][] = [
+        [r3, "Render and Persist", /ALWAYS stage.*PR and LOCAL alike.*begin.*append per section.*6,000.*finalize with expected_sections.*read_document.*verdict compute.*write_meta/, "ALWAYS stage", "Optionally stage"],
+        [r3, "Render and Persist", /Never call write_document for the checkpoint/, "Never call `write_document`", "Call `write_document`"],
+        [r3, "Render and Persist", /Never drop, summarize or abbreviate fields to fit.*both axis maps\/projection.*review_context.*review_body.*inline comments.*every log and edit_history/, "Never drop, summarize or abbreviate", "Drop, summarize or abbreviate"],
+        [r3, "Size Overflow", /same begin → append → finalize → read_document protocol/, "same begin → append → finalize → read_document protocol", "single-call protocol"],
+        [r2, "Evidence Envelope", /only when changed_files ≤ 5 AND every patch ≤ 2,000 characters.*otherwise.*begin.*target: "input".*append per top-level key.*finalize.*expected_keys/, "AND every patch", "OR every patch"],
+        [r2, "Evidence Envelope", /only when changed_files ≤ 5 AND every patch ≤ 2,000 characters/, "changed_files ≤ 5", "changed_files ≤ 50"],
+        [r2, "Evidence Envelope", /only when changed_files ≤ 5 AND every patch ≤ 2,000 characters/, "patch ≤ 2,000", "patch ≤ 20,000"],
+        [r2, "Evidence Envelope", /string parts.*patch strings.*checkpoint_failed.*stage: review-input.*then continue synthesis/, "stage: review-input", "stage: document"],
+        [state, "Persist at R3", /arguments stay ≤6,000 characters per call; large content is staged/, "≤6,000", "≤60,000"],
+        [state, "Persist at R3", /op begin.*expected_sections: N.*op append.*staging_id, index, heading, body, part, parts.*op finalize.*expected_sections: N.*op read_document/, "op `finalize`", "op `write_input`"],
+        [state, "Persist at R3", /When progress stalls, call op abort.*checkpoint_failed.*continue from in-memory synthesis/, "continue from in-memory synthesis", "stop all work"],
+        [state, "Checkpoint Shape", /status: "synthesized \| checkpoint-failed \|.*checkpoint-failed requires a non-null reason and recoverable: true/, "`checkpoint-failed` requires a non-null reason", "`checkpoint-failed` permits a null reason"],
+        [state, "Resume at R0", /checkpoint-failed meta at exact code_head, or meta present with the document absent, takes fresh analysis.*Ignore leftover \.staging\/ on resume; begin replaces it and sync never includes it/, "takes fresh analysis", "restores synthesis"],
+        [r4, "Check Checkpoint First", /checkpoint_failed.*Keep the in-memory synthesis and continue Preflight.*never a posting prerequisite/, "continue Preflight", "stop Preflight"],
+        [r5, "Route Before Preparing a Post", /checkpoint_failed.*continue from R4's in-memory candidate/, "continue from R4's in-memory candidate", "stop before posting"],
+      ]
+      for (const [path, section, guard, before, after] of cases) {
+        const prose = sections(corpus[path], section).join("\n").replace(/<!--[\s\S]*?-->/g, "")
+        expect(safetyText(prose), `${path}: ${section}`).toMatch(guard)
+        const changed = prose.replace(before, after)
+        expect(changed).not.toBe(prose)
+        expect(safetyText(changed)).not.toMatch(guard)
+      }
+      const persistence = sections(corpus[state], "Persist at R3").join("\n")
+      expect(persistence).not.toContain("write_document")
+      expect(persistence + "\nCall write_document for the checkpoint.").toContain("write_document")
+    })
+
     test("calibration consumers retain shared authority and obsolete policies stay absent", () => {
       const corpus = readCorpus(), extras = "skill/corvus-review-extras/"
       for (const path of [r4, r5, ...reviewOrchestrators]) {
         const prose = corpus[path].replace(/<!--[\s\S]*?-->/g, "")
-        expect(prose).toContain("Convergence and Continuation")
-        expect(prose.replaceAll("Convergence and Continuation", "removed authority"))
-          .not.toContain("Convergence and Continuation")
+        expect(prose).toContain("Delivery Principle")
+        expect(prose.replaceAll("Delivery Principle", "removed authority"))
+          .not.toContain("Delivery Principle")
       }
       const legacy = /convergence is not claimed|applies per axis|effective total = 2×|Protection can exceed limits/i
       for (const path of [`${extras}SKILL.md`, `${extras}config.md`, `${extras}state.md`, "skill/corvus-review-r3/SKILL.md"]) {
@@ -1016,11 +1105,11 @@ describe("prompt structure", () => {
       expect(schema).toMatch(/overflow_log:/)
       expect(rendering).toMatch(/1\. Collapse.*2\. If still over budget.*3\. Never drop blockers\/critical/)
       expect(rendering).toMatch(/overflow: true/)
-      expect(rendering).toMatch(/terminate local-only/)
-      expect(decision).toMatch(/authorized post\/auto_post.*corvus_review_payload.*freeze.*budget-violation.*R3 Size Overflow.*fresh preview/)
+      expect(rendering).toMatch(/rather than terminating delivery/)
+      expect(decision).toMatch(/authorized post\/auto_post.*corvus_review_payload.*freeze.*Repair failures through R3 measurement and a fresh preview/)
       expect(freeze).toMatch(/corvus_review_payload.*op: "freeze", candidatePath:.*artifactPath:.*tool alone writes the canonical artifact and verifies read-back.*Require ok:true/)
       const guards: [string, RegExp, string, string][] = [
-        [r3, /Persist the full REVIEW_DOCUMENT checkpoint.*BEFORE measurement.*### Measure Candidate.*Call corvus_review_payload with \{op: "measure", candidatePath:/,
+        [r3, /ALWAYS stage the full REVIEW_DOCUMENT checkpoint.*BEFORE measurement.*### Measure Candidate.*Call corvus_review_payload with \{op: "measure", candidatePath:/,
           "BEFORE measurement", "after measurement"],
         [state, /tool alone writes the canonical artifact and verifies read-back.*Require ok:true\s*, a valid sha256 matching R3's measured candidate digest/,
           "Require `ok:true`, a valid sha256", "Accept `ok:false`, a valid sha256"],
@@ -1045,7 +1134,7 @@ describe("prompt structure", () => {
       const failures = safetyText(sections(state, "Posting Validation Failures").join("\n"))
       expect(failures).toMatch(/not-exposed means.*host-advertised callable-tool inventory.*denied requires an explicit permission denial result.*violation means a tool result with violations/)
       expect(failures).toContain("not-exposed, cause unknown")
-      expect(failures).toMatch(/retains the complete checkpoint and Invocation Mode.*posting-validation-failed with reason and recoverable:true/)
+      expect(failures).toMatch(/Retain the complete checkpoint and Invocation Mode.*Repair candidates under the Delivery Principle/)
       const question = sections(state, "Missing Question").join("\n")
       expect(question).toContain("question tool not advertised by this host")
       expect(question).toContain("run `post` in an environment with the question tool, or use corvus-review-auto deliberately")

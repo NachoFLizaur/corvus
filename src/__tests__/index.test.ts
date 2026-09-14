@@ -41,7 +41,7 @@ describe("plugin entry point", () => {
     }
     expect(z.toJSONSchema(z.object(result.tool!.corvus_review_payload.args)).required).toEqual(["op", "candidatePath"])
     for (const [name, ops, required] of [
-      ["corvus_review_persist", ["write_document", "write_input", "write_meta", "write_candidate", "read_document", "write_facts", "read_facts"], ["op", "reviewRoot"]],
+      ["corvus_review_persist", ["write_document", "write_input", "write_meta", "write_candidate", "read_document", "write_facts", "read_facts", "begin", "append", "finalize", "abort", "status"], ["op", "reviewRoot"]],
       ["corvus_review_lock", ["acquire", "release", "status"], ["op", "reviewRoot"]],
       ["corvus_review_pr", ["metadata", "head", "files", "diff", "reviews", "checks", "identity", "config", "repo", "find", "local"], ["op"]],
       ["corvus_review_verdict", ["compute"], ["op", "reviewRoot", "priorReviews", "config"]],
@@ -251,7 +251,7 @@ describe("review tool hooks", () => {
         { name: "corvus_review_payload", ops: ["measure", "freeze"], allowed: orchestrators },
         { name: "corvus_review_verify", ops: ["verify"], allowed: [...orchestrators, "pr-comment-writer"] },
         { name: "corvus_review_post", ops: [undefined], allowed: ["pr-comment-writer"] },
-        { name: "corvus_review_persist", ops: ["write_document", "write_input", "write_meta", "write_candidate", "read_document", "write_facts", "read_facts"], allowed: orchestrators },
+        { name: "corvus_review_persist", ops: ["write_document", "write_input", "write_meta", "write_candidate", "read_document", "write_facts", "read_facts", "begin", "append", "finalize", "abort", "status"], allowed: orchestrators },
         { name: "corvus_review_lock", ops: ["acquire", "release", "status"], allowed: orchestrators },
       ] as const
       const agents = [...Object.keys(await loadPluginAgents()), "unknown", "", undefined, null, { agent: "corvus-review" }]
@@ -344,8 +344,10 @@ describe("review tool hooks", () => {
         for (const op of ops) {
           // Invalid fields stop permitted calls in the module without real GitHub I/O.
           const args = { op, owner: "!", name: "r", pr: 1, paginate: true }
-          const allowed = agent === "pr-comment-writer" ? ["head", "diff", "files"].includes(op)
-            : ["corvus-review", "corvus-review-auto", "pr-context-gatherer"].includes(agent as string)
+          const allowed = agent === "pr-comment-writer" ? ["head", "diff", "files", "reviews"].includes(op)
+            : agent === "pr-code-reviewer" || agent === "security-reviewer"
+              ? ["metadata", "head", "files", "diff", "reviews", "checks"].includes(op)
+              : ["corvus-review", "corvus-review-auto", "pr-context-gatherer"].includes(agent as string)
           const result = await call("corvus_review_pr", args, agent)
           expect(result).toMatchObject({ ok: false, api_calls: 0 })
           expect(result.reason === "caller-not-allowed").toBe(!allowed)

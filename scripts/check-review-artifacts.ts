@@ -269,7 +269,7 @@ function checkSync(input: Inputs, events: RecordValue[], tools: Tool[], allTools
   } else {
     add("sync receipt", !gitError && (skipped ? tip === input.head && !stateCommit : stateCommit === tip && tip !== input.head), gitError || `code_head=${input.head}; state_commit=${stateCommit || "none"}; bare tip=${tip}`)
     const subject = `corvus(review-state): ${expectedRoot.split("/").at(-1)} @ ${input.head.slice(0, 7)} [skip ci]`
-    add("state commit scope", !gitError && (skipped || subjects[0] === subject && paths.length > 0 && paths.every(path => path.startsWith(expectedRoot + "/"))),
+    add("state commit scope", !gitError && (skipped || subjects[0] === subject && paths.length > 0 && paths.every(path => path.startsWith(expectedRoot + "/") && !path.split("/").includes(".staging"))),
       gitError || (skipped ? "no state commit expected" : stat))
   }
   const stateSubjects = subjects.filter(subject => subject.startsWith("corvus(review-state):"))
@@ -812,9 +812,10 @@ export async function checkReviewArtifacts(input: Inputs) {
     && acquired && tool.index > acquired.index && tool.input.runId === acquired.input.runId
     && ["released", "completed", "absent"].includes(text(tool.output.state)) && succeeded(tool))
   const persisted = (op: string, path: string) => {
-    const last = stateCalls.findLast(tool => tool.name === "corvus_review_persist" && tool.input.op === op)
+    const last = stateCalls.findLast(tool => tool.name === "corvus_review_persist" && (tool.input.op === op
+      || ["write_document", "write_input"].includes(op) && tool.input.op === "finalize" && samePath(tool.output.path, path)))
     return last && acquired && released && last.index > acquired.index && last.index < released.index
-      && (op !== "write_document" || last.input.headSha === input.head)
+      && (op !== "write_document" || last.input.op === "finalize" || last.input.headSha === input.head)
       && samePath(last.output.path, path) && succeeded(last) ? last : undefined
   }
   const documentWrite = persisted("write_document", join(root, input.head, "REVIEW_DOCUMENT.md"))
@@ -837,6 +838,47 @@ export async function checkReviewArtifacts(input: Inputs) {
   add("child tool evidence", !childError && (local || ["files", "diff"].every(op => gathererReads.some(tool => tool.input.op === op))), 5,
     childError || `${descendants.length} descendant sessions; ${local ? "LOCAL: PR reads not required" : `${gathererReads.length} gatherer files/diff calls`}`)
   const allTools = [...tools, ...descendants.flatMap(child => child.tools)]
+  let stored: Tool[] = [], stagingError = ""
+  try { stored = readParentTools(input.db, parentID) } catch (error) { stagingError = String(error) }
+  const matched = (tool: Tool | undefined) => matchedStoredTool(tool, stored, parentID)
+  /**
+   * Parent JSONL and matching stopped-host DB calls are read before scoring, with
+   * final disk bytes as the digest oracle. Missing, reordered or mismatched calls
+   * fail closed. No intake disables staging; checkpoint-failed uses its separate
+   * cleanup row instead of requiring a successful checkpoint.
+   */
+  const staged = (target: "document" | "input", final: Tool | undefined): boolean => {
+    if (!final || final.input.op !== "finalize" || !matched(final)) return false
+    const begin = stateCalls.findLast(tool => tool.name === "corvus_review_persist" && tool.input.op === "begin"
+      && tool.input.target === target && (target !== "document" || tool.input.headSha === input.head)
+      && tool.output.staging_id === final.input.staging_id && succeeded(tool))
+    const appends = stateCalls.filter(tool => tool.name === "corvus_review_persist" && tool.input.op === "append"
+      && tool.input.staging_id === final.input.staging_id)
+    return Boolean(begin && acquired && begin.index > acquired.index && matched(begin) && appends.length
+      && appends.every(tool => succeeded(tool) && matched(tool) && tool.index > begin.index && tool.index < final.index
+        && matched(tool)!.index > matched(begin)!.index && matched(tool)!.index < matched(final)!.index))
+  }
+  const measurements = tools.filter(tool => tool.name === "corvus_review_payload" && tool.input.op === "measure")
+  let documentDigest = ""
+  try { documentDigest = createHash("sha256").update(readFileSync(join(root, input.head, "REVIEW_DOCUMENT.md"))).digest("hex") } catch {}
+  add("document staged", !stagingError && staged("document", documentWrite) && !!documentDigest && documentWrite?.output.sha256 === documentDigest
+    && [...allTools, ...stored].every(tool => !(tool.name === "corvus_review_persist" && tool.input.op === "write_document"))
+    && measurements.every(tool => documentWrite && tool.index > documentWrite.index && matched(tool)
+      && matched(tool)!.index > matched(documentWrite)!.index), 5, stagingError || "DB-matched begin → append → finalize before measure; final SHA equals checkpoint bytes; no write_document")
+  const appends = [...stored, ...descendants.flatMap(child => child.tools)].filter(tool => tool.name === "corvus_review_persist" && tool.input.op === "append")
+  const lengths = appends.map(tool => typeof tool.input.body === "string" ? tool.input.body.length
+    : JSON.stringify(tool.input.value ?? tool.input.chunk)?.length ?? Infinity)
+  const oversized = new Map<string, number>()
+  for (const tool of appends.filter(tool => tool.output.reason === "chunk-too-large")) {
+    const key = JSON.stringify([tool.parentID, tool.input.staging_id, tool.input.index ?? tool.input.key, tool.input.path, tool.input.part ?? 0])
+    oversized.set(key, (oversized.get(key) ?? 0) + 1)
+  }
+  add("append ceiling", !stagingError && lengths.every(length => length <= 6_000) && [...oversized.values()].every(count => count < 2)
+    && allTools.filter(tool => tool.parentID === parentID && tool.name === "corvus_review_persist" && tool.input.op === "append").every(tool => !!matched(tool)),
+  5, stagingError || `${appends.length} appends; maximum ${Math.max(0, ...lengths)} chars; no repeated chunk-too-large for one part`)
+  add("input route", !stagingError && Boolean(inputWrite && (inputWrite.input.op === "write_input" ? matched(inputWrite)
+    && !stateCalls.some(tool => tool.name === "corvus_review_persist" && tool.input.op === "begin" && tool.input.target === "input") : staged("input", inputWrite))),
+  5, stagingError || "DB-matched write_input or staged input finalize")
   rows.push(checkModelStateWrites(allTools, input.fixture))
   /** Inventories are read from persisted input and child DB results after shutdown;
    * any .corvus file/patch or unfiltered child call fails closed. Missing input
@@ -869,6 +911,21 @@ export async function checkReviewArtifacts(input: Inputs) {
   let metadata: RecordValue = {}
   let metaError = ""
   try { if (validIdentity) metadata = yaml(join(root, input.head, "meta.yaml")) } catch { metaError = "missing/invalid meta.yaml" }
+  const checkpointFailed = metadata.status === "checkpoint-failed"
+  const terminalFailure = finalAssistantMessage(events, parentID)
+  const failureMeta = stateCalls.findLast(tool => tool.name === "corvus_review_persist" && tool.input.op === "write_meta"
+    && tool.input.headSha === input.head && (tool.input.name ?? "meta.yaml") === "meta.yaml")
+  const forbiddenFailure = [...allTools, ...stored].filter(tool => writer(tool) || tool.name === "corvus_review_post"
+    || tool.name === "corvus_review_payload" && tool.input.op === "freeze"
+    || tool.name === "corvus_review_verdict" && (Object.hasOwn(tool.input, "headSha") || Object.hasOwn(tool.input, "code_head")))
+  add("checkpoint-failed route", !checkpointFailed || Boolean(!stagingError && !childError && forbiddenFailure.length === 0
+    && !descendants.some(child => child.agent === "pr-comment-writer") && released && matched(released) && failureMeta && matched(failureMeta)?.output.ok === true
+    && isDeepStrictEqual(failureMeta.input.meta, metadata) && failureMeta.index < released.index && matched(failureMeta)!.index < matched(released)!.index
+    && metadata.posted === false && metadata.recoverable === true && ["document", "review-input"].includes(text(metadata.stage))
+    && text(metadata.failed_op) && text(metadata.reason) && nonnegative(metadata.part)
+    && terminalFailure.index > released.index && terminalFailure.text.includes(text(metadata.failed_op))
+    && terminalFailure.text.includes(text(metadata.reason)) && new RegExp(`\\bpart\\s*[:=#]?\\s*${metadata.part}\\b`, "i").test(terminalFailure.text)),
+  5, checkpointFailed ? `${forbiddenFailure.length} forbidden calls; require DB-matched failure metadata, release and part diagnostic` : "not applicable")
   const sync = checkSync(input, events, tools, allTools, parentID, root, acquired, released, metadata, notExposed)
   rows.push(...sync.rows)
   add("metadata", metadata.autonomous === true && metadata.posted === false && metadata.mode === (local ? "local" : "pr"), metadata.posted === true ? 6 : 5,
@@ -1075,6 +1132,25 @@ export async function checkReviewArtifacts(input: Inputs) {
   const cost = steps.reduce((sum, step) => sum + (typeof step.cost === "number" ? step.cost : 0), 0)
   const timestamps = events.map(event => event.timestamp).filter((time): time is number => typeof time === "number")
   const durationSeconds = timestamps.length ? (Math.max(...timestamps) - Math.min(...timestamps)) / 1000 : null
+  /**
+   * Final meta.status is read after shutdown before scoring success-only rows.
+   * checkpoint-failed makes those rows N/A, not proof of successful persistence.
+   * The independent failure-route row still requires DB-matched metadata and
+   * release; lock, append, sync and mutation barriers remain enforced. No host or
+   * mode bypasses those checks; any other status disables this N/A route.
+   */
+  if (checkpointFailed) {
+    const successOnly = new Set(["artifacts", "review-state tools", "verified facts tool", "document staged",
+      "input route", "review inventories", "checkpoint writes", "metadata", "review-input lines",
+      "R4 verdict", "verdict persisted", "verdict document counts", "continuation note", "marker v2",
+      "tool chain", "SHA-256", "built verify()", "writer denied", "writer dispatched", "writer verify",
+      "writer POST attempted", "writer PR reads", "writer shell discipline", "writer result", "R5 PR transport",
+      "LOCAL terminal summary"])
+    for (const row of rows) if (successOnly.has(row.check)) {
+      row.ok = true
+      row.detail = "N/A-PASS: checkpoint-failed; cleanup, lock, sync and no-post checks remain required"
+    }
+  }
   const exitCode = [6, 3, 4, 5].find(code => rows.some(row => !row.ok && row.code === code)) ?? 0
   return { rows, exitCode, usage: { steps: steps.length, cost, tokens, durationSeconds }, audit: { forwarded, canned, blocked, unsafe } }
 }

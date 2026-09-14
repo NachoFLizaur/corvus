@@ -3,7 +3,7 @@ import { createReviewToolExecutors } from "../review-payload"
 import { createPostExecutor } from "../review-post"
 import { createPersistExecutor } from "../review-persist"
 import { createLockExecutor } from "../review-lock"
-import { createPrExecutor } from "../review-pr"
+import { createPrExecutor, isPrCallerAllowed } from "../review-pr"
 import { createVerdictExecutor } from "../review-verdict"
 import { createSyncExecutor } from "../review-sync"
 import type { Registrar, SetupContext } from "./types"
@@ -97,11 +97,11 @@ export const registerTools: Registrar = async (ctx) => {
     })
     draft.add({
       name: "corvus_review_persist",
-      description: "Write or read review state under the host's .corvus/reviews or .corvus/tasks/<task>/reviews roots. Supply op and reviewRoot plus only that op's fields: write_document(headSha, sections, optional frontmatterYaml), write_input(input), write_meta(headSha, meta, optional name: meta.yaml/decision.yaml/completion.yaml/authorization.yaml/review-action.yaml), write_candidate(candidate), read_document(headSha), write_facts(facts), read_facts(). The module validates operation-specific arguments.",
+      description: "Write or read review state under the host's .corvus/reviews or .corvus/tasks/<task>/reviews roots. Supply op and reviewRoot plus only that op's fields: write_document(headSha, sections, optional frontmatterYaml), write_input(input), write_meta(headSha, meta, optional name: meta.yaml/decision.yaml/completion.yaml/authorization.yaml/review-action.yaml), write_candidate(candidate), read_document(headSha), write_facts(facts), read_facts(), begin(target: document|input, headSha required only for document, optional expected_sections/frontmatterYaml), append(staging_id, index/heading/body for document or key/value for input, optional part/parts), finalize(staging_id, expected_sections for document or ordered expected_keys for input), abort(staging_id), status(staging_id). The module validates operation-specific arguments.",
       input: {
         type: "object",
         properties: {
-          op: { type: "string", enum: ["write_document", "write_input", "write_meta", "write_candidate", "read_document", "write_facts", "read_facts"] },
+          op: { type: "string", enum: ["write_document", "write_input", "write_meta", "write_candidate", "read_document", "write_facts", "read_facts", "begin", "append", "finalize", "abort", "status"] },
           reviewRoot: { type: "string" },
           headSha: { type: "string" },
           sections: { type: "array", items: { type: "object", properties: { heading: { type: "string" }, body: { type: "string" } }, required: ["heading", "body"], additionalProperties: true } },
@@ -111,6 +111,18 @@ export const registerTools: Registrar = async (ctx) => {
           name: { type: "string" },
           facts: { type: "object", additionalProperties: true },
           candidate: { type: "object", additionalProperties: true },
+          target: { type: "string", enum: ["document", "input"] },
+          staging_id: { type: "string" },
+          expected_sections: { type: "integer", minimum: 1 },
+          expected_keys: { type: "array", items: { type: "string" } },
+          index: { type: "integer", minimum: 0 },
+          part: { type: "integer", minimum: 0 },
+          parts: { type: "integer", minimum: 1 },
+          heading: { type: "string" },
+          body: { type: "string" },
+          key: { type: "string" },
+          value: {},
+          chunk: {},
         },
         required: ["op", "reviewRoot"],
         additionalProperties: true,
@@ -146,7 +158,7 @@ export const registerTools: Registrar = async (ctx) => {
     })
     draft.add({
       name: "corvus_review_pr",
-      description: "Read GitHub PR data with validated, fixed operations. metadata/head/diff/reviews/checks take owner, name, pr; files also requires paginate:true and accepts include_corvus/names_only booleans (include_corvus implies names-only). Files and diffs exclude .corvus by default and report excluded_corvus; local changed_files stays unfiltered. metadata/head/local return raw head_sha and code_head skipping state commits. config takes owner, name, ref (base SHA); identity takes no fields; repo resolves owner/name from gh or origin with optional cwd (defaults to the session directory). find takes optional cwd/branch to discover the current or named branch's PR; local takes optional cwd/base for a bounded local diff including tracked uncommitted changes, branch (null when detached), default_branch, merge_base, ahead, changed_files, stat, dirty and oversized. Caller policy uses the host agent: pr-comment-writer may call only head, diff, files; corvus-review, corvus-review-auto and pr-context-gatherer may call any op. Unknown callers return caller-not-allowed.",
+      description: "Read GitHub PR data with validated, fixed operations. metadata/head/diff/reviews/checks take owner, name, pr; files also requires paginate:true and accepts include_corvus/names_only booleans (include_corvus implies names-only). Files and diffs exclude .corvus by default and report excluded_corvus; local changed_files stays unfiltered. metadata/head/local return raw head_sha and code_head skipping state commits. config takes owner, name, ref (base SHA); identity takes no fields; repo resolves owner/name from gh or origin with optional cwd (defaults to the session directory). find takes optional cwd/branch to discover the current or named branch's PR; local takes optional cwd/base for a bounded local diff including tracked uncommitted changes, branch (null when detached), default_branch, merge_base, ahead, changed_files, stat, dirty and oversized. Caller policy uses the host agent: pr-comment-writer may call only head, diff, files, reviews; pr-code-reviewer and security-reviewer may call only metadata, head, files, diff, reviews, checks; corvus-review, corvus-review-auto and pr-context-gatherer may call any op. Unknown callers return caller-not-allowed.",
       input: {
         type: "object",
         properties: {
@@ -168,16 +180,13 @@ export const registerTools: Registrar = async (ctx) => {
       options: { codemode: false },
       /**
        * Host ctx.agent is the caller oracle, read on every invocation before PR
-       * I/O. Writer ops fail closed outside head/diff/files; only the two review
-       * orchestrators and gatherer get all ops. Missing/unknown identity rejects.
+       * I/O. Shared isPrCallerAllowed owns writer/detector operation subsets;
+       * only orchestrators/gatherer get all ops. Missing/unknown identity rejects.
        * Tool arguments cannot override this check; no option disables it.
        */
       execute: async (args: unknown, ctx) => {
-        const caller = ctx?.agent
         const op = args !== null && typeof args === "object" ? Object.getOwnPropertyDescriptor(args, "op")?.value : undefined
-        const allowed = caller === "pr-comment-writer"
-          ? ["head", "diff", "files"].includes(op)
-          : ["corvus-review", "corvus-review-auto", "pr-context-gatherer"].includes(caller)
+        const allowed = isPrCallerAllowed(ctx?.agent, op)
         if (!allowed) return { content: JSON.stringify({ ok: false, reason: "caller-not-allowed", api_calls: 0 }) }
         return { content: await pr(args) }
       },

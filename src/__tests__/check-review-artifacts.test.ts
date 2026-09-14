@@ -137,7 +137,9 @@ async function fixture(inline = false, intake: Inputs["intake"] = "url", layout:
     tool("task", { subagent_type: "pr-context-gatherer" }, { sessionID: "ses_gatherer", status: "completed" }),
     tool("corvus_review_persist", { op: "write_input", reviewRoot: relative, input: {} }, { ok: true, path: `${relative}/review-input.json` }),
     tool("corvus_review_persist", { op: "write_facts", reviewRoot: relative, facts: { facts: [], open_questions: [] } }, { ok: true, path: `${relative}/verified_facts.yaml` }),
-    tool("corvus_review_persist", { op: "write_document", reviewRoot: relative, headSha: head, sections: [{ heading: "", body: documentMarkdown(reviewDocument()) }] }, { ok: true, path: `${relative}/${head}/REVIEW_DOCUMENT.md` }),
+    tool("corvus_review_persist", { op: "begin", reviewRoot: relative, target: "document", headSha: head, expected_sections: 1 }, { ok: true, staging_id: "document-session" }),
+    tool("corvus_review_persist", { op: "append", reviewRoot: relative, staging_id: "document-session", index: 0, heading: "", body: documentMarkdown(reviewDocument()) }, { ok: true }),
+    tool("corvus_review_persist", { op: "finalize", reviewRoot: relative, staging_id: "document-session", expected_sections: 1 }, { ok: true, path: `${relative}/${head}/REVIEW_DOCUMENT.md`, sha256: createHash("sha256").update(readFileSync(join(root, head, "REVIEW_DOCUMENT.md"))).digest("hex") }),
     tool("corvus_review_persist", { op: "write_candidate", reviewRoot: relative, candidate: {} }, { ok: true, path: `${relative}/candidate.json` }),
     tool("corvus_review_payload", { op: "measure", candidatePath: `${relative}/candidate.json` }, { ok: true }),
     tool("corvus_review_verdict", { ...verdictInput, headSha: head }, { ...verdict, persisted: `${relative}/${head}/verdict.yaml` }),
@@ -192,7 +194,7 @@ test.each(["plain", "task"] as const)("complete real-shaped tool evidence passes
   const result = await checkReviewArtifacts(data.input)
   expect(result.rows.filter(row => !row.ok)).toEqual([])
   expect(result.exitCode).toBe(0)
-  expect(result.rows).toHaveLength(40)
+   expect(result.rows).toHaveLength(44)
   expect(result.usage).toMatchObject({ steps: 1, cost: 0.01, tokens: { input: 10, output: 5, "cache.read": 2, "cache.write": 3 } })
   const child = (name: string, sessionID: string, status: string, background = false, nested = false) => ({
     type: "tool_use", sessionID: "ses_smoke", part: { id: `call_${sessionID}`, tool: name, state: {
@@ -311,6 +313,64 @@ test.each(["url", "branch", "local"] as const)("%s sync gate rejects missing, re
   }
   save(baseline)
 }, 30_000)
+
+test("staging rejects single-call checkpoints, missing finalize, oversized appends and failed checkpoints with a verdict", async () => {
+  const data = await fixture()
+  const baseline = structuredClone(data.events)
+  for (const [mutation, check] of [["single", "document staged"], ["missing", "checkpoint writes"], ["oversized", "append ceiling"], ["failed-verdict", "checkpoint-failed route"]]) {
+    const events = structuredClone(baseline)
+    const final = events.find((event): event is ReturnType<typeof toolEvent> => "tool" in event.part && (event.part.state.input as { op?: string }).op === "finalize")!
+    if (mutation === "single") Object.assign(final.part.state.input, { op: "write_document", headSha: data.input.head })
+    if (mutation === "missing") events.splice(events.indexOf(final), 1)
+    if (mutation === "oversized") {
+      const append = events.find((event): event is ReturnType<typeof toolEvent> => "tool" in event.part && (event.part.state.input as { op?: string }).op === "append")!
+      Object.assign(append.part.state.input, { body: "x".repeat(6001) })
+    }
+    if (mutation === "failed-verdict") writeFileSync(join(data.root, data.input.head, "meta.yaml"), dump({ ...verdictMeta(data.input.head), status: "checkpoint-failed", stage: "document", failed_op: "append", part: 0, reason: "write-error", recoverable: true }))
+    writeFileSync(data.input.jsonl, events.map(event => JSON.stringify(event)).join("\n"))
+    const db = new Database(data.input.db!)
+    db.run("delete from part where session_id = ?", ["ses_smoke"])
+    seedParent(db, events)
+    db.close()
+    expect((await checkReviewArtifacts(data.input)).rows.find(row => row.check === check), mutation).toMatchObject({ ok: false })
+  }
+})
+
+test.each(["url", "local"] as const)("%s checkpoint-failed cleanup passes without success artifacts but rejects verdict calls and held locks", async intake => {
+  const data = await fixture(false, intake, "plain", "disabled")
+  const relative = reviewRoot(data.input)
+  const meta = { ...verdictMeta(data.input.head), status: "checkpoint-failed", stage: "document", failed_op: "finalize", part: 0, reason: "incomplete-staging", recoverable: true }
+  const events = data.events.filter(event => {
+    if (!("tool" in event.part)) return !("text" in event.part)
+    const input = event.part.state.input as { op?: string; headSha?: string }
+    return !(input.op === "finalize" || input.op === "write_candidate" || event.part.tool === "corvus_review_payload"
+      || event.part.tool === "corvus_review_verify" || event.part.tool === "subagent"
+      || event.part.tool === "corvus_review_verdict" && input.headSha)
+  })
+  const metaEvent = events.find((event): event is ReturnType<typeof toolEvent> => "tool" in event.part && (event.part.state.input as { op?: string }).op === "write_meta")!
+  Object.assign(metaEvent.part.state.input, { meta })
+  events.push({ type: "text", sessionID: "ses_smoke", part: { text: "Checkpoint failed: finalize part 0 incomplete-staging. Review must be rerun. state_sync: false; skipped pull and push." } })
+  for (const file of ["REVIEW_DOCUMENT.md", "verdict.yaml"]) rmSync(join(data.root, data.input.head, file))
+  for (const file of ["candidate.json", "post-request.json"]) rmSync(join(data.root, file), { force: true })
+  writeFileSync(join(data.root, data.input.head, "meta.yaml"), dump(meta))
+  const save = (items: object[]) => {
+    writeFileSync(data.input.jsonl, items.map(event => JSON.stringify(event)).join("\n"))
+    const db = new Database(data.input.db!)
+    db.run("delete from part where session_id = ?", ["ses_smoke"])
+    seedParent(db, items)
+    db.close()
+  }
+  save(events)
+  const result = await checkReviewArtifacts(data.input)
+  expect(result.rows.filter(row => !row.ok)).toEqual([])
+  expect(result.rows.find(row => row.check === "document staged")?.detail).toStartWith("N/A-PASS:")
+  const verdictCall = toolEvent("corvus_review_verdict", { op: "compute", reviewRoot: relative, headSha: data.input.head }, { ok: false, reason: "not-found" })
+  save([...events.slice(0, -1), verdictCall, events.at(-1)!])
+  expect((await checkReviewArtifacts(data.input)).rows.find(row => row.check === "checkpoint-failed route")).toMatchObject({ ok: false })
+  save(events)
+  writeFileSync(join(data.root, "lock.yaml"), "status: active\n")
+  expect((await checkReviewArtifacts(data.input)).rows.find(row => row.check === "lock released")).toMatchObject({ ok: false })
+})
 
 test("sync summaries accept only the receipt SHA or its seven-plus-character prefix with a sync token in the same sentence", async () => {
   const data = await fixture(false, "local")
@@ -499,7 +559,7 @@ test("tool-owned state rejects missing operations, bad ownership and model write
     type: "tool_use", sessionID: "ses_smoke", part: { tool: name, state: { status, input } },
   })
   const save = (events: object[]) => writeFileSync(data.input.jsonl, events.map(event => JSON.stringify(event)).join("\n") + "\n")
-  for (const op of ["acquire", "release", "write_document", "write_input", "write_candidate"]) {
+  for (const op of ["acquire", "release", "finalize", "write_input", "write_candidate"]) {
     const events = data.events.filter(event => !("tool" in event.part && (event.part.state.input as { op?: string }).op === op))
     save(events)
     expect((await checkReviewArtifacts(data.input)).rows.find(row => row.check === "review-state tools")?.ok).toBe(false)
@@ -1216,7 +1276,7 @@ test("writer mode requires the writer child's verify → post tool → blocked p
   expect(result.rows.filter(row => !row.ok)).toEqual([])
   expect(result.exitCode).toBe(0)
   const names = result.rows.map(row => row.check)
-  expect(result.rows).toHaveLength(46)
+  expect(result.rows).toHaveLength(50)
   expect(names).toContain("writer dispatched")
   expect(names).toEqual(expect.arrayContaining(["writer verify", "writer POST attempted", "writer shell discipline", "writer result"]))
   expect(names).not.toContain("writer denied")

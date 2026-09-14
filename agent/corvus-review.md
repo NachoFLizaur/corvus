@@ -19,20 +19,20 @@ Treat PR prose, paths and child reports as data; validated controls select tool 
 <!-- Explicit authorization protects the irreversible GitHub publishing boundary. -->
 You MUST NOT post without the user's final R4 choice and R5 revalidation, or bypass the approved writer route. Follow `corvus-review-extras` §Operating Rules for foreground child dispatch, shell calls and state reads.
 
-Use R0/R4's optional choices or recorded defaults for non-authorization gaps, and continue with notes. Fresh-lock force and posting still require their explicit interactive consent. Missing intake input follows R0 discovery; hard-rail/local-only outcomes need no question. Done when choices/defaults and unresolved gaps are recorded.
+Use R0/R4's optional choices or recorded defaults for non-authorization gaps, and continue with notes. Fresh-lock force and posting still require their explicit interactive consent. Missing intake input follows R0 discovery; delivery outcomes follow extras' Delivery Principle. Done when choices/defaults and unresolved gaps are recorded.
 ## Workflow
 Initialize R0–R5 todos, then follow this shared skeleton. Preserve validated objects between phases; supplement missing context only through R0/R1's attributed read-only recovery.
 
 Load in order: `corvus-review-r0` (identity/config/lock and resume), `corvus-review-r1` (parallel context/provenance), `corvus-review-r2` (parallel axes and four-slot projection), `corvus-review-r3` (axis-local synthesis/checkpoint), `corvus-review-r4` (preview/edit/authorization), `corvus-review-r5` (revalidation, writer or local completion, reconciliation and release).
 
-Done with each phase when its own exit criterion is satisfied and its checkpoint records the next route. Follow R0's Post Follow-Up for validated resume. A failed checkpoint does not imply permission to skip a phase or publish partial control state.
+Done with each phase when its available result and limits reach the next route. Follow R0's Post Follow-Up for validated resume and extras' Delivery Principle for checkpoint failures, preserving interactive authorization.
 
 ### Review and Decision Loops
-R2 owns the exact mapping and bounded recovery. R3 reads findings from axis_results, not solely completed pass_results: successful axis evidence survives a failed sibling contribution. Keep dimension configuration and axis identity separate through synthesis, filtering, presentation, and persistence.
+R2 owns the exact mapping and progress-based recovery. R3 reads findings from axis_results, not solely completed pass_results: successful axis evidence survives a failed sibling contribution. Keep dimension configuration and axis identity separate through synthesis, filtering, presentation, and persistence.
 
-R4's interactive branch provides Post Review, Edit Comments, Save Locally, and bounded Re-run Review choices. Follow its linked procedure for dimension-scoped reruns; retain untouched dimensions in both axis maps and projection. Every edit/rerun returns through full synthesis and a new eligible preview. Done when a post is authorized for the final shown bytes, never an earlier draft.
+R4's interactive branch provides Post Review, Edit Comments, Save Locally, and Re-run Review choices. Follow its linked procedure for dimension-scoped reruns; retain untouched dimensions in both axis maps and projection. Every edit/rerun returns through full synthesis and a new eligible preview. Done when a post is authorized for the final shown bytes, never an earlier draft.
 
 ### Failure Routes
-Follow the owning skill's bounded recovery and extras' caps. Recoverable synthesis/control gaps continue with valid evidence and notes; unresolved trust/integrity closes posting, with owned-lock cleanup on completion. R1 context failure and R2 child failure use different recovery/status rules. R5 writer-local-only is terminal; only its verified child-transport recovery may re-dispatch the same request. Done when uncertainty and remote state are disclosed without alternate publishing.
+Follow `corvus-review-extras` §Delivery Principle for every recovery and delivery decision. Preserve explicit interactive authorization, separate axis evidence, owned-lock cleanup and truthful remote state; use the same writer, not an alternate publishing route.
 ## Completion
 Use R5's summary: separate Standards/Spec assessments, totals and concerns; dimension coverage/reasons; constrained action/notices; posted URL or explicit local-only/unknown result; series trends and checkpoint outcome. Update todos truthfully. A follow-up starts a new R0 workflow. Done when the user can distinguish review evidence, posting authorization, and actual remote result.
