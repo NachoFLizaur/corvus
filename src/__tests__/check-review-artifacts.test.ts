@@ -1190,6 +1190,15 @@ test("CLI emits one SMOKE_RESULT JSON line with per-check status and the process
   }
 }, 15_000)
 
+function seedWriter(db: Database, tools: Array<[string, object, string]>, texts: string[], id = "ses_writer", agent = "pr-comment-writer", parent = "ses_smoke") {
+  db.run("insert into session values (?, ?, ?, ?)", [id, parent, agent, 2])
+  let index = 0
+  for (const [name, input, output] of tools) db.run("insert into part values (?, ?, ?, ?, ?)",
+    [`${id}_${index}`, "msg_1", id, ++index, JSON.stringify({ type: "tool", tool: name, callID: `call_${index}`, state: { status: "completed", input, output } })])
+  for (const value of texts) db.run("insert into part values (?, ?, ?, ?, ?)",
+    [`${id}_${index}`, "msg_2", id, ++index, JSON.stringify({ type: "text", text: value })])
+}
+
 /**
  * Writer-execution fixture: a v1 run whose parent dispatched pr-comment-writer after
  * verify and received a completed task result, plus a host DB holding the writer
@@ -1219,6 +1228,7 @@ async function writerFixture(inline = true, retry = false) {
   const postResult = { status: "local_only", review_url: null, reason: transport.reason, remote_state: "unknown", inline_comments_posted: 0, comments_moved_to_body: 0, api_calls: (inline ? 2 : 1) + transport.tool_api_calls }
   writerEvent.part.tool = "task"
   writerEvent.part.state = { status: "completed", input: { subagent_type: "pr-comment-writer", description: "Post verified review artifact", prompt: "{...}" },
+    metadata: { sessionId: "ses_writer" },
     output: `<task id="ses_writer" state="completed">\n<task_result>\n${JSON.stringify(postResult)}\n</task_result>\n</task>` }
   const prEvent = (op: string, output: object) => ({ type: "tool_use", sessionID: "ses_smoke", part: { tool: "corvus_review_pr",
     state: { status: "completed", input: { op, owner: "owner", name: "repo", pr: 8 }, output: JSON.stringify(output) } } })
@@ -1248,11 +1258,7 @@ async function writerFixture(inline = true, retry = false) {
     seedGatherer(database)
     seedParent(database, events)
     database.run("insert into session values (?, ?, ?, ?)", ["ses_smoke", null, "corvus-review-auto", 1])
-    database.run("insert into session values (?, ?, ?, ?)", ["ses_writer", parent, agentName, 2])
-    let index = 0
-    for (const [name, toolInput, output] of tools) database.run("insert into part values (?, ?, ?, ?, ?)",
-      [`prt_${index}`, "msg_1", "ses_writer", ++index, JSON.stringify({ type: "tool", tool: name, callID: `call_${index}`, state: { status: "completed", input: toolInput, output } })])
-    for (const value of texts) database.run("insert into part values (?, ?, ?, ?, ?)", [`prt_${index}`, "msg_2", "ses_writer", ++index, JSON.stringify({ type: "text", text: value })])
+    seedWriter(database, tools, texts, "ses_writer", agentName, parent)
     database.close()
   }
   writeDb(childTools)
@@ -1268,6 +1274,123 @@ async function writerFixture(inline = true, retry = false) {
   const writerInput: Inputs = { ...input, writer: true, db }
   return { ...data, input: writerInput, events, writerEvent, childTools, writeDb, audit, digest, post, postResult }
 }
+
+async function writerRepostFixture(count: number, reconcile = true) {
+  const data = await writerFixture()
+  const prInput = { owner: "owner", name: "repo", pr: 8 }
+  const listing = { ok: true, reviews: [], threads: [], dispositions: [], complete_pagination: true, complete_threads: true, api_calls: 2 }
+  const writers = Array.from({ length: count }, (_, index) => {
+    const id = index === 0 ? "ses_writer" : `ses_writer_${index + 1}`
+    const tools = structuredClone(data.childTools)
+    tools[1][2] = JSON.stringify({ ...JSON.parse(tools[1][2]), api_calls: index === 0 ? 2 : 1 })
+    tools.splice(3, 0, ["corvus_review_pr", { op: "reviews", ...prInput }, JSON.stringify(listing)])
+    const result = { ...data.postResult, api_calls: index === 0 ? 7 : 6 }
+    const event = toolEvent("task", data.writerEvent.part.state.input, result)
+    Object.assign(event.part.state, { metadata: { sessionId: id } })
+    return { id, tools, result, event }
+  })
+  const between = writers.slice(1).map(() => toolEvent("corvus_review_pr", { op: "reviews", ...prInput }, listing))
+  data.events.splice(data.events.indexOf(data.writerEvent), 1,
+    ...writers.flatMap((writer, index) => index > 0 && reconcile ? [between[index - 1], writer.event] : [writer.event]))
+  const save = () => {
+    for (const writer of writers) writer.event.part.state.output = `<task id="${writer.id}" state="completed">\n<task_result>\n${JSON.stringify(writer.result)}\n</task_result>\n</task>`
+    writeFileSync(data.input.jsonl, data.events.map(event => JSON.stringify(event)).join("\n") + "\n")
+    data.writeDb(writers[0].tools, [JSON.stringify(writers[0].result)])
+    const db = new Database(data.input.db!)
+    for (const writer of writers.slice(1).reverse()) seedWriter(db, writer.tools, [JSON.stringify(writer.result)], writer.id)
+    db.run("update session set time_created = 99 where id = ?", ["ses_writer"])
+    db.close()
+  }
+  save()
+  const blocked = readFileSync(data.input.audit, "utf8").trim().split("\n").map(line => JSON.parse(line))
+    .find(entry => entry.marker === "CORVUS_SMOKE_MUTATION_BLOCKED")
+  data.audit(Array.from({ length: count - 1 }, () => blocked))
+  return { ...data, writers, between, save }
+}
+
+test.each([[2, true, true], [3, true, false], [2, false, false]] as const)("R5 scores %i writer dispatches with reconciliation=%s", async (count, reconcile, ok) => {
+  const data = await writerRepostFixture(count, reconcile)
+  const result = await checkReviewArtifacts(data.input)
+  expect(result.rows.find(row => row.check === "R5 PR transport")).toMatchObject({ ok })
+  expect(result.exitCode).toBe(ok ? 0 : 5)
+  expect(result.rows).toHaveLength(50)
+  expect(result.audit.blocked).toBe(count)
+  if (ok) {
+    expect(result.rows.filter(row => !row.ok)).toEqual([])
+    const reads = result.rows.find(row => row.check === "writer PR reads")!
+    expect(reads.detail.match(/3 structured PR calls/g)).toHaveLength(2)
+    expect(reads.detail).toContain("reviews=1 (required)")
+    const writerResult = result.rows.find(row => row.check === "writer result")!
+    expect(writerResult.ok).toBe(true)
+    expect(writerResult.detail).toStartWith("final dispatch: status=local_only, remote_state=unknown, review_url=null, api_calls=6")
+    expect(writerResult.detail.split("; ").slice(-2)).toEqual([
+      "aggregate api_calls=13", "expected Σ(PR+POST)=9+4=13",
+    ])
+    expect(checkWriterRun({ ...data.input, digest: data.digest }).rows.find(row => row.check === "writer dispatched")).toMatchObject({ ok: false })
+  }
+})
+
+test("writer repost requires per-session reads, safe DB counts, final-result truth and proven absence", async () => {
+  const data = await writerRepostFixture(2)
+  const baseline = structuredClone(data.writers)
+  const reset = () => {
+    for (const [index, writer] of data.writers.entries()) {
+      writer.tools = structuredClone(baseline[index].tools)
+      writer.result = { ...baseline[index].result }
+      Object.assign(writer.event.part.state, structuredClone(baseline[index].event.part.state))
+    }
+  }
+  const row = async (check: string) => {
+    data.save()
+    return (await checkReviewArtifacts(data.input)).rows.find(row => row.check === check)
+  }
+  for (const index of [0, 1]) for (const op of ["head", "diff"]) {
+    reset()
+    data.writers[index].tools = data.writers[index].tools.filter(([name, input]) => !(name === "corvus_review_pr" && (input as { op: string }).op === op))
+    expect(await row("writer PR reads"), `${index}:${op}`).toMatchObject({ ok: false })
+  }
+  for (const index of [0, 1]) {
+    reset()
+    data.writers[index].tools.splice(3, 0, structuredClone(data.writers[index].tools[3]))
+    expect(await row("writer PR reads"), `duplicate reviews:${index}`).toMatchObject({ ok: false })
+  }
+  reset()
+  data.writers[1].tools.splice(3, 1)
+  expect(await row("writer PR reads")).toMatchObject({ ok: false })
+  for (const value of [undefined, -1, Number.MAX_SAFE_INTEGER]) {
+    reset()
+    const head = data.writers[1].tools[1]
+    head[2] = JSON.stringify({ ...JSON.parse(head[2]), api_calls: value })
+    const result = await row("writer result")
+    expect(result).toMatchObject({ ok: false })
+    expect(result?.detail).not.toContain("NaN")
+  }
+  reset()
+  data.writers[0].result.api_calls--
+  data.writers[1].result.api_calls++
+  expect(await row("writer result")).toMatchObject({ ok: false })
+  reset()
+  data.writers[1].result.remote_state = "not_posted"
+  expect(await row("writer result")).toMatchObject({ ok: false, detail: expect.stringContaining("final dispatch: status=local_only, remote_state=not_posted") })
+  reset()
+  data.writers[0].result.remote_state = "not_posted"
+  expect(await row("R5 PR transport")).toMatchObject({ ok: false })
+  reset()
+  Object.assign(data.writers[1].event.part.state, { metadata: undefined })
+  expect(await row("writer dispatched")).toMatchObject({ ok: true })
+  reset()
+  Object.assign(data.writers[1].event.part.state, { metadata: { sessionId: "ses_writer" } })
+  expect(await row("writer dispatched")).toMatchObject({ ok: false })
+  reset()
+  const reconciliation = data.between[0]
+  const listing = JSON.parse(reconciliation.part.state.output)
+  const marker = JSON.parse(readFileSync(join(data.root, "post-request.json"), "utf8")).body.split("\n").find((line: string) => line.startsWith("<!-- corvus-review"))
+  for (const output of [{ ...listing, complete_pagination: false }, { ...listing, ok: false },
+    { ...listing, reviews: [{ body_marker: marker, commit_id: data.input.head, state: "COMMENTED", html_url: "https://github.com/owner/repo/pull/8#pullrequestreview-1" }] }]) {
+    reconciliation.part.state.output = JSON.stringify(output)
+    expect(await row("R5 PR transport")).toMatchObject({ ok: false })
+  }
+}, 30_000)
 
 test("writer mode requires the writer child's verify → post tool → blocked plugin POST and closed local_only/unknown result", async () => {
   const data = await writerFixture()

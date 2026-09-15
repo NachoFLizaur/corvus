@@ -8,6 +8,7 @@ import { Database } from "bun:sqlite"
 import { load } from "js-yaml"
 import type { verify } from "../src/review-payload"
 import { localReviewNamespace, read_document } from "../src/review-persist"
+import { parseReviewMarker } from "../src/review-pr"
 
 type RecordValue = Record<string, unknown>
 type Row = { check: string; ok: boolean; code: number; detail: string }
@@ -474,6 +475,7 @@ export function extractPostResult(texts: string[]): RecordValue {
 export type WriterEvidence = {
   owner: string; repo: string; pr: string; fixture: string; digest: string
   tools: Tool[]; texts: string[]; auditLines: string[]; resultOutput?: RecordValue
+  requireReviews?: boolean
   /**
    * Expected transport: `blocked` (default) is the shim-blocked POST → `unknown`;
    * `head-moved` is the canned head moving after the writer's own GET so the post
@@ -517,14 +519,32 @@ export function readDescendants(db: string, parentID: string): ChildSession[] {
   return result
 }
 
+function sumApiCalls(values: unknown[]): number | undefined {
+  let total = 0
+  for (const value of values) {
+    if (!nonnegative(value) || !Number.isSafeInteger(total + Number(value))) return undefined
+    total += Number(value)
+  }
+  return total
+}
+
+function writerApiCalls(tools: Tool[]) {
+  const pr = sumApiCalls(tools.filter(tool => tool.name === "corvus_review_pr").map(tool => tool.output.api_calls))
+  const post = sumApiCalls(tools.filter(tool => tool.name === "corvus_review_post").map(tool => tool.output.tool_api_calls))
+  return { pr, post, total: sumApiCalls([pr, post]) }
+}
+
 /**
  * Writer-execution oracle: the writer's own tool sequence (its session's parts or,
  * for a direct run, the JSONL), the shim audit, and its returned POST_RESULT, read
  * after shutdown. Required in order: one completed corvus_review_verify on the exact
  * artifact/digest with ok:true, then corvus_review_post with the same descriptor and
  * an unknown transport result, plus the plugin's exact spawn argv blocked by the shim.
- * Writer bash GitHub calls fail even when blocked. Head/diff/files tool results must
- * precede verify/post; POST_RESULT uses their reported api_calls plus tool_api_calls.
+ * Writer bash GitHub calls fail even when blocked. Head/diff/files/reviews tool results must
+ * precede verify/post; each session may make one reviews call, required on repost.
+ * Body-only artifacts skip diff/anchor reads, not head or the repost marker check.
+ * POST_RESULT uses all reported PR api_calls plus post tool_api_calls; invalid or
+ * overflowing counts fail closed rather than entering arithmetic as NaN.
  * Missing/malformed evidence fails closed; a forwarded POST or a `posted` result is
  * a breach (code 6). `expect: "head-moved"` swaps the transport expectation for the
  * tool's own head recheck: `rejected`/`head-moved` with tool_api_calls 1, the shim
@@ -583,7 +603,7 @@ export function checkWriterExecution(input: WriterEvidence): Row[] {
   const prCalls = input.tools.filter(tool => tool.name === "corvus_review_pr")
   const validRead = (tool: Tool) => tool.state.status === "completed" && tool.input.owner === input.owner
     && tool.input.name === input.repo && String(tool.input.pr) === input.pr
-    && ["head", "diff", "files"].includes(text(tool.input.op))
+    && ["head", "diff", "files", "reviews"].includes(text(tool.input.op))
     && Object.keys(tool.input).every(key => ["op", "owner", "name", "pr", ...(tool.input.op === "files" ? ["paginate"] : [])].includes(key))
     && Number.isSafeInteger(tool.output.api_calls) && Number(tool.output.api_calls) >= 0
   const head = prCalls.find(tool => validRead(tool) && tool.input.op === "head" && tool.output.ok === true
@@ -595,8 +615,12 @@ export function checkWriterExecution(input: WriterEvidence): Row[] {
     && diff && tool.index > diff.index && verify && tool.index < verify.index)
   const inline = Array.isArray(payload.comments) && payload.comments.length > 0
   const diffOK = diff && (diff.output.oversized === false && typeof diff.output.text === "string" || files)
-  add("writer PR reads", Boolean(head) && (!inline || Boolean(diffOK)) && prCalls.every(validRead), 5,
-    `head=${head?.index ?? "missing"}, diff=${diff?.index ?? "skipped/missing"}, files=${files?.index ?? "unused/missing"}; ${prCalls.length} structured PR calls`)
+  const reviews = prCalls.filter(tool => tool.input.op === "reviews")
+  const reviewsOK = reviews.length <= 1 && (!input.requireReviews || reviews.length === 1)
+    && reviews.every(tool => validRead(tool) && typeof tool.output.ok === "boolean" && head && tool.index > head.index
+      && (!inline || diff && tool.index > diff.index) && verify && tool.index < verify.index)
+  add("writer PR reads", Boolean(head) && (!inline || Boolean(diffOK)) && prCalls.every(validRead) && reviewsOK, 5,
+    `head=${head?.index ?? "missing"}, diff=${diff?.index ?? "skipped/missing"}, files=${files?.index ?? "unused/missing"}, reviews=${reviews.length}${input.requireReviews ? " (required)" : " (optional)"}; ${prCalls.length} structured PR calls`)
   // The frontmatter's JSON validators on the exact artifact path are permitted read fallbacks
   // (informational); any digest/size measurement or other off-form command fails the writer.
   const validatorForms = [`jq . ${artifactRel}`, `python3 -m json.tool ${artifactRel}`]
@@ -609,44 +633,71 @@ export function checkWriterExecution(input: WriterEvidence): Row[] {
   const result = input.resultOutput && typeof input.resultOutput.status === "string" ? input.resultOutput : extractPostResult(input.texts)
   const status = text(result.status)
   const remote = text(result.remote_state)
-  const writerCalls = prCalls.reduce((sum, tool) => sum + (validRead(tool) ? Number(tool.output.api_calls) : NaN), 0)
-  const expectedCalls = writerCalls + Number(transport.tool_api_calls)
+  const calls = writerApiCalls(input.tools)
   const resultKeys = ["status", "remote_state", "review_url", "reason", "inline_comments_posted", "comments_moved_to_body", "api_calls"]
   // Mapping table (writer step 7): unknown → local_only/unknown; rejected without http_status → local_only/not_posted with the tool reason verbatim.
   const expectedRemote = headMoved ? "not_posted" : "unknown"
   const resultOK = status === "local_only" && remote === expectedRemote && result.review_url === null
     && transportOK && result.reason === transport.reason && result.inline_comments_posted === 0 && result.comments_moved_to_body === 0
-    && Number.isSafeInteger(result.api_calls) && result.api_calls === expectedCalls
+    && calls.total !== undefined && nonnegative(result.api_calls) && result.api_calls === calls.total
     && Object.keys(result).length === resultKeys.length && Object.keys(result).every(key => resultKeys.includes(key))
   add("writer result", resultOK, status === "posted" || remote === "posted" ? 6 : 5, status
-    ? `status=${status}, remote_state=${remote || "missing"}, review_url=${JSON.stringify(result.review_url ?? null)}, api_calls=${String(result.api_calls)}, reason=${JSON.stringify(result.reason ?? null)}; expected remote_state=${expectedRemote}, api_calls=${writerCalls}+${String(transport.tool_api_calls)}=${expectedCalls}`
+    ? `status=${status}, remote_state=${remote || "missing"}, review_url=${JSON.stringify(result.review_url ?? null)}, api_calls=${String(result.api_calls)}, reason=${JSON.stringify(result.reason ?? null)}; expected remote_state=${expectedRemote}, api_calls=${calls.pr ?? "invalid"}+${calls.post ?? "invalid"}=${calls.total ?? "invalid"}`
     : "no POST_RESULT with a status field in the writer's returned text")
   return rows
 }
 
-export type WriterDispatchEvidence = Omit<WriterEvidence, "tools" | "texts" | "resultOutput">
-  & { parentTools: Tool[]; afterIndex?: number; parentID: string; db?: string }
+export type WriterDispatchEvidence = Omit<WriterEvidence, "tools" | "texts" | "resultOutput" | "requireReviews">
+  & { parentTools: Tool[]; afterIndex?: number; parentID: string; db?: string; maxDispatches?: 1 | 2 }
 
 /**
- * Writer-execution mode: the parent must dispatch pr-comment-writer once after its
- * own verify and receive a completed result; the writer child (host DB) must then show
- * the tool path scored by checkWriterExecution. A missing DB path, DB, or child fails
- * closed; the child's returned task output is the POST_RESULT of record when present.
+ * Writer-execution oracle: parent dispatches and their session-ID-matched child DB
+ * parts are read after shutdown without mutation. Every dispatch must complete after
+ * parent verification and own a distinct child; every child's tool path is scored.
+ * Missing/ambiguous evidence fails closed. Returned task output is the POST_RESULT
+ * of record when present, otherwise use that child's text. API totals sum all matched
+ * sessions, while terminal status comes from the final dispatch. The direct harness
+ * permits one dispatch; R5 permits two and separately enforces unknown → reconciled
+ * absence → repost → reconciliation. Neither limit disables per-child verification,
+ * the second child's reviews check, or the independent mutation barrier.
  */
 export function checkWriterDispatch(input: WriterDispatchEvidence): Row[] {
   const attempts = input.parentTools.filter(writer)
-  const dispatch = attempts.find(tool => input.afterIndex !== undefined && tool.index > input.afterIndex && tool.state.status === "completed")
+  const completed = (tool: Tool) => tool.parentID === input.parentID && input.afterIndex !== undefined
+    && tool.index > input.afterIndex && tool.state.status === "completed"
+  const dispatch = attempts.find(completed)
   let children: ChildSession[] = []
   let childError = ""
   try { children = input.db ? readChildSessions(input.db, input.parentID, "pr-comment-writer") : [] } catch (error) { childError = String(error) }
-  const child = children.find(candidate => candidate.tools.some(tool => tool.name === "corvus_review_verify")) ?? children.at(-1)
-  const row: Row = { check: "writer dispatched", ok: Boolean(dispatch) && Boolean(child), code: 5,
-    detail: dispatch && child ? `task pr-comment-writer completed at event ${dispatch.index} (after verify ${input.afterIndex}); child session ${child.id} (${child.tools.length} tool calls)`
+  const executions = (attempts.length ? attempts : [undefined]).map((tool, index) => {
+    const sessionID = tool && (childResult(tool).sessionID || /^<task id="([^"]+)" state="[^"]+">/.exec(text(tool.state.output))?.[1])
+    const child = children.find(candidate => candidate.id === sessionID)
+    const returned = tool ? extractPostResult([text(tool.state.output)]) : {}
+    const result = typeof returned.status === "string" ? returned : extractPostResult(child?.texts ?? [])
+    const rows = checkWriterExecution({ ...input, tools: child?.tools ?? [], texts: child?.texts ?? [], resultOutput: result,
+      requireReviews: index > 0 })
+    return { tool, child, result, rows }
+  })
+  const matchedChildren = executions.flatMap(execution => execution.child ? [execution.child] : [])
+  const sessionsOK = matchedChildren.length === attempts.length && children.length === attempts.length
+    && new Set(matchedChildren.map(child => child.id)).size === attempts.length
+  const row: Row = { check: "writer dispatched", ok: Boolean(dispatch) && attempts.every(completed) && sessionsOK
+    && attempts.length <= (input.maxDispatches ?? 1), code: 5,
+    detail: dispatch && sessionsOK ? `${attempts.length} writer dispatch(es) (limit ${input.maxDispatches ?? 1}, after verify ${input.afterIndex}); ${executions.map(({ tool, child }) => `event ${tool!.index} ${text(tool!.state.status)} → child session ${child!.id} (${child!.tools.length} tool calls)`).join("; ")}`
       : !dispatch ? (attempts.length ? `${attempts.length} writer dispatch(es) without a completed result after verify: ${attempts.map(tool => `event ${tool.index} status=${text(tool.state.status)}${tool.state.error ? " error=" + text(tool.state.error) : ""}`).join("; ")}` : "no writer dispatch by the parent")
-      : childError || (input.db ? `no pr-comment-writer child session under ${input.parentID || "(unknown parent)"} in ${input.db}` : "host DB path not supplied (--db)") }
-  return [row, ...checkWriterExecution({ owner: input.owner, repo: input.repo, pr: input.pr, fixture: input.fixture, digest: input.digest,
-    tools: child?.tools ?? [], texts: child?.texts ?? [], auditLines: input.auditLines, expect: input.expect,
-    resultOutput: dispatch ? extractPostResult([text(dispatch.state.output)]) : undefined })]
+      : childError || (input.db ? `no pr-comment-writer child session under ${input.parentID || "(unknown parent)"} uniquely matching every dispatch in ${input.db}` : "host DB path not supplied (--db)") }
+  const calls = writerApiCalls(matchedChildren.flatMap(child => child.tools))
+  const reportedCalls = sumApiCalls(executions.map(execution => execution.result.api_calls))
+  const combined = executions[0].rows.map((first, index) => {
+    const rows = executions.map(execution => execution.rows[index])
+    const resultRow = first.check === "writer result"
+    return { ...first, ok: rows.every(row => row.ok) && (!resultRow || calls.total !== undefined && reportedCalls === calls.total),
+      code: Math.max(...rows.map(row => row.code)),
+      detail: executions.length === 1 ? first.detail : resultRow
+        ? `final dispatch: ${rows.at(-1)!.detail}; aggregate api_calls=${reportedCalls ?? "invalid"}; expected Σ(PR+POST)=${calls.pr ?? "invalid"}+${calls.post ?? "invalid"}=${calls.total ?? "invalid"}`
+        : executions.map((execution, index) => `${execution.child?.id ?? "missing session"}: ${rows[index].detail}`).join("; ") }
+  })
+  return [row, ...combined]
 }
 
 /**
@@ -1082,25 +1133,43 @@ export async function checkReviewArtifacts(input: Inputs) {
       "final assistant message after release must contain document path and Standards/Spec totals from verdict.yaml")
   } else if (input.writer) {
     rows.push(...checkWriterDispatch({ owner: input.owner, repo: input.repo, pr: input.pr, fixture: input.fixture, digest, auditLines,
-      parentTools: tools, afterIndex: verified?.index, parentID: [...sessionIDs][0] ?? "", db: input.db }))
+      parentTools: tools, afterIndex: verified?.index, parentID: [...sessionIDs][0] ?? "", db: input.db, maxDispatches: 2 }))
     /**
      * R5 transport oracle: ordered parent PR results and the writer's terminal
-     * result, read after shutdown. Unknown requires a later reviews call, not a
-     * repeat dispatch; unavailable/incomplete reads cannot prove absence. No
-     * terminal result or host option bypasses current metadata revalidation.
+     * results and frozen marker, read after shutdown without writes. Permit one
+     * dispatch, or two only when the first returned unknown and a complete reviews
+     * listing between them proves no matching submitted review. Every unknown
+     * requires reconciliation before another dispatch or completion; failed/partial
+     * listings cannot authorize repost. Missing evidence fails closed. No terminal
+     * result or host option bypasses metadata revalidation or the two-dispatch cap.
      */
     const dispatch = attempts[0]
-    const result = dispatch ? extractPostResult([text(dispatch.state.output)]) : {}
+    const results = attempts.map(tool => extractPostResult([text(tool.state.output)]))
     const prCalls = tools.filter(tool => tool.name === "corvus_review_pr" && tool.input.owner === input.owner
       && tool.input.name === input.repo && String(tool.input.pr) === input.pr)
     const revalidated = prCalls.find(tool => dispatch && frozen && tool.index > frozen.index && tool.index < dispatch.index && tool.input.op === "metadata"
       && succeeded(tool) && tool.output.code_head === input.head)
     const baseline = prCalls.find(tool => dispatch && frozen && tool.index > frozen.index && tool.index < dispatch.index && tool.input.op === "reviews"
       && succeeded(tool) && tool.output.complete_pagination === true && Array.isArray(tool.output.reviews))
-    const reconciled = prCalls.find(tool => dispatch && tool.index > dispatch.index && tool.input.op === "reviews"
-      && tool.state.status === "completed" && typeof tool.output.ok === "boolean")
-    add("R5 PR transport", Boolean(revalidated) && (result.remote_state !== "unknown" || Boolean(baseline && reconciled) && attempts.length === 1), 5,
-      `metadata=${revalidated?.index ?? "missing"}, baseline=${baseline?.index ?? "missing"}, reconciliation=${reconciled?.index ?? "unused/missing"}, writer dispatches=${attempts.length}`)
+    let payload: RecordValue = {}
+    try { payload = json(read(artifact)) } catch {}
+    const marker = text(payload.body).split(/\r?\n/).map(line => parseReviewMarker(line)).find(Boolean)?.marker
+    const states: Record<string, string> = { COMMENT: "COMMENTED", APPROVE: "APPROVED", REQUEST_CHANGES: "CHANGES_REQUESTED" }
+    const provesAbsence = (tool: Tool) => succeeded(tool) && tool.output.complete_pagination === true
+      && Array.isArray(tool.output.reviews) && Boolean(marker && states[text(payload.event)])
+      && tool.output.reviews.every(value => {
+        const review = record(value)
+        return !(review.body_marker === marker && review.commit_id === input.head && review.state === states[text(payload.event)])
+      })
+    const reconciled = attempts.map((attempt, index) => prCalls.find(tool => tool.index > attempt.index
+      && (!attempts[index + 1] || tool.index < attempts[index + 1].index) && tool.input.op === "reviews"
+      && tool.state.status === "completed" && typeof tool.output.ok === "boolean"
+      && (index === attempts.length - 1 || provesAbsence(tool))))
+    const retryOK = attempts.length === 1 || attempts.length === 2 && results[0].remote_state === "unknown" && Boolean(reconciled[0])
+    add("R5 PR transport", Boolean(revalidated) && [1, 2].includes(attempts.length) && retryOK
+      && results.every((result, index) => typeof result.remote_state === "string"
+        && (result.remote_state !== "unknown" || Boolean(baseline && reconciled[index]))), 5,
+      `metadata=${revalidated?.index ?? "missing"}, baseline=${baseline?.index ?? "missing"}, reconciliation=${reconciled.map(tool => tool?.index ?? "unused/missing").join(",")}, writer dispatches=${attempts.length}`)
   } else {
   const rejectedWriter = attempts.find(tool => verified && tool.index > verified.index && tool.state.status === "error"
     && denied(text(tool.state.error)))
