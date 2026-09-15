@@ -111,6 +111,7 @@ const OWNER = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/
 const NAME = /^[A-Za-z0-9._-]{1,100}$/
 const SHA = /^[A-Fa-f0-9]{40}$/
 const LOGIN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?(?:\[bot\])?$/
+const APP_LOGIN = /^app\/[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/
 const ACCEPT_JSON = ["-H", "Accept: application/vnd.github+json"]
 const METADATA_FIELDS = "number,url,title,body,author,baseRefName,baseRefOid,headRefName,headRefOid,labels,reviewRequests,isDraft,mergeable,state,mergedAt,additions,deletions,changedFiles,files,closingIssuesReferences,latestReviews,reviewDecision,isCrossRepository"
 const KEYS: Record<PrOperation, readonly string[]> = {
@@ -250,10 +251,15 @@ function count(value: unknown, minimum = 0): number {
 function sha(value: unknown): string {
   return matches(value, SHA) ? value.toLowerCase() : fail("invalid-response")
 }
+/** GraphQL uses app/<slug>, REST <slug>[bot]; normalize at the read boundary for exact identity comparison.
+ * Full-string API login validation precedes return; login() rejects malformed names as invalid-response, without a bypass. */
+function canonicalLogin(value: unknown): string | undefined {
+  if (matches(value, LOGIN)) return value
+  return matches(value, APP_LOGIN) ? `${value.slice(4)}[bot]` : undefined
+}
 function login(value: unknown): string | null {
   if (value === null) return null
-  const name = record(value).login
-  return matches(name, LOGIN) ? name : fail("invalid-response")
+  return canonicalLogin(record(value).login) ?? fail("invalid-response")
 }
 export function parseReviewMarker(body: unknown): { head: string; path?: string; round?: number; marker: string } | undefined {
   if (typeof body !== "string") return undefined

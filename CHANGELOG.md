@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Writer checks for an existing marker before POST; R5 reconciles unknown transport via `pr.reviews` and re-dispatches once when the review is confirmed absent.
 - Checkpoint-failed route no longer goes local-only: the candidate is built from in-memory synthesis and posted.
 - Bounded checkpoint persistence: corvus_review_persist gains staged begin/append/finalize/status/abort (≤6,000 chars per call, lossless multipart, atomic finalize never replaces a complete checkpoint on failure); R3 always stages the checkpoint, R2 stages large review input; R4 calls verdict only after a finalized checkpoint; checkpoint-failed route releases the lock with a diagnostic and no verdict retries. Fixes 'Invalid input for tool corvus_review_persist: JSON Parse error: Unterminated string' on large reviews.
+- PR metadata normalizes GitHub App authors from GraphQL `app/<slug>` to REST `<slug>[bot]` at the read boundary, fixing `invalid-response` failures and aligning author logins with REST identity for exact self-review comparison. Human and REST bot logins are unchanged; malformed App logins remain rejected.
 
 ## 0.10.0-beta.9 — 2026-09-13
 

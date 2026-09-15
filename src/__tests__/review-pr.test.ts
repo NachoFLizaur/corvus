@@ -59,6 +59,37 @@ describe("review PR metadata, head and files", () => {
     expect(result).not.toHaveProperty("files")
   })
 
+  describe("metadata author logins", () => {
+    const data = {
+      number: 42, url: "https://github.com/example/project/pull/42", title: "A change", state: "OPEN",
+      isDraft: false, isCrossRepository: false, mergeable: "MERGEABLE",
+      baseRefName: "main", baseRefOid: BASE_SHA, headRefName: "feature", headRefOid: HEAD_SHA, changedFiles: 2,
+      body: BODY, labels: [], closingIssuesReferences: [], latestReviews: [], reviewDecision: null,
+    }
+
+    test.each([
+      ["app/raven-nachoflizaur", "raven-nachoflizaur[bot]"],
+      ["raven-nachoflizaur[bot]", "raven-nachoflizaur[bot]"],
+      ["app/x", "x[bot]"],
+      [`app/${"a".repeat(39)}`, `${"a".repeat(39)}[bot]`],
+      ["app/A--9", "A--9[bot]"],
+    ])("returns the canonical author for %s", async (name, canonical) => {
+      const { exec } = recordingExec(success(JSON.stringify({ ...data, author: { login: name }, files: [] })), commits)
+      expect(await metadata(locator, { exec })).toEqual({
+        ok: true, ...data, author: { login: canonical }, head_sha: HEAD_SHA, code_head: HEAD_SHA, api_calls: 2,
+      })
+    })
+
+    test.each([
+      "app/", "app//x", "app/x/y", "app/-x", "app/x[bot]", "APP/x", "app/x-",
+      "app/x_y", "app/x.y", "app/é", "app/x y", "app/x\n", `app/${"a".repeat(40)}`,
+      null, 42, {},
+    ])("rejects malformed metadata author login %j", async name => {
+      const { exec } = recordingExec(success(JSON.stringify({ ...data, author: { login: name }, files: [] })), commits)
+      expect(await metadata(locator, { exec })).toEqual({ ok: false, reason: "invalid-response", api_calls: 2 })
+    })
+  })
+
   test("reads head and base SHAs with the exact GET argv", async () => {
     const { exec, calls } = recordingExec(success(JSON.stringify({ head: { sha: HEAD_SHA.toUpperCase() }, base: { sha: BASE_SHA }, body: BODY })), commits)
     expect(await head(locator, { exec })).toEqual({ ok: true, head_sha: HEAD_SHA, code_head: HEAD_SHA, base_sha: BASE_SHA, api_calls: 2 })
@@ -157,6 +188,18 @@ describe("review PR diff", () => {
 })
 
 describe("review PR reviews and threads", () => {
+  test("preserves REST bot logins in reviews", async () => {
+    const review = {
+      id: 123, user: { login: "raven-nachoflizaur[bot]" }, state: "COMMENTED", commit_id: HEAD_SHA,
+      submitted_at: "2020-01-02T12:00:00Z", html_url: REVIEW_URL, body: BODY,
+    }
+    const { exec } = recordingExec(success(JSON.stringify([review])), success("[]"))
+    expect(await reviews(locator, { exec })).toEqual({
+      ok: true, reviews: [{ ...review, user: "raven-nachoflizaur[bot]" }], threads: [], dispositions: [],
+      complete_pagination: true, complete_threads: true, api_calls: 2,
+    })
+  })
+
   test("joins paginated review and comment bodies unchanged with locations, reply links and unknown dispositions", async () => {
     const review = {
       id: 123, user: { login: "reviewer" }, state: "COMMENTED", commit_id: HEAD_SHA,
