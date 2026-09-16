@@ -22,16 +22,16 @@
 #                        but INERT with --tarball: every one of those assertions
 #                        requires a host boot, which that mode forbids.
 #   --refs               evaluate sibling reference reads from registered agent
-#                        maps with the local host matcher, AND probe the two review
-#                        tools (`corvus_review_payload`, `corvus_review_verify`) on
+#                        maps with the local host matcher, AND probe all seven review
+#                        tools (including payload/preview and post rejection) on
 #                        both hosts via `scripts/probe-tools.ts` (included in
 #                        --full). The v2 protocol has no tool listing (`v2.command
 #                        .list`/`v2.skill.list`/`v2.mcp.list` exist; no tool group)
 #                        and `opencode2 debug` covers only agents/config/paths, so
 #                        the probe drives the BUILT `dist/server.js` setup() and the
 #                        `dist/index.js` v1 hook function with the registration
-#                        tests' host double, then runs measure → freeze → verify in
-#                        a throwaway workspace.
+#                        tests' host double, then runs over-budget measure → fitted
+#                        freeze → preview → wrong-digest post rejection without network.
 #   --tarball            npm-specifier resolution EMULATION. Does NOT boot the
 #                        host: for an npm specifier the host runs ITS OWN
 #                        registry install and resolves the entry against that
@@ -113,7 +113,7 @@ Usage: bash scripts/smoke-v2.sh [--full] [--refs] [--tarball | --registry <spec>
   --full              also assert the whole packaged corpus is registered
                       (agents, commands, skills, default MCP server, and refs;
                       accepted but INERT with --tarball)
-  --refs              probe sibling reference reads and both review tools on
+  --refs              probe sibling reference reads and all seven review tools on
                       both hosts (also INERT with --tarball)
   --tarball           npm-specifier resolution emulation (no host boot)
   --registry <spec>   POST-PUBLISH ONLY real-host load of an npm specifier
@@ -582,10 +582,11 @@ assert_reference_readability() {
     die "reference-readability probe failed"
 }
 
-# Both review tools on both hosts. No host listing exists for plugin tools (see
+# All seven review tools on both hosts. No host listing exists for plugin tools (see
 # the --refs note in the header), so the oracle is the loaded install root's own
 # built bundles driven through the registration tests' host double, plus a
-# functional measure → freeze → verify roundtrip in a throwaway workspace.
+# functional measure → fitted freeze → preview → wrong-digest post rejection in a
+# throwaway workspace; the post leg must report zero tool API calls.
 assert_review_tools() {
   section "--refs: review tools on both hosts (dist/server.js setup + dist/index.js hooks)"
   local installed_root

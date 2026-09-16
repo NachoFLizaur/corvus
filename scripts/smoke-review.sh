@@ -296,10 +296,11 @@ fi
 
 # Barrier invariant: inspect the host-resolved rule before sending the model any
 # PR content. Barrier mode: an absent/non-deny final writer rule aborts both hosts.
-# Writer mode (v1): the final rule must allow, and the writer agent itself must expose
-# corvus_review_verify and corvus_review_post so the run exercises the real
-# tool path; the shim remains the mutation barrier. This does not grant additional
-# permissions, and neither --keep nor a timeout disables it.
+# Orchestrator tools: require corvus_review_payload and corvus_review_post via v1
+# resolved tools or v2 permissions (local matcher; inventory is probed separately).
+# Writer mode (v1): the final rule must allow, and the writer must expose pr/post.
+# Missing tools/permissions abort; the shim remains the mutation barrier. This grants
+# no permissions, and neither --keep nor a timeout disables it.
 # Use the last rule in the first populated tier: exact writer, task/subagent
 # wildcard, then global wildcard.
 bun -e '
@@ -308,6 +309,10 @@ bun -e '
   const expected = process.env.SMOKE_WRITER === "1" ? "allow" : "deny"
   const agent = v2 ? data.find(a => a.id === "corvus-review-auto") : data
   const rules = v2 ? agent?.permissions : agent?.permission
+  const { evaluateRules } = await import(process.env.SMOKE_ROOT + "/src/evaluate-rules.ts")
+  const required = ["corvus_review_payload", "corvus_review_post"]
+  const exposed = required.every(name => v2 ? evaluateRules(rules ?? [], name, "*") === "allow" : agent?.tools?.[name] === true)
+  if (!exposed) { console.error("Orchestrator requires corvus_review_payload and corvus_review_post"); process.exit(1) }
   const writer = rules?.findLast(r => v2 ? r.action === "subagent" && r.resource === "pr-comment-writer" : r.permission === "task" && r.pattern === "pr-comment-writer")
     ?? rules?.findLast(r => v2 ? r.action === "subagent" && r.resource === "*" : r.permission === "task" && r.pattern === "*")
     ?? rules?.findLast(r => v2 ? r.action === "*" : r.permission === "*")
@@ -315,12 +320,14 @@ bun -e '
 ' || die 6 'posting barrier not installed; model was not started'
 if [[ "$WRITER" == 1 ]]; then
   cap 60 "$CLI" debug agent pr-comment-writer >"$WORK/writer-agent.json" 2>>"$WORK/agents.stderr" || die 3 'writer agent inspection failed'
+  # Exposure invariant: host-resolved writer tools are read before model launch;
+  # missing pr/post aborts, with no flag bypass and no extra tool prerequisite.
   bun -e '
     const agent = await Bun.file(process.env.SMOKE_WORK + "/writer-agent.json").json()
     const tools = agent.tools ?? {}
     const exposure = Object.fromEntries(Object.entries(tools).filter(([name]) => name.startsWith("corvus_review_")))
     console.info("Writer exposure: " + JSON.stringify(exposure))
-    if (agent.name !== "pr-comment-writer" || tools.corvus_review_verify !== true || tools.corvus_review_post !== true) {
+    if (agent.name !== "pr-comment-writer" || tools.corvus_review_pr !== true || tools.corvus_review_post !== true) {
       console.error("writer exposure failed: " + JSON.stringify({ name: agent.name, ...exposure })); process.exit(1)
     }
   ' || die 6 'writer tool exposure failed; model was not started'

@@ -5,7 +5,8 @@ import * as fs from "node:fs"
 import { tmpdir } from "node:os"
 import { basename, dirname, join } from "node:path"
 import yaml from "js-yaml"
-import { createReviewToolExecutors, type CandidateRequest } from "../review-payload"
+import { createReviewToolExecutors, verify, type CandidateRequest } from "../review-payload"
+import { freeze } from "../review-payload"
 import {
   abort, append, begin, finalize, status, type StagingResult,
   createPersistExecutor, read_document, read_facts, write_candidate, write_document, write_facts, write_input, write_meta,
@@ -261,6 +262,207 @@ describe("review persist staging", () => {
   }))
 })
 
+type CandidateSession = { reviewRoot: string; staging_id: string }
+function beginCandidate(request: CandidateRequest, { reviewRoot, opts }: Fixture): CandidateSession {
+  return { reviewRoot, staging_id: stagingId(begin({ reviewRoot, target: "candidate", commit_id: request.commit_id, event: request.event }, opts)) }
+}
+
+function appendCandidate(session: CandidateSession, fields: Record<string, unknown>, opts: PersistOptions): StagingResult {
+  const appendArgs = { op: "append", ...session, ...fields }
+  // The workflow bound covers the entire call, not just the unescaped text.
+  expect(JSON.stringify(appendArgs).length).toBeLessThanOrEqual(6_000)
+  return JSON.parse(createPersistExecutor(opts.reviewStateRoot)(appendArgs))
+}
+
+function roundtripStagedCandidate(request: CandidateRequest, fixture: Fixture) {
+  const { opts, reviewRoot, reviewPath } = fixture
+  const direct = written(write_candidate({ reviewRoot, candidate: request }, opts))
+  const bytes = fs.readFileSync(direct.path)
+  fs.unlinkSync(direct.path)
+  const session = beginCandidate(request, fixture)
+  const stringParts = (field: "path" | "body", text: string, comment?: number, anchor?: Omit<CandidateRequest["comments"][number], "path" | "body">) => {
+    // At most 6 escaped characters per UTF-16 unit: 700 units cost <=4,200,
+    // leaving room for the envelope; appendCandidate asserts the actual total.
+    const chunks = Array.from({ length: Math.max(1, Math.ceil(text.length / 700)) }, (_, part) => text.slice(part * 700, (part + 1) * 700))
+    const order = [0, ...chunks.slice(1).map((_, index) => index + 1).reverse()]
+    for (const part of order) expect(appendCandidate(session, {
+      field, text: chunks[part], part, parts: chunks.length,
+      ...(comment !== undefined ? { comment } : {}), ...(anchor && part === 0 ? { anchor } : {}),
+    }, opts)).toMatchObject({ ok: true })
+  }
+  stringParts("body", request.body)
+  // Arrival order deliberately differs from the declared numeric comment order.
+  for (let comment = request.comments.length - 1; comment >= 0; comment--) {
+    const { path, body, ...anchor } = request.comments[comment]
+    stringParts("path", path, comment, anchor)
+    stringParts("body", body, comment)
+  }
+  expect(fs.existsSync(join(reviewPath, request.commit_id, "REVIEW_DOCUMENT.md"))).toBe(false)
+  const finalized = finalize({ ...session, expected_comments: request.comments.length }, opts)
+  if (!finalized.ok || !("path" in finalized)) throw new Error(`Expected finalized candidate, got ${JSON.stringify(finalized)}`)
+  const result = written(finalized)
+  expect(result.path).toBe(direct.path)
+  expect(result.sha256).toBe(direct.sha256)
+  expect(fs.readFileSync(result.path)).toEqual(bytes)
+  expect(JSON.parse(result.text)).toEqual(request)
+  expect(fs.existsSync(join(reviewPath, ".staging", "candidate"))).toBe(false)
+  return result
+}
+
+describe("review persist candidate staging", () => {
+  test("stages an oversized body without a document checkpoint, writes canonical bytes, then freeze fits", () => withFixture(fixture => {
+    const request = { ...candidate, body: "Summary " + "x".repeat(30_000), comments: [] }
+    const result = roundtripStagedCandidate(request, fixture)
+    expect(fs.existsSync(join(fixture.reviewPath, HEAD_SHA))).toBe(false)
+    expect(freeze(result.path, join(fixture.reviewPath, "artifact.json"), { reviewStateRoot: fixture.opts.reviewStateRoot }))
+      .toMatchObject({ ok: true, fitted: true, omitted: { comments: 0, findings: 0 } })
+  }, true))
+
+  test("stages an oversized inline body with its range anchor and comment position preserved", () => withFixture(fixture => {
+    const oversized = { path: "src/range.ts", line: 20, side: "LEFT" as const, start_line: 12, start_side: "LEFT" as const, body: "inline 👍\r\n".repeat(1_000) }
+    const request = { ...candidate, event: "REQUEST_CHANGES" as const, comments: [candidate.comments[0], oversized, { ...candidate.comments[0], line: 40 }] }
+    expect(oversized.body.length).toBeGreaterThan(4_000)
+    roundtripStagedCandidate(request, fixture)
+  }))
+
+  test("stages a 4,000-quote comment body with every serialized append within 6,000 characters", () => withFixture(fixture => {
+    const body = '"'.repeat(4_000)
+    expect(body).toHaveLength(4_000)
+    expect(JSON.stringify(body).length).toBeGreaterThan(6_000)
+    roundtripStagedCandidate({ ...candidate, comments: [{ ...candidate.comments[0], body }] }, fixture)
+  }))
+
+  test("stages a quoted path over 6,000 JSON characters with bounded calls and canonical comment order", () => withFixture(fixture => {
+    // 32 components * 100 characters + 31 separators = 3,231 characters;
+    // 32 * 99 quotes add 3,168 escapes, plus 2 delimiters = 6,401 JSON chars.
+    const path = Array.from({ length: 32 }, () => "a" + '"'.repeat(99)).join("/")
+    expect(path.length).toBeGreaterThanOrEqual(3_138)
+    for (const component of path.split("/")) {
+      expect(component.length).toBeLessThanOrEqual(100)
+      expect(component).toContain('"')
+    }
+    expect(JSON.stringify(path)).toHaveLength(6_401)
+    expect(JSON.stringify(path).length).toBeGreaterThan(6_000)
+    const request = { ...candidate, comments: [candidate.comments[0], { ...candidate.comments[0], path, line: 22 }, { ...candidate.comments[0], path: "last.ts" }] }
+    roundtripStagedCandidate(request, fixture)
+  }))
+
+  test("preserves split surrogate pairs, lone surrogates, controls and CRLF without input formatting", () => withFixture(fixture => {
+    roundtripStagedCandidate({ ...candidate, body: "x".repeat(699) + "👍\ud800\u0000\r\n\t\\\"", comments: [] }, fixture)
+  }))
+
+  test.each([
+    { field: "body" },
+    { comment: 0, field: "path", anchor: { line: 1, side: "RIGHT" } },
+    { comment: 0, field: "body" },
+  ])("rejects oversized candidate string payloads without changing staging: %j", fields => withFixture(fixture => {
+    const session = beginCandidate(candidate, fixture)
+    const before = status(session, fixture.opts)
+    // Deliberately invalid size probe; unlike positive fixtures, this call exceeds the bound.
+    expect(append({ ...session, ...fields, part: 0, parts: 1, text: "x".repeat(5_999) }, fixture.opts))
+      .toEqual({ ok: false, reason: "chunk-too-large", length: 6_001 })
+    expect(status(session, fixture.opts)).toEqual(before)
+  }))
+
+  test.each(["body", "path"] as const)("rejects a missing comment %s part and preserves the previous candidate", field => withFixture(fixture => {
+    const { reviewRoot, opts } = fixture
+    const direct = written(write_candidate({ reviewRoot, candidate }, opts))
+    const session = beginCandidate(candidate, fixture)
+    expect(appendCandidate(session, { field: "body", text: "Review", part: 0, parts: 1 }, opts)).toMatchObject({ ok: true })
+    for (const item of ["path", "body"]) expect(appendCandidate(session, {
+      comment: 0, field: item, text: item === "path" ? "src/a.ts" : "Finding", part: 0, parts: item === field ? 2 : 1,
+      ...(item === "path" ? { anchor: { line: 3, side: "RIGHT" } } : {}),
+    }, opts)).toMatchObject({ ok: true })
+    const missing = [{ key: `comments[0].${field}`, parts: [1] }]
+    expect(status(session, opts)).toMatchObject({ ok: true, missing })
+    expect(finalize({ ...session, expected_comments: 1 }, opts)).toEqual({ ok: false, reason: "incomplete-staging", missing, unexpected: [] })
+    expect(fs.readFileSync(direct.path, "utf8")).toBe(direct.text)
+  }))
+
+  test("rejects missing or misplaced anchors, duplicate parts and conflicting part counts before mutation", () => withFixture(fixture => {
+    const { opts } = fixture
+    const session = beginCandidate(candidate, fixture)
+    const path = { comment: 0, field: "path", text: "src/", part: 0, parts: 2 }
+    const before = status(session, opts)
+    expect(appendCandidate(session, path, opts)).toEqual({ ok: false, reason: "incomplete-staging" })
+    expect(status(session, opts)).toEqual(before)
+    const anchor = { line: 5, side: "RIGHT" }
+    expect(appendCandidate(session, { ...path, anchor }, opts)).toMatchObject({ ok: true })
+    const anchored = status(session, opts)
+    for (const [fields, reason] of [
+      [{ ...path, anchor }, "incomplete-staging"],
+      [{ ...path, part: 1, parts: 3 }, "part-count-conflict"],
+      [{ ...path, part: 2 }, "invalid-arguments"],
+      [{ ...path, part: null }, "invalid-arguments"],
+      [{ ...path, parts: null, anchor }, "invalid-arguments"],
+      [{ ...path, part: 1, anchor }, "invalid-arguments"],
+      [{ ...path, field: "body", anchor }, "invalid-arguments"],
+      [{ ...path, part: 1, body: "wrong protocol" }, "invalid-arguments"],
+      [{ ...path, part: 1, unexpected: true }, "invalid-arguments"],
+    ] as const) {
+      expect(appendCandidate(session, fields, opts)).toEqual({ ok: false, reason })
+      expect(status(session, opts)).toEqual(anchored)
+    }
+    expect(finalize({ ...session, expected_comments: 1 }, opts)).toMatchObject({ ok: false, reason: "incomplete-staging" })
+  }))
+
+  test("validates candidate headers and closed scalar anchors without publishing invalid records", () => withFixture(fixture => {
+    const { opts, reviewRoot, reviewPath } = fixture
+    for (const fields of [{}, { commit_id: HEAD_SHA }, { commit_id: HEAD_SHA, event: "POST" }, { commit_id: "bad", event: "COMMENT" },
+      { commit_id: HEAD_SHA, event: "COMMENT", headSha: HEAD_SHA }]) {
+      expect(begin({ reviewRoot, target: "candidate", ...fields }, opts)).toEqual({ ok: false, reason: "invalid-arguments" })
+      expect(fs.existsSync(reviewPath)).toBe(false)
+    }
+    const session = beginCandidate(candidate, fixture)
+    const before = status(session, opts)
+    for (const anchor of [{}, { line: 1 }, { line: 1, side: "RIGHT", body: "wrong field" },
+      { line: 3, side: "RIGHT", start_line: 1 }, { line: 3, side: "RIGHT", start_line: 3, start_side: "RIGHT" }]) {
+      expect(appendCandidate(session, { comment: 0, field: "path", part: 0, parts: 1, text: "src/a.ts", anchor }, opts))
+        .toEqual({ ok: false, reason: "invalid-arguments" })
+      expect(status(session, opts)).toEqual(before)
+    }
+  }))
+
+  test("validates the reconstructed path with the normal candidate schema before replacing the target", () => withFixture(fixture => {
+    const { opts, reviewRoot } = fixture
+    const direct = written(write_candidate({ reviewRoot, candidate }, opts))
+    const session = beginCandidate(candidate, fixture)
+    for (const fields of [
+      { field: "body", text: "Review", part: 0, parts: 1 },
+      { comment: 0, field: "path", text: "..", part: 0, parts: 2, anchor: { line: 1, side: "RIGHT" } },
+      { comment: 0, field: "path", text: "/outside.ts", part: 1, parts: 2 },
+      { comment: 0, field: "body", text: "Finding", part: 0, parts: 1 },
+    ]) expect(appendCandidate(session, fields, opts)).toMatchObject({ ok: true })
+    expect(finalize({ ...session, expected_comments: 1 }, opts)).toEqual({ ok: false, reason: "invalid-field" })
+    expect(fs.readFileSync(direct.path, "utf8")).toBe(direct.text)
+  }))
+
+  test("requires complete body/path records and an exhaustive zero-based comment count", () => withFixture(fixture => {
+    const { opts } = fixture
+    const session = beginCandidate(candidate, fixture)
+    expect(finalize({ ...session, expected_comments: 1 }, opts)).toEqual({ ok: false, reason: "incomplete-staging",
+      missing: [{ key: "body" }, { key: "comments[0].path" }, { key: "comments[0].body" }], unexpected: [] })
+    expect(appendCandidate(session, { comment: 1, field: "body", text: "Finding", part: 0, parts: 1 }, opts)).toMatchObject({ ok: true })
+    expect(finalize({ ...session, expected_comments: 0 }, opts)).toEqual({ ok: false, reason: "incomplete-staging",
+      missing: [{ key: "body" }], unexpected: ["comments[1].body"] })
+    for (const fields of [{}, { expected_comments: -1 }, { expected_comments: 0, expected_keys: [] }]) {
+      expect(finalize({ ...session, ...fields }, opts)).toEqual({ ok: false, reason: "invalid-arguments" })
+    }
+  }))
+
+  test("abort removes candidate staging without a candidate or document checkpoint", () => withFixture(fixture => {
+    const { opts, reviewPath } = fixture
+    const session = beginCandidate(candidate, fixture)
+    expect(appendCandidate(session, { field: "body", text: "Unfinished", part: 0, parts: 2 }, opts)).toMatchObject({ ok: true })
+    expect(fs.existsSync(join(reviewPath, ".staging", "candidate"))).toBe(true)
+    expect(abort(session, opts)).toEqual({ ok: true, staging_id: session.staging_id })
+    expect(fs.existsSync(join(reviewPath, ".staging", "candidate"))).toBe(false)
+    expect(status(session, opts)).toEqual({ ok: false, reason: "unknown-staging" })
+    expect(fs.existsSync(join(reviewPath, "candidate.json"))).toBe(false)
+    expect(fs.existsSync(join(reviewPath, HEAD_SHA))).toBe(false)
+  }))
+})
+
 describe("review persist structured data", () => {
   test("roundtrips facts through deterministic YAML at the namespace root with bounded lines", () => withFixture(({ opts, reviewRoot, reviewPath }) => {
     const fact = { source: "src/example.ts:10", fact: "verified evidence ".repeat(300), confidence: 0.9, verified_in_round: 2 }
@@ -352,8 +554,8 @@ describe("review persist structured data", () => {
     const measured = JSON.parse(payload.payload({ op: "measure", candidatePath: write.path }))
     expect(measured).toMatchObject({ ok: true, sha256: write.sha256, violations: [] })
     const frozen = JSON.parse(payload.payload({ op: "freeze", candidatePath: write.path, artifactPath: join(reviewPath, "artifact.json") }))
-    expect(frozen).toEqual({ ok: true, artifactPath: join(reviewPath, "artifact.json"), sha256: write.sha256, measurements: measured.measurements })
-    const verified = JSON.parse(payload.verify({ op: "verify", artifactPath: frozen.artifactPath, expectedSha256: frozen.sha256 }))
+    expect(frozen).toEqual({ ok: true, artifactPath: join(reviewPath, "artifact.json"), sha256: write.sha256, measurements: measured.measurements, fitted: false, omitted: { comments: 0, findings: 0 } })
+    const verified = verify(frozen.artifactPath, frozen.sha256, { reviewStateRoot: opts.reviewStateRoot })
     expect(verified).toEqual({ ok: true, sha256Match: true, canonical: true, violations: [], measurements: measured.measurements })
     expect(JSON.parse(fs.readFileSync(frozen.artifactPath, "utf8"))).toEqual(candidate)
     for (const result of [write, measured, frozen, verified]) expect(JSON.stringify(result)).not.toContain(BODY)

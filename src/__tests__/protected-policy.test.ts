@@ -67,7 +67,6 @@ describe("enforceProtected permission boundary", () => {
       ["subagent", "allow"],
       ["webfetch", "allow"],
       ["corvus_review_payload", "allow"],
-      ["corvus_review_verify", "allow"],
       ["corvus_review_post", "allow"],
       ["corvus_review_persist", "allow"],
       ["corvus_review_lock", "allow"],
@@ -185,7 +184,7 @@ describe("enforceProtected permission boundary", () => {
     const artifact = ".corvus/reviews/o__r__pr1/post-request.json"
     const read = await fake.evaluate({ agent: "pr-comment-writer", action: "read", resources: [artifact], effect: "allow" })
     expect(read.effect).toBe("allow")
-    for (const [action, effect] of [["corvus_review_verify", "allow"], ["corvus_review_post", "allow"], ["corvus_review_pr", "allow"],
+    for (const [action, effect] of [["corvus_review_post", "allow"], ["corvus_review_pr", "allow"],
       ["corvus_review_payload", "allow"], ["corvus_review_persist", "allow"], ["corvus_review_lock", "allow"], ["corvus_review_verdict", "allow"], ["corvus_review_sync", "allow"]] as const) {
       const decision = await fake.evaluate({ agent: "pr-comment-writer", action, resources: [artifact], effect: "allow" })
       expect({ action, effect: decision.effect }).toEqual({ action, effect })
@@ -222,7 +221,7 @@ describe("enforceProtected permission boundary", () => {
 
     // `read` is authored `allow` for every protected agent, so this is the exact
     // case where a naive "apply corvus's decision" hook would loosen a host `ask`.
-    const actions = ["read", "glob", "grep", "shell", "edit", "subagent", "webfetch", "list", "skill", "bash", "write", "corvus_review_payload", "corvus_review_verify", "corvus_review_post", "corvus_review_persist", "corvus_review_lock", "corvus_review_pr", "corvus_review_verdict", "corvus_review_sync"]
+    const actions = ["read", "glob", "grep", "shell", "edit", "subagent", "webfetch", "list", "skill", "bash", "write", "corvus_review_payload", "corvus_review_post", "corvus_review_persist", "corvus_review_lock", "corvus_review_pr", "corvus_review_verdict", "corvus_review_sync"]
 
     for (const agent of PROTECTED_AGENTS)
       for (const action of actions) {

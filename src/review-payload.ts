@@ -3,6 +3,7 @@ import { isLegacyReviewPath, isReviewPath } from "./review-persist"
 import { createHash } from "node:crypto"
 import * as nodeFs from "node:fs"
 import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path"
+import { fitReview, type ReviewOmissions } from "./review-fit"
 
 export type CandidateRequest = {
   commit_id: string
@@ -65,11 +66,10 @@ type PathRejection = {
 }
 type ParseReason = "parse-error" | "duplicate-key" | "encoding-error"
 export type FreezeResult =
-  | { ok: true; artifactPath: string; sha256: string; measurements: Measurements }
+  | { ok: true; artifactPath: string; sha256: string; measurements: Measurements; fitted: boolean; omitted: ReviewOmissions }
   | CandidateRejection
   | PathRejection
   | { ok: false; reason: "candidate-bom" | `candidate-${ParseReason}` | "candidate-read-error" | "artifact-write-error" | "artifact-read-error" }
-  | { ok: false; reason: "budget-violation"; violations: Violation[]; measurements: Measurements }
   | { ok: false; reason: "readback-mismatch"; expectedBytes: number; actualBytes: number }
 
 export type VerifyResult = {
@@ -84,6 +84,10 @@ export type VerifyResult = {
   field?: string
   path?: string
 }
+
+export type PreviewResult =
+  | (VerifyResult & { ok: false })
+  | (CandidateRequest & { ok: true; sha256: string; measurements: Measurements })
 
 const REQUEST_KEYS = ["commit_id", "event", "body", "comments"] as const
 const COMMENT_KEYS = ["path", "line", "side", "start_line", "start_side", "body"] as const
@@ -290,10 +294,13 @@ function parse(bytes: Buffer): { ok: true; value: unknown } | { ok: false; reaso
 }
 
 /**
- * R4 freezes an authorized candidate; authorization itself belongs to the caller.
- * Measured canonical bytes are the oracle before writing. Length and byte equality
- * of the full read-back precede returning its digest; any failure keeps R4 local-only.
- * No option disables these checks, and no failure result contains review text.
+ * R4 freezes before preview/authorization, which belong to the caller. Schema and
+ * measured canonical bytes are the oracle before writing: oversized candidates
+ * are fitted and remeasured, never size-rejected. A failed fit is an internal
+ * invariant error before artifact writes, not a budget rejection. Length and byte
+ * equality of the full read-back precede returning the written artifact's digest;
+ * any integrity failure withholds that descriptor. No option disables these
+ * checks, and no failure result contains review text.
  */
 export function freeze(candidatePath: string, artifactPath: string, opts: ReviewPayloadOptions): FreezeResult {
   const fs = opts.fs ?? nodeFs
@@ -310,10 +317,15 @@ export function freeze(candidatePath: string, artifactPath: string, opts: Review
   if (hasBom(bytes)) return { ok: false, reason: "candidate-bom" }
   const parsed = parse(bytes)
   if (!parsed.ok) return { ok: false, reason: `candidate-${parsed.reason}` }
-  const measured = measure(parsed.value)
+  let measured = measure(parsed.value)
   if ("reason" in measured) return measured
-  if (!measured.ok) {
-    return { ok: false, reason: "budget-violation", violations: measured.violations, measurements: measured.measurements }
+  const fitted = !measured.ok
+  let omitted: ReviewOmissions = { comments: 0, findings: 0 }
+  if (fitted) {
+    const fit = fitReview(parsed.value as CandidateRequest)
+    omitted = fit.omitted
+    measured = measure(fit.request)
+    if ("reason" in measured || !measured.ok) throw new Error("Review fitting invariant violated")
   }
   const expected = Buffer.from(measured.canonical, "utf8")
   try {
@@ -330,7 +342,7 @@ export function freeze(candidatePath: string, artifactPath: string, opts: Review
   if (actual.length !== expected.length || !actual.equals(expected)) {
     return { ok: false, reason: "readback-mismatch", expectedBytes: expected.length, actualBytes: actual.length }
   }
-  return { ok: true, artifactPath: artifact.path, sha256: digest(actual), measurements: measured.measurements }
+  return { ok: true, artifactPath: artifact.path, sha256: digest(actual), measurements: measured.measurements, fitted, omitted }
 }
 
 /**
@@ -372,6 +384,35 @@ export function verify(artifactPath: string, expectedSha256: string, opts: Revie
   }
 }
 
+/**
+ * R4 previews only the bytes accepted by verify's containment, schema, canonical,
+ * digest and budget checks. Capture that read before decoding; a second unchecked
+ * read could show different text. Any verification failure withholds review text,
+ * and no option disables verification. Writes are disabled even for injected
+ * filesystems. This preview does not attest to bytes changed after its read.
+ */
+export function preview(artifactPath: string, expectedSha256: string, opts: ReviewPayloadOptions): PreviewResult {
+  const fs = opts.fs ?? nodeFs
+  let bytes: Buffer | undefined
+  const checked = verify(artifactPath, expectedSha256, {
+    reviewStateRoot: opts.reviewStateRoot,
+    fs: {
+      readFileSync(target) {
+        bytes = Buffer.from(fs.readFileSync(target))
+        return bytes
+      },
+      realpathSync: target => fs.realpathSync(target),
+      statSync: target => fs.statSync(target),
+      lstatSync: target => fs.lstatSync(target),
+      writeFileSync() { throw new Error("artifact-write-disabled") },
+    },
+  })
+  if (!checked.ok) return { ...checked, ok: false }
+  if (!bytes || !checked.measurements) return { ...checked, ok: false, reason: "artifact-read-error" }
+  const request = JSON.parse(bytes.toString("utf8")) as CandidateRequest
+  return { ok: true, ...request, sha256: expectedSha256, measurements: checked.measurements }
+}
+
 /** Measure a contained candidate file without returning its review text or writing it. */
 export function measureFile(candidatePath: string, opts: ReviewPayloadOptions) {
   const fs = opts.fs ?? nodeFs
@@ -395,18 +436,17 @@ export function measureFile(candidatePath: string, opts: ReviewPayloadOptions) {
 /**
  * The host directory captured at registration is the root oracle, never tool args
  * or process cwd. Closed operation-specific keys are checked before any file I/O;
- * relative paths retain traversal segments for checkedPath to reject. R3/R4 and
- * writer/R5 receive a failure for missing host context, invalid args or containment
- * failures. The verify entry cannot dispatch a write; no argument disables this
- * separation or containment. Only freeze writes, after the core's preflight checks.
+ * relative paths retain traversal segments for checkedPath to reject. R3/R4 receive
+ * a failure for missing host context, invalid args or containment failures. No
+ * argument disables containment. Only freeze writes, after the core's preflight checks.
  */
 export function createReviewToolExecutors(directory: string) {
   const opts = typeof directory === "string" && isAbsolute(directory)
      ? { reviewStateRoot: resolve(directory, ".corvus") } : undefined
   const path = (value: string) => isAbsolute(value) ? value : `${directory}${sep}${value}`
-  const validate = (input: unknown, operations: readonly string[]): CandidateRejection | undefined => {
+  const validate = (input: unknown): CandidateRejection | undefined => {
     if (!isRecord(input)) return invalid("arguments")
-    if (typeof input.op !== "string" || !operations.includes(input.op)) return invalid("op")
+    if (typeof input.op !== "string" || !["measure", "freeze", "preview"].includes(input.op)) return invalid("op")
     const keys = input.op === "measure" ? ["op", "candidatePath"]
       : input.op === "freeze" ? ["op", "candidatePath", "artifactPath"]
       : ["op", "artifactPath", "expectedSha256"]
@@ -414,20 +454,16 @@ export function createReviewToolExecutors(directory: string) {
   }
   return {
     payload(input: unknown): string {
-      const rejection = validate(input, ["measure", "freeze"])
+      const rejection = validate(input)
       if (rejection) return JSON.stringify(rejection)
       if (!opts) return JSON.stringify({ ok: false, reason: "invalid-workspace-directory" })
-      const args = input as { op: "measure"; candidatePath: string } | { op: "freeze"; candidatePath: string; artifactPath: string }
+      const args = input as { op: "measure"; candidatePath: string }
+        | { op: "freeze"; candidatePath: string; artifactPath: string }
+        | { op: "preview"; artifactPath: string; expectedSha256: string }
       return JSON.stringify(args.op === "measure"
         ? measureFile(path(args.candidatePath), opts)
-        : freeze(path(args.candidatePath), path(args.artifactPath), opts))
-    },
-    verify(input: unknown): string {
-      const rejection = validate(input, ["verify"])
-      if (rejection) return JSON.stringify(rejection)
-      if (!opts) return JSON.stringify({ ok: false, reason: "invalid-workspace-directory" })
-      const args = input as { op: "verify"; artifactPath: string; expectedSha256: string }
-      return JSON.stringify(verify(path(args.artifactPath), args.expectedSha256, opts))
+        : args.op === "freeze" ? freeze(path(args.candidatePath), path(args.artifactPath), opts)
+        : preview(path(args.artifactPath), args.expectedSha256, opts))
     },
   }
 }

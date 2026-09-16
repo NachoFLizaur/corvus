@@ -8,7 +8,8 @@ import { join, resolve } from "node:path"
 import { dump } from "js-yaml"
 import { REVIEW_INPUT_LINE_LIMIT, artifactTree, checkReviewArtifacts, reviewNamespace, reviewRoot, type Inputs } from "../../scripts/check-review-artifacts"
 import { checkWriterRun } from "../../scripts/check-writer-run"
-import { freeze } from "../review-payload"
+import { canonicalize, freeze, measureFile, preview, type CandidateRequest } from "../review-payload"
+import { append, begin, finalize } from "../review-persist"
 import { post as postReview } from "../review-post"
 import type { DocumentVerdict, LabelCounts } from "../review-verdict"
 import { pull, push, resolve as resolveSync, type PushInput, type SyncExec } from "../review-sync"
@@ -51,7 +52,29 @@ function seedParent(db: Database, events: object[]) {
 
 const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim()
 
-async function fixture(inline = false, intake: Inputs["intake"] = "url", layout: "plain" | "task" = "plain", syncMode: "normal" | "disabled" | "no-upstream" | "fork" = "normal", barrier: "denied" | "not-exposed" = "denied") {
+// checkReviewArtifacts inventory: 38 common + 2 non-fork + 5 PR + 1 denied = 46;
+// writer execution replaces denied with 6 rows = 51; LOCAL replaces PR/writer with 3 = 43.
+// Branch adds find resolved; forks replace the 2 non-fork rows with 1; any fitted PR adds size fit once.
+const reviewRowCount = (input: Inputs, fitted = false) => 38 + (input.crossRepo ? 1 : 2)
+  + (input.intake === "local" ? 3 : 5 + (input.writer ? 6 : 1))
+  + Number(input.intake === "branch") + Number(input.intake !== "local" && fitted)
+
+/** Explicit setup receipts, never recomputed while scoring a deliberately tampered fixture. */
+function receipt(workspace: string, path: string) {
+  const bytes = readFileSync(resolve(workspace, path))
+  return { ok: true, path, sha256: createHash("sha256").update(bytes).digest("hex"),
+    lines: bytes.toString("utf8").split("\n").length - 1, bytes: bytes.length }
+}
+
+function saveTrace(input: Inputs, events: object[], stored = events) {
+  writeFileSync(input.jsonl, events.map(event => JSON.stringify(event)).join("\n") + "\n")
+  const db = new Database(input.db!)
+  db.run("delete from part where session_id = ?", ["ses_smoke"])
+  seedParent(db, stored)
+  db.close()
+}
+
+async function fixture(inline = false, intake: Inputs["intake"] = "url", layout: "plain" | "task" = "plain", syncMode: "normal" | "disabled" | "no-upstream" | "fork" | "failed" = "normal", barrier: "denied" | "not-exposed" = "denied") {
   const directory = mkdtempSync(join(tmpdir(), "corvus-review-check-"))
   directories.push(directory)
   const workspace = join(directory, "fixture")
@@ -95,6 +118,7 @@ async function fixture(inline = false, intake: Inputs["intake"] = "url", layout:
   const trace = join(directory, "git-trace.jsonl")
   writeFileSync(trace, "")
   const exec: SyncExec = async (argv, options) => {
+    if (syncMode === "failed" && argv[1] === "push") return { code: 1, stdout: "", stderr: "fixture push unavailable" }
     const result = Bun.spawnSync(argv, { cwd: options.cwd, env: { ...process.env, GIT_TRACE2_EVENT: trace } })
     return { code: result.exitCode, stdout: result.stdout.toString(), stderr: result.stderr.toString() }
   }
@@ -116,7 +140,8 @@ async function fixture(inline = false, intake: Inputs["intake"] = "url", layout:
   writeFileSync(join(root, head, "verdict.yaml"), dump(persistedVerdict()))
   if (notExposed) writeFileSync(join(root, head, "review-action.yaml"), dump(reviewAction))
   writeFileSync(join(root, "verified_facts.yaml"), "facts: []\nopen_questions: []\n")
-  if (!local) writeFileSync(join(root, "candidate.json"), JSON.stringify({ commit_id: head, event: "COMMENT", body: `Smoke review — ✓\n<!-- corvus-review v2 path=${relative} head=${head} round=1 -->`, comments: inline ? [{ path: "x", line: 1, side: "RIGHT", body: "Inline review" }] : [] }))
+   const candidate: CandidateRequest = { commit_id: head, event: "COMMENT", body: `<!-- corvus-review v2 path=${relative} head=${head} round=1 -->\nSmoke review — ✓`, comments: inline ? [{ path: "x", line: 1, side: "RIGHT", body: "Inline review" }] : [] }
+   if (!local) writeFileSync(join(root, "candidate.json"), canonicalize(candidate))
   writeFileSync(join(root, "review-input.json"), JSON.stringify({ mode: local ? "local" : "pr", pr_number: local ? null : 8, head_sha: head, description_chunks: ["## Summary\n", "x".repeat(1500)], file_map: {} }, null, 2) + "\n")
   const frozen = local || notExposed ? undefined : freeze(join(root, "candidate.json"), join(root, "post-request.json"), { reviewStateRoot: join(workspace, ".corvus") })
   if (frozen && !frozen.ok) throw new Error(JSON.stringify(frozen))
@@ -135,25 +160,25 @@ async function fixture(inline = false, intake: Inputs["intake"] = "url", layout:
     tool("corvus_review_lock", { op: "acquire", reviewRoot: relative, runId: "run-1" }, { ok: true, state: "acquired", started_at: "2026-09-13T00:00:00Z" }),
     tool("corvus_review_verdict", verdictInput, historyVerdict),
     tool("task", { subagent_type: "pr-context-gatherer" }, { sessionID: "ses_gatherer", status: "completed" }),
-    tool("corvus_review_persist", { op: "write_input", reviewRoot: relative, input: {} }, { ok: true, path: `${relative}/review-input.json` }),
-    tool("corvus_review_persist", { op: "write_facts", reviewRoot: relative, facts: { facts: [], open_questions: [] } }, { ok: true, path: `${relative}/verified_facts.yaml` }),
+    tool("corvus_review_persist", { op: "write_input", reviewRoot: relative, input: JSON.parse(readFileSync(join(root, "review-input.json"), "utf8")) }, receipt(workspace, `${relative}/review-input.json`)),
+    tool("corvus_review_persist", { op: "write_facts", reviewRoot: relative, facts: { facts: [], open_questions: [] } }, receipt(workspace, `${relative}/verified_facts.yaml`)),
     tool("corvus_review_persist", { op: "begin", reviewRoot: relative, target: "document", headSha: head, expected_sections: 1 }, { ok: true, staging_id: "document-session" }),
     tool("corvus_review_persist", { op: "append", reviewRoot: relative, staging_id: "document-session", index: 0, heading: "", body: documentMarkdown(reviewDocument()) }, { ok: true }),
-    tool("corvus_review_persist", { op: "finalize", reviewRoot: relative, staging_id: "document-session", expected_sections: 1 }, { ok: true, path: `${relative}/${head}/REVIEW_DOCUMENT.md`, sha256: createHash("sha256").update(readFileSync(join(root, head, "REVIEW_DOCUMENT.md"))).digest("hex") }),
-    tool("corvus_review_persist", { op: "write_candidate", reviewRoot: relative, candidate: {} }, { ok: true, path: `${relative}/candidate.json` }),
-    tool("corvus_review_payload", { op: "measure", candidatePath: `${relative}/candidate.json` }, { ok: true }),
+    tool("corvus_review_persist", { op: "finalize", reviewRoot: relative, staging_id: "document-session", expected_sections: 1 }, receipt(workspace, `${relative}/${head}/REVIEW_DOCUMENT.md`)),
+    ...(!local ? [tool("corvus_review_persist", { op: "write_candidate", reviewRoot: relative, candidate }, receipt(workspace, `${relative}/candidate.json`)),
+      tool("corvus_review_payload", { op: "measure", candidatePath: `${relative}/candidate.json` }, measureFile(join(root, "candidate.json"), { reviewStateRoot: join(workspace, ".corvus") }))] : []),
     tool("corvus_review_verdict", { ...verdictInput, headSha: head }, { ...verdict, persisted: `${relative}/${head}/verdict.yaml` }),
     ...(notExposed ? [tool("corvus_review_persist", { op: "write_meta", reviewRoot: relative, headSha: head, name: "review-action.yaml", meta: reviewAction }, { ok: true, path: `${relative}/${head}/review-action.yaml` })] : [
       tool("corvus_review_payload", { op: "freeze", candidatePath: `${relative}/candidate.json`, artifactPath: `${relative}/post-request.json` }, frozen ?? {}),
-      tool("corvus_review_verify", { op: "verify", artifactPath: `${relative}/post-request.json`, expectedSha256: frozen?.sha256 }, { ok: true }),
+      ...(frozen?.ok ? [tool("corvus_review_payload", { op: "preview", artifactPath: `${relative}/post-request.json`, expectedSha256: frozen.sha256 }, preview(join(root, "post-request.json"), frozen.sha256, { reviewStateRoot: join(workspace, ".corvus") }))] : []),
       tool("subagent", { agent: "pr-comment-writer" }, {}, "Subagent denied: pr-comment-writer"),
     ]),
-    tool("corvus_review_persist", { op: "write_meta", reviewRoot: relative, headSha: head, meta: meta() }, { ok: true, path: `${relative}/${head}/meta.yaml` }),
+    tool("corvus_review_persist", { op: "write_meta", reviewRoot: relative, headSha: head, meta: meta() }, receipt(workspace, `${relative}/${head}/meta.yaml`)),
     tool("corvus_review_lock", { op: "release", reviewRoot: relative, runId: "run-1", mode: "complete" }, { ok: true, state: "completed" }),
     ...(pushed ? [tool("corvus_review_sync", { op: "push", ...pushInput }, pushed)] : []),
     { type: "step_finish", part: { cost: 0.01, tokens: { input: 10, output: 5, cache: { read: 2, write: 3 } } } },
     { type: "text", sessionID: "ses_smoke", part: { text: `Review saved: ${relative}/${head}/REVIEW_DOCUMENT.md\nStandards: 1 finding; Spec: 1 finding.\n${pushed ? `synced: ${pushed.synced}; ${pushed.state_commit ? `state_commit: ${pushed.state_commit}` : `reason: ${pushed.reason}`}` : "state_sync: false; skipped pull and push"}${notExposed ? "\nNothing posted—the authorized pr-comment-writer is not exposed by this host." : ""}` } },
-  ].filter(event => !local || !("tool" in event.part && (event.part.tool === "corvus_review_payload" || event.part.tool === "corvus_review_verify"
+  ].filter(event => !local || !("tool" in event.part && (event.part.tool === "corvus_review_payload"
     || event.part.tool === "subagent" || (event.part.state.input as { op?: string }).op === "write_candidate")))
   if (local) events.splice(events.findIndex(event => "tool" in event.part && (event.part.state.input as { op?: string }).op === "write_meta"), 0,
     { type: "text", sessionID: "ses_smoke", part: { text: "[R4 COMPLETE] LOCAL review — posting is not applicable" } })
@@ -187,6 +212,214 @@ function seedGatherer(db: Database, local = false) {
   }
 }
 
+type ReviewFixture = Awaited<ReturnType<typeof fixture>>
+const traceTools = (events: ReviewFixture["events"]) => events.filter((event): event is ReturnType<typeof toolEvent> => "tool" in event.part)
+const operation = (events: ReviewFixture["events"], name: string, op: string) => traceTools(events)
+  .findLast(event => event.part.tool === name && (event.part.state.input as { op?: string }).op === op)!
+function terminalNote(events: ReviewFixture["events"], note: string) {
+  const terminal = events.at(-1)!
+  if (!("text" in terminal.part)) throw new Error("fixture has no terminal assistant note")
+  terminal.part.text = note
+}
+const lastNote = (events: ReviewFixture["events"]) => {
+  const terminal = events.at(-1)!
+  if (!("text" in terminal.part) || typeof terminal.part.text !== "string") throw new Error("fixture has no terminal assistant note")
+  return terminal.part.text
+}
+
+/** Use only for a deliberately successful fixture revision, before any negative mutation. */
+function refreshWrite(data: ReviewFixture, op: string, path: string, input?: object) {
+  const event = operation(data.events, "corvus_review_persist", op)
+  if (input) Object.assign(event.part.state.input, input)
+  event.part.state.output = JSON.stringify(receipt(data.input.fixture, path))
+  saveTrace(data.input, data.events)
+}
+
+function replaceCandidate(data: ReviewFixture, candidate: CandidateRequest) {
+  const relative = reviewRoot(data.input), opts = { reviewStateRoot: join(data.input.fixture, ".corvus") }
+  writeFileSync(join(data.root, "candidate.json"), canonicalize(candidate))
+  refreshWrite(data, "write_candidate", `${relative}/candidate.json`, { candidate })
+  operation(data.events, "corvus_review_payload", "measure").part.state.output = JSON.stringify(measureFile(join(data.root, "candidate.json"), opts))
+  const frozen = freeze(join(data.root, "candidate.json"), join(data.root, "post-request.json"), opts)
+  if (!frozen.ok) throw new Error(JSON.stringify(frozen))
+  operation(data.events, "corvus_review_payload", "freeze").part.state.output = JSON.stringify(frozen)
+  const shown = operation(data.events, "corvus_review_payload", "preview")
+  Object.assign(shown.part.state.input, { expectedSha256: frozen.sha256 })
+  shown.part.state.output = JSON.stringify(preview(join(data.root, "post-request.json"), frozen.sha256, opts))
+  saveTrace(data.input, data.events)
+  return frozen
+}
+
+function failHeadVerdict(data: ReviewFixture, reason = "verdict-unavailable") {
+  operation(data.events, "corvus_review_verdict", "compute").part.state.output = JSON.stringify({ ok: false, reason })
+  rmSync(join(data.root, data.input.head, "verdict.yaml"), { force: true })
+}
+
+function failCheckpoint(data: ReviewFixture) {
+  operation(data.events, "corvus_review_persist", "finalize").part.state.output = JSON.stringify({ ok: false, reason: "incomplete-staging" })
+  rmSync(join(data.root, data.input.head, "REVIEW_DOCUMENT.md"))
+  failHeadVerdict(data, "not-found")
+}
+
+function failMetadata(data: ReviewFixture) {
+  const event = operation(data.events, "corvus_review_persist", "write_meta")
+  event.part.state.status = "error"
+  event.part.state.error = "metadata-write-error"
+  event.part.state.output = JSON.stringify({ ok: false, reason: "metadata-write-error" })
+  rmSync(join(data.root, data.input.head, "meta.yaml"))
+}
+
+// The seven ADR-0006 bookkeeping rows, plus their persistence-dependent aggregate consumers.
+const bookkeepingCases = [
+  ["R0 verdict", "history verdict", "history"],
+  ["R4 verdict", "head verdict", "head"],
+  ["verdict persisted", "head verdict", "head"],
+  ["verdict document counts", "head verdict", "head"],
+  ["document staged", "document staging", "document"],
+  ["checkpoint writes", "document checkpoint", "document"],
+  ["marker", "verdict round", "marker"],
+  ["artifacts", "meta.yaml", "metadata"],
+  ["review-state tools", "document checkpoint", "document"],
+  ["continuation note", "history verdict", "history"],
+  ["metadata", "meta.yaml", "metadata"],
+  ["sync metadata", "meta.yaml", "metadata"],
+] as const
+
+test.each(bookkeepingCases)("%s evidence precedence: PASS / disclosed N/A-PASS / undisclosed FAIL / forged FAIL", async (check, op, source) => {
+  const data = await fixture()
+  const baseline = await checkReviewArtifacts(data.input)
+  expect(baseline.exitCode).toBe(0)
+  expect(baseline.rows.find(row => row.check === check)).toMatchObject({ ok: true })
+  expect(baseline.rows.find(row => row.check === check)?.detail).not.toStartWith("N/A-PASS:")
+  const original = structuredClone(data.events)
+  const syncNote = lastNote(data.events).split("\n").at(-1)!
+  const history = traceTools(data.events).find(event => event.part.tool === "corvus_review_verdict")!
+  let diagnostic = "verdict-unavailable", note = ""
+  if (source === "history") {
+    // Missing evidence has no diagnostic; absence is not a forged success claim.
+    data.events.splice(data.events.indexOf(history), 1)
+    diagnostic = "no diagnostic exists"
+    note = "History verdict unavailable; no diagnostic exists."
+  } else if (source === "head") {
+    failHeadVerdict(data)
+    note = "Head verdict failed: verdict-unavailable."
+  } else if (source === "document") {
+    failCheckpoint(data)
+    diagnostic = "incomplete-staging"
+    note = "Document checkpoint and document staging failed: incomplete-staging. Head verdict failed: not-found."
+  } else if (source === "metadata") {
+    failMetadata(data)
+    diagnostic = "metadata-write-error"
+    note = "meta.yaml write_meta failed: metadata-write-error."
+  } else {
+    // v1 marker when round is unknown: both verdict calls failed; disclosure decides N/A-PASS vs undisclosed.
+    history.part.state.output = JSON.stringify({ ok: false, reason: diagnostic })
+    failHeadVerdict(data)
+    const candidate = JSON.parse(readFileSync(join(data.root, "candidate.json"), "utf8")) as CandidateRequest
+    candidate.body = `<!-- corvus-review v1 head:${data.input.head} -->\nSmoke review — ✓`
+    replaceCandidate(data, candidate)
+    note = "History verdict and head verdict and verdict round failed: verdict-unavailable."
+  }
+  const unavailable = structuredClone(data.events)
+  for (const disclosed of [true, false]) {
+    terminalNote(data.events, `Synthesis counts: Standards: 1; Spec: 1.\n${syncNote}\n${disclosed ? note : "Review complete."}`)
+    saveTrace(data.input, data.events)
+    const result = await checkReviewArtifacts(data.input)
+    expect(result.exitCode, `${check}: disclosed=${disclosed}`).toBe(disclosed ? 0 : 5)
+    expect(result.rows.find(row => row.check === check)).toMatchObject({ ok: disclosed,
+      detail: disclosed ? `N/A-PASS: ${op} unavailable, disclosed` : `undisclosed: ${op} failed without terminal note` })
+    if (disclosed) expect(result.rows.filter(row => !row.ok)).toEqual([])
+  }
+  // A success claim contradicts the same unavailable evidence; disclosure cannot rescue it.
+  data.events.splice(0, data.events.length, ...unavailable)
+  terminalNote(data.events, `Synthesis counts: Standards: 1; Spec: 1.\n${syncNote}\n${note}\n${op} computed successfully.`)
+  if (source === "marker") {
+    // A known round makes v1 invalid even when an unavailability note accompanies it.
+    Object.assign(operation(data.events, "corvus_review_verdict", "compute").part.state, structuredClone(operation(original, "corvus_review_verdict", "compute").part.state))
+    writeFileSync(join(data.root, data.input.head, "verdict.yaml"), dump(persistedVerdict()))
+  }
+  saveTrace(data.input, data.events)
+  const forged = await checkReviewArtifacts(data.input)
+  expect(forged.exitCode, `${check}: ${diagnostic}`).toBe(5)
+  expect(forged.rows.find(row => row.check === check)).toMatchObject({ ok: false, detail: expect.stringMatching(/^forged:/) })
+})
+
+test.each([true, false])("failed metadata recorded with terminal disclosure=%s propagates without a durability prerequisite", async disclosed => {
+  const data = await fixture()
+  failMetadata(data)
+  if (disclosed) terminalNote(data.events, `${lastNote(data.events)}\nmeta.yaml write_meta failed: metadata-write-error.`)
+  saveTrace(data.input, data.events)
+  const result = await checkReviewArtifacts(data.input)
+  expect(result.exitCode).toBe(disclosed ? 0 : 5)
+  for (const check of ["metadata", "artifacts", "verdict persisted", "sync metadata", "sync.push"]) {
+    expect(result.rows.find(row => row.check === check)).toMatchObject({ ok: disclosed,
+      detail: disclosed ? "N/A-PASS: meta.yaml unavailable, disclosed" : "undisclosed: meta.yaml failed without terminal note" })
+  }
+  expect(result.rows.find(row => row.check === "lock released")).toMatchObject({ ok: true })
+})
+
+test.each(["wrong diagnostic", "earlier parent note", "child-only note", "no operation name"])("metadata disclosure must be in the final parent note with operation and diagnostic: %s", async mutation => {
+  const data = await fixture()
+  failMetadata(data)
+  const note = "meta.yaml write_meta failed: metadata-write-error."
+  if (mutation === "wrong diagnostic") terminalNote(data.events, `${lastNote(data.events)}\nmeta.yaml write_meta failed: different-error.`)
+  if (mutation === "no operation name") {
+    // Use a diagnostic without an operation alias, so the diagnostic itself cannot name metadata.
+    const event = operation(data.events, "corvus_review_persist", "write_meta")
+    event.part.state.error = "disk-full"
+    event.part.state.output = JSON.stringify({ ok: false, reason: "disk-full" })
+    terminalNote(data.events, `${lastNote(data.events)}\nAn operation failed: disk-full.`)
+  }
+  if (mutation === "earlier parent note") data.events.splice(data.events.length - 1, 0, { type: "text", sessionID: "ses_smoke", part: { text: note } })
+  if (mutation === "child-only note") data.events.push({ type: "text", sessionID: "ses_child", part: { text: note } })
+  saveTrace(data.input, data.events)
+  const result = await checkReviewArtifacts(data.input)
+  expect(result.exitCode).toBe(5)
+  expect(result.rows.find(row => row.check === "metadata")).toMatchObject({ ok: false, detail: "undisclosed: meta.yaml failed without terminal note" })
+})
+
+test.each(["labelled synthesis", "claimed tool counts", "claimed tool round", "claimed tool convergence"])("unavailable verdict accepts only honest count attribution: %s", async claim => {
+  const data = await fixture()
+  failHeadVerdict(data)
+  const claims: Record<string, string> = {
+    "labelled synthesis": "Synthesis counts: Standards: 1; Spec: 1.",
+    "claimed tool counts": "Tool-produced counts: Standards: 1; Spec: 1.",
+    "claimed tool round": "Verdict tool returned round: 99.",
+    "claimed tool convergence": "Verdict tool returned converged: true.",
+  }
+  terminalNote(data.events, `Head verdict failed: verdict-unavailable.\n${claims[claim]}\n${lastNote(data.events).split("\n").at(-1)}`)
+  saveTrace(data.input, data.events)
+  const result = await checkReviewArtifacts(data.input)
+  expect(result.exitCode).toBe(claim === "labelled synthesis" ? 0 : 5)
+  expect(result.rows.find(row => row.check === "R4 verdict")).toMatchObject({ ok: claim === "labelled synthesis",
+    detail: expect.stringMatching(claim === "labelled synthesis" ? /^N\/A-PASS:/ : /^forged:/) })
+})
+
+test.each(["PASS", "disclosed", "undisclosed", "forged"])("sync receipt evidence precedence: %s; disclosed failed push is validated after release", async state => {
+  const data = await fixture(false, "url", "plain", state === "PASS" ? "normal" : "failed")
+  const pushed = operation(data.events, "corvus_review_sync", "push")
+  if (state !== "PASS") {
+    expect(JSON.parse(pushed.part.state.output)).toMatchObject({ synced: false, reason: "push-refused" })
+    expect(git(data.input.bare!, "rev-parse", data.input.branch!)).toBe(data.input.head)
+    if (state === "disclosed") terminalNote(data.events, `${lastNote(data.events)}\nsync.push failed: push-refused; state_commit is local only.`)
+    if (state === "forged") {
+      pushed.part.state.output = JSON.stringify({ ...JSON.parse(pushed.part.state.output), synced: true })
+      terminalNote(data.events, `${lastNote(data.events)}\nsync.push failed: push-refused; sync push succeeded.`)
+    }
+  }
+  saveTrace(data.input, data.events)
+  const result = await checkReviewArtifacts(data.input)
+  const ok = state === "PASS" || state === "disclosed"
+  expect(result.exitCode).toBe(ok ? 0 : 5)
+  expect(result.rows.find(row => row.check === "sync receipt")).toMatchObject({ ok })
+  if (state !== "PASS") expect(result.rows.find(row => row.check === "sync receipt")?.detail)
+    .toStartWith(state === "disclosed" ? "N/A-PASS: sync.push unavailable, disclosed" : state === "undisclosed" ? "undisclosed:" : "forged:")
+  if (ok) {
+    expect(result.rows.filter(row => !row.ok)).toEqual([])
+    expect(result.rows.find(row => row.check === "lock released")?.detail).toContain("later review work=none")
+  }
+})
+
 test.each(["plain", "task"] as const)("complete real-shaped tool evidence passes (%s); background or unfinished children fail", async layout => {
   const data = await fixture(false, "url", layout)
   expect(join(data.input.fixture, reviewRoot(data.input))).toBe(data.root)
@@ -194,7 +427,7 @@ test.each(["plain", "task"] as const)("complete real-shaped tool evidence passes
   const result = await checkReviewArtifacts(data.input)
   expect(result.rows.filter(row => !row.ok)).toEqual([])
   expect(result.exitCode).toBe(0)
-   expect(result.rows).toHaveLength(44)
+  expect(result.rows).toHaveLength(reviewRowCount(data.input))
   expect(result.usage).toMatchObject({ steps: 1, cost: 0.01, tokens: { input: 10, output: 5, "cache.read": 2, "cache.write": 3 } })
   const child = (name: string, sessionID: string, status: string, background = false, nested = false) => ({
     type: "tool_use", sessionID: "ses_smoke", part: { id: `call_${sessionID}`, tool: name, state: {
@@ -238,6 +471,7 @@ test.each(["url", "branch", "local"] as const)("%s sync gate rejects missing, re
   }
   const result = await checkReviewArtifacts(data.input)
   expect(result.rows.filter(row => !row.ok)).toEqual([])
+  expect(result.rows).toHaveLength(reviewRowCount(data.input))
   console.info(`Offline ${intake}: ${result.rows.length}/${result.rows.length} rows; root=${reviewRoot(data.input)}`)
   const syncOp = (event: typeof baseline[number], op: string) => "tool" in event.part && event.part.tool === "corvus_review_sync" && (event.part.state.input as { op?: string }).op === op
   for (const [mutation, row] of [
@@ -314,13 +548,16 @@ test.each(["url", "branch", "local"] as const)("%s sync gate rejects missing, re
   save(baseline)
 }, 30_000)
 
-test("staging rejects single-call checkpoints, missing finalize, oversized appends and failed checkpoints with a verdict", async () => {
+test("staging rejects claimed staged single-call checkpoints, missing finalize, oversized appends and undisclosed checkpoint failure", async () => {
   const data = await fixture()
   const baseline = structuredClone(data.events)
   for (const [mutation, check] of [["single", "document staged"], ["missing", "checkpoint writes"], ["oversized", "append ceiling"], ["failed-verdict", "checkpoint-failed route"]]) {
     const events = structuredClone(baseline)
     const final = events.find((event): event is ReturnType<typeof toolEvent> => "tool" in event.part && (event.part.state.input as { op?: string }).op === "finalize")!
-    if (mutation === "single") Object.assign(final.part.state.input, { op: "write_document", headSha: data.input.head })
+    if (mutation === "single") {
+      Object.assign(final.part.state.input, { op: "write_document", headSha: data.input.head })
+      events.push({ type: "text", sessionID: "ses_smoke", part: { text: "Document checkpoint staged successfully." } })
+    }
     if (mutation === "missing") events.splice(events.indexOf(final), 1)
     if (mutation === "oversized") {
       const append = events.find((event): event is ReturnType<typeof toolEvent> => "tool" in event.part && (event.part.state.input as { op?: string }).op === "append")!
@@ -336,23 +573,23 @@ test("staging rejects single-call checkpoints, missing finalize, oversized appen
   }
 })
 
-test.each(["url", "local"] as const)("%s checkpoint-failed cleanup passes without success artifacts but rejects verdict calls and held locks", async intake => {
+test.each(["url", "local"] as const)("%s disclosed checkpoint-failed cleanup permits failed verdict calls but still rejects held locks", async intake => {
   const data = await fixture(false, intake, "plain", "disabled")
   const relative = reviewRoot(data.input)
-  const meta = { ...verdictMeta(data.input.head), status: "checkpoint-failed", stage: "document", failed_op: "finalize", part: 0, reason: "incomplete-staging", recoverable: true }
+  const meta = { ...verdictMeta(data.input.head), mode: intake === "local" ? "local" : "pr", status: "checkpoint-failed", stage: "document", failed_op: "finalize", part: 0, reason: "incomplete-staging", recoverable: true }
   const events = data.events.filter(event => {
     if (!("tool" in event.part)) return !("text" in event.part)
     const input = event.part.state.input as { op?: string; headSha?: string }
-    return !(input.op === "finalize" || input.op === "write_candidate" || event.part.tool === "corvus_review_payload"
-      || event.part.tool === "corvus_review_verify" || event.part.tool === "subagent"
-      || event.part.tool === "corvus_review_verdict" && input.headSha)
+    return !(event.part.tool === "corvus_review_verdict" && input.headSha)
   })
+  const failed = events.find((event): event is ReturnType<typeof toolEvent> => "tool" in event.part && (event.part.state.input as { op?: string }).op === "finalize")!
+  failed.part.state.output = JSON.stringify({ ok: false, reason: "incomplete-staging" })
   const metaEvent = events.find((event): event is ReturnType<typeof toolEvent> => "tool" in event.part && (event.part.state.input as { op?: string }).op === "write_meta")!
   Object.assign(metaEvent.part.state.input, { meta })
-  events.push({ type: "text", sessionID: "ses_smoke", part: { text: "Checkpoint failed: finalize part 0 incomplete-staging. Review must be rerun. state_sync: false; skipped pull and push." } })
+  events.push({ type: "text", sessionID: "ses_smoke", part: { text: "Checkpoint failed: finalize part 0 incomplete-staging. Head verdict unavailable; no diagnostic exists. Synthesis counts: Standards: 1; Spec: 1. state_sync: false; skipped pull and push." } })
   for (const file of ["REVIEW_DOCUMENT.md", "verdict.yaml"]) rmSync(join(data.root, data.input.head, file))
-  for (const file of ["candidate.json", "post-request.json"]) rmSync(join(data.root, file), { force: true })
   writeFileSync(join(data.root, data.input.head, "meta.yaml"), dump(meta))
+  metaEvent.part.state.output = JSON.stringify(receipt(data.input.fixture, `${relative}/${data.input.head}/meta.yaml`))
   const save = (items: object[]) => {
     writeFileSync(data.input.jsonl, items.map(event => JSON.stringify(event)).join("\n"))
     const db = new Database(data.input.db!)
@@ -365,8 +602,12 @@ test.each(["url", "local"] as const)("%s checkpoint-failed cleanup passes withou
   expect(result.rows.filter(row => !row.ok)).toEqual([])
   expect(result.rows.find(row => row.check === "document staged")?.detail).toStartWith("N/A-PASS:")
   const verdictCall = toolEvent("corvus_review_verdict", { op: "compute", reviewRoot: relative, headSha: data.input.head }, { ok: false, reason: "not-found" })
-  save([...events.slice(0, -1), verdictCall, events.at(-1)!])
-  expect((await checkReviewArtifacts(data.input)).rows.find(row => row.check === "checkpoint-failed route")).toMatchObject({ ok: false })
+  const releaseIndex = events.findIndex(event => "tool" in event.part && (event.part.state.input as { op?: string }).op === "release")
+  const withVerdict = [...events.slice(0, releaseIndex), verdictCall, ...events.slice(releaseIndex)]
+  const terminal = withVerdict.at(-1)!
+  if ("text" in terminal.part) terminal.part.text += " Head verdict failed: not-found."
+  save(withVerdict)
+  expect((await checkReviewArtifacts(data.input)).rows.filter(row => !row.ok)).toEqual([])
   save(events)
   writeFileSync(join(data.root, "lock.yaml"), "status: active\n")
   expect((await checkReviewArtifacts(data.input)).rows.find(row => row.check === "lock released")).toMatchObject({ ok: false })
@@ -463,6 +704,7 @@ test.each(["url", "branch"] as const)("%s fork sync requires refusal evidence an
   expect(result.rows.filter(row => !row.ok)).toEqual([])
   expect(result.exitCode).toBe(0)
   expect(reviewRoot(data.input)).toBe(".corvus/reviews/pr8")
+  expect(result.rows).toHaveLength(reviewRowCount(data.input))
   expect(result.rows.some(row => ["sync receipt", "state commit scope"].includes(row.check))).toBe(false)
   expect(result.rows.find(row => row.check === "fork bare unchanged")).toMatchObject({ ok: true })
   save(baseline.filter(event => !syncOp(event, "pull")))
@@ -506,7 +748,7 @@ test("v2 marker and filtered gatherer/detector inventories are required", async 
   const data = await fixture()
   const candidate = join(data.root, "candidate.json"), original = readFileSync(candidate, "utf8")
   writeFileSync(candidate, original.replace("corvus-review v2", "corvus-review v1"))
-  expect((await checkReviewArtifacts(data.input)).rows.find(row => row.check === "marker v2")).toMatchObject({ ok: false })
+  expect((await checkReviewArtifacts(data.input)).rows.find(row => row.check === "marker")).toMatchObject({ ok: false })
   writeFileSync(candidate, original)
   for (const agent of ["pr-context-gatherer", "pr-code-reviewer", "security-reviewer"]) {
     const db = new Database(data.input.db!)
@@ -530,6 +772,7 @@ test("review-input.json lines over the read-tool limit fail the gate; chunked lo
   for (let start = 0; start < description.length; start += 1500) chunks.push(description.slice(start, start + 1500))
   writeFileSync(path, JSON.stringify({ pr_number: 8, description_chunks: chunks }, null, 2) + "\n")
   expect(description.length).toBeGreaterThan(2000)
+  refreshWrite(data, "write_input", `${reviewRoot(data.input)}/review-input.json`, { input: { pr_number: 8, description_chunks: chunks } })
   const chunked = await checkReviewArtifacts(data.input)
   expect(chunked.exitCode).toBe(0)
   expect(chunked.rows.find(row => row.check === "review-input lines")).toMatchObject({ ok: true })
@@ -582,7 +825,7 @@ test("tool-owned state rejects missing operations, bad ownership and model write
   expect((await checkReviewArtifacts(data.input)).rows.find(row => row.check === "checkpoint writes")?.ok).toBe(false)
 }, 15_000)
 
-test("R0 verdict requires the orchestrator's history-only call and matching DB result before any review dispatch", async () => {
+test("R0 verdict requires matching history evidence but not ordering before review dispatch", async () => {
   const data = await fixture()
   const baseline = data.events.filter((event): event is ReturnType<typeof toolEvent> => "tool" in event.part)
   const historyIndex = baseline.findIndex(event => event.part.tool === "corvus_review_verdict")
@@ -599,7 +842,7 @@ test("R0 verdict requires the orchestrator's history-only call and matching DB r
     if (mutation === "wrong-call") history.part.callID = "unrecorded"
     if (mutation === "forged-result") history.part.state.output = JSON.stringify({ ...historyVerdict, round: 5 })
     save(events)
-    expect(await row(), mutation).toMatchObject({ ok: false })
+    expect(await row(), mutation).toMatchObject({ ok: mutation === "late" })
   }
   save(baseline)
   const db = new Database(data.input.db!)
@@ -607,7 +850,7 @@ test("R0 verdict requires the orchestrator's history-only call and matching DB r
   seedParent(db, baseline)
   db.run("update part set time_created = -1 where session_id = ? and json_extract(data, '$.tool') = 'task'", ["ses_smoke"])
   db.close()
-  expect(await row()).toMatchObject({ ok: false })
+  expect(await row()).toMatchObject({ ok: true })
 })
 
 test("history refusal continues only with the persisted tool flag and a note in the final summary", async () => {
@@ -623,6 +866,7 @@ test("history refusal continues only with the persisted tool flag and a note in 
   final.part.text += "\nNote: refuse_delta: true — reviewing once with a history-gap note."
   const save = () => {
     writeFileSync(join(data.root, data.input.head, "meta.yaml"), dump(meta))
+    metaEvent.part.state.output = JSON.stringify(receipt(data.input.fixture, `${reviewRoot(data.input)}/${data.input.head}/meta.yaml`))
     writeFileSync(data.input.jsonl, events.map(event => JSON.stringify(event)).join("\n") + "\n")
     const db = new Database(data.input.db!)
     db.run("delete from part where session_id = ?", ["ses_smoke"])
@@ -656,6 +900,7 @@ test("LOCAL fixture passes the whole checker without posting artifacts and rejec
   const baseline = await checkReviewArtifacts(data.input)
   expect(baseline.rows.filter(row => !row.ok)).toEqual([])
   expect(baseline.exitCode).toBe(0)
+  expect(baseline.rows).toHaveLength(reviewRowCount(data.input))
   for (const name of ["tool chain", "SHA-256", "built verify()", "writer denied", "R5 PR transport"]) {
     expect(baseline.rows.some(row => row.check === name)).toBe(false)
   }
@@ -670,7 +915,8 @@ test("LOCAL fixture passes the whole checker without posting artifacts and rejec
     toolEvent("task", { subagent_type: "pr-comment-writer" }, {}, "Subagent denied"),
     toolEvent("corvus_review_post", {}, {}),
     toolEvent("corvus_review_persist", { op: "write_candidate" }, {}),
-    ...["measure", "freeze"].map(op => toolEvent("corvus_review_payload", { op }, {})),
+    toolEvent("corvus_review_persist", { op: "begin", target: "candidate" }, {}),
+    ...["measure", "freeze", "preview"].map(op => toolEvent("corvus_review_payload", { op }, {})),
   ]) {
     save([...data.events, event])
     expect((await checkReviewArtifacts(data.input)).exitCode).toBe(6)
@@ -706,7 +952,7 @@ test("branch fixture requires the fixture PR's DB-matched find result before the
   }
 })
 
-test("R4 verdict rejects missing, stale, late or non-DB results and accepts every recorded decision form", async () => {
+test("R4 verdict rejects missing, stale or non-DB results but permits freeze and decision before computation", async () => {
   const data = await fixture()
   const baseline = data.events.filter((event): event is ReturnType<typeof toolEvent> => "tool" in event.part)
   const headIndex = baseline.findLastIndex(event => event.part.tool === "corvus_review_verdict")
@@ -725,7 +971,7 @@ test("R4 verdict rejects missing, stale, late or non-DB results and accepts ever
     if (mutation === "forged-result") head.part.state.output = JSON.stringify({ ...verdict, converged: true })
     if (mutation === "later-failure") events.splice(headIndex + 1, 0, toolEvent("corvus_review_verdict", head.part.state.input, { ok: false, reason: "invalid-document" }))
     save(events)
-    expect(await row(), mutation).toMatchObject({ ok: false })
+    expect(await row(), mutation).toMatchObject({ ok: mutation === "after-freeze" })
   }
   for (const decision of [
     toolEvent("question", { questions: [] }, {}),
@@ -735,7 +981,7 @@ test("R4 verdict rejects missing, stale, late or non-DB results and accepts ever
     save([...baseline.slice(0, headIndex + 1), decision, ...baseline.slice(headIndex + 2)])
     expect(await row()).toMatchObject({ ok: true })
     save([...baseline.slice(0, headIndex), decision, ...baseline.slice(headIndex)])
-    expect(await row()).toMatchObject({ ok: false })
+    expect(await row()).toMatchObject({ ok: true })
   }
   save(baseline)
   const db = new Database(data.input.db!)
@@ -765,7 +1011,8 @@ test("verdict identity prefers code_head, falls back to headSha and requires bot
     Object.assign(head.part.state.input, identity)
     save(events)
     const checked = await checkReviewArtifacts(data.input)
-    expect(checked.rows.find(row => row.check === "R0 verdict")).toMatchObject({ ok: true })
+    // An identity-less second compute is now the latest history call, but has an invalid history shape (counts).
+    expect(checked.rows.find(row => row.check === "R0 verdict")).toMatchObject({ ok: Object.keys(identity).length > 0 })
     for (const check of ["R4 verdict", "verdict persisted", "verdict document counts"]) {
       expect(checked.rows.find(row => row.check === check), `${check}: ${JSON.stringify(identity)}`).toMatchObject({ ok })
     }
@@ -785,7 +1032,7 @@ test("verdict persisted compares the complete file to the DB tool result and req
   const row = async () => (await checkReviewArtifacts(data.input)).rows.find(row => row.check === "verdict persisted")
   expect(await row()).toMatchObject({ ok: true })
   rmSync(path)
-  expect(await row()).toMatchObject({ ok: false, detail: "missing/invalid verdict.yaml" })
+  expect(await row()).toMatchObject({ ok: false, detail: "forged: successful verdict contradicts verdict.yaml" })
   for (const field of ["ok", "round", "converged", "convergence_reason", "counts", "caps_applied", "refuse_delta", "missing_history", "computed_at"]) {
     const stored: Record<string, unknown> = persistedVerdict()
     delete stored[field]
@@ -808,7 +1055,9 @@ test("verdict persisted compares the complete file to the DB tool result and req
     expect(await row(), mutation).toMatchObject({ ok: false })
   }
   writeFileSync(path, dump(persistedVerdict()))
-  writeFileSync(metaPath, dump({ ...verdictMeta(data.input.head), series_round: 99, series_converged: true, counts: {} }))
+  const nonAuthoritativeMeta = { ...verdictMeta(data.input.head), series_round: 99, series_converged: true, counts: {} }
+  writeFileSync(metaPath, dump(nonAuthoritativeMeta))
+  refreshWrite(data, "write_meta", `${reviewRoot(data.input)}/${data.input.head}/meta.yaml`, { meta: nonAuthoritativeMeta })
   expect(await row()).toMatchObject({ ok: true })
   for (const pointer of [undefined, "other.yaml", "../verdict.yaml"]) {
     writeFileSync(metaPath, dump({ ...verdictMeta(data.input.head), verdict_file: pointer }))
@@ -826,7 +1075,7 @@ test("metadata shows and requires the intake's explicit pr or local mode", async
   for (const intake of ["url", "local"] as const) {
     const data = await fixture(false, intake), mode = intake === "local" ? "local" : "pr"
     const row = async () => (await checkReviewArtifacts(data.input)).rows.find(row => row.check === "metadata")
-    expect(await row()).toMatchObject({ ok: true, detail: expect.stringContaining(`mode=${mode}`) })
+    expect(await row()).toMatchObject({ ok: true, detail: expect.stringContaining("DB, canonical path, digest and owned-lock order agree") })
     for (const invalid of [undefined, "unknown", mode === "pr" ? "local" : "pr"]) {
       writeFileSync(join(data.root, data.input.head, "meta.yaml"), dump({ ...verdictMeta(data.input.head), mode: invalid }))
       expect(await row()).toMatchObject({ ok: false })
@@ -853,6 +1102,7 @@ test("REVIEW_DOCUMENT summary and axis counts cannot disagree with the DB verdic
   }
   const document = reviewDocument()
   writeFileSync(path, `---\n${dump({ REVIEW_DOCUMENT: document })}---\n\n# Review\n`)
+  refreshWrite(data, "finalize", `${reviewRoot(data.input)}/${data.input.head}/REVIEW_DOCUMENT.md`)
   expect(await row()).toMatchObject({ ok: true })
   writeFileSync(path, documentMarkdown(document) + `\n## Duplicate\n\n\`\`\`yaml\n${dump({ REVIEW_DOCUMENT: document })}\`\`\`\n`)
   expect(await row()).toMatchObject({ ok: false })
@@ -995,7 +1245,7 @@ async function v1Fixture(inline = false, intake: Inputs["intake"] = "url", barri
   const agents = join(directory, "agents.json")
   writeFileSync(agents, JSON.stringify({
     name: "corvus-review-auto", native: false, prompt: "# Corvus Review Auto — Autonomous Orchestrator\n",
-    tools: { corvus_review_payload: true, corvus_review_verify: true, corvus_review_post: false,
+    tools: { corvus_review_payload: true, corvus_review_post: true,
       corvus_review_persist: true, corvus_review_lock: true, corvus_review_pr: true, corvus_review_verdict: true, corvus_review_sync: true },
     permission: [
       { permission: "task", pattern: "pr-comment-writer", action: "deny" },
@@ -1078,7 +1328,7 @@ test.each(["denied", "not-exposed"] as const)("non-writer PR gate accepts the %s
   }
 })
 
-test("R4 not-exposed requires measured, DB-matched local-only evidence and rejects any posting preparation or writer dispatch", async () => {
+test("R4 not-exposed requires measured, DB-matched local-only evidence and rejects invalid artifacts or writer dispatch", async () => {
   const { input, root, events: baseline } = await v1Fixture(false, "branch", "not-exposed")
   const actionPath = join(root, input.head, "review-action.yaml"), actionBytes = readFileSync(actionPath)
   const save = (events: object[], stored = events) => {
@@ -1091,7 +1341,7 @@ test("R4 not-exposed requires measured, DB-matched local-only evidence and rejec
   const tool = (events: typeof baseline, op: string) => events.find((event): event is ReturnType<typeof toolEvent> =>
     "tool" in event.part && (event.part.state.input as { op?: string }).op === op)!
   for (const mutation of ["missing-measure", "late-measure", "missing-action", "wrong-decision", "wrong-reason", "missing-rail", "DB-mismatch",
-    "freeze", "verify", "post", "denied-writer", "completed-writer", "DB-only-freeze", "DB-only-writer", "child-writer", "artifact",
+    "freeze", "retired-tool", "post", "denied-writer", "completed-writer", "DB-only-writer", "child-writer", "artifact",
     "missing-no-post-note", "missing-writer-note", "earlier-note", "child-note"]) {
     const events = structuredClone(baseline)
     writeFileSync(actionPath, actionBytes)
@@ -1108,7 +1358,7 @@ test("R4 not-exposed requires measured, DB-matched local-only evidence and rejec
     const forbidden = mutation.includes("writer") && !mutation.includes("note")
       ? toolEvent("task", { subagent_type: "pr-comment-writer" }, {}, mutation === "completed-writer" ? undefined : "Subagent denied")
       : mutation.endsWith("freeze") ? toolEvent("corvus_review_payload", { op: "freeze" }, { ok: true })
-      : mutation === "verify" ? toolEvent("corvus_review_verify", { op: "verify" }, { ok: true })
+      : mutation === "retired-tool" ? toolEvent("corvus_review_verify", { op: "verify" }, { ok: true })
       : mutation === "post" ? toolEvent("corvus_review_post", {}, {}) : undefined
     if (forbidden && !mutation.startsWith("DB-only") && mutation !== "child-writer") events.splice(events.indexOf(action), 0, forbidden)
     if (mutation === "artifact") writeFileSync(join(root, "post-request.json"), "{}")
@@ -1132,7 +1382,8 @@ test("R4 not-exposed requires measured, DB-matched local-only evidence and rejec
     }
     const result = await checkReviewArtifacts(input)
     expect(result.exitCode, mutation).toBe(mutation === "completed-writer" ? 6 : 5)
-    expect(result.rows.find(row => row.check === "writer denied"), mutation).toMatchObject({ ok: false })
+    const check = mutation === "retired-tool" ? "retired tool absent" : mutation === "freeze" ? "tool chain" : "writer denied"
+    expect(result.rows.find(row => row.check === check), mutation).toMatchObject({ ok: false })
     if (mutation === "artifact") rmSync(join(root, "post-request.json"))
     if (mutation === "child-writer") {
       const db = new Database(input.db!)
@@ -1148,6 +1399,28 @@ test("R4 not-exposed requires measured, DB-matched local-only evidence and rejec
   expect(mutation.rows.find(row => row.check === "GitHub barrier")).toMatchObject({ ok: false })
 }, 15_000)
 
+test.each(["inert artifact", "writer dispatch", "post"])("not-exposed route with %s retains integrity checks and forbids delivery", async route => {
+  const data = await fixture(false, "url", "plain", "normal", "not-exposed")
+  const relative = reviewRoot(data.input), opts = { reviewStateRoot: join(data.input.fixture, ".corvus") }
+  const frozen = freeze(join(data.root, "candidate.json"), join(data.root, "post-request.json"), opts)
+  if (!frozen.ok) throw new Error(JSON.stringify(frozen))
+  const action = traceTools(data.events).find(event => (event.part.state.input as { name?: string }).name === "review-action.yaml")!
+  data.events.splice(data.events.indexOf(action), 0,
+    toolEvent("corvus_review_payload", { op: "freeze", candidatePath: `${relative}/candidate.json`, artifactPath: `${relative}/post-request.json` }, frozen),
+    toolEvent("corvus_review_payload", { op: "preview", artifactPath: `${relative}/post-request.json`, expectedSha256: frozen.sha256 }, preview(join(data.root, "post-request.json"), frozen.sha256, opts)))
+  if (route !== "inert artifact") data.events.splice(data.events.indexOf(action), 0, route === "writer dispatch"
+    ? toolEvent("task", { subagent_type: "pr-comment-writer" }, {}, "Subagent denied: pr-comment-writer")
+    : toolEvent("corvus_review_post", { artifactPath: `${relative}/post-request.json`, expectedSha256: frozen.sha256,
+      headSha: data.input.head, repo: { owner: "owner", name: "repo" }, prNumber: 8, event: "COMMENT" }, { outcome: "unknown", reason: "transport-error", tool_api_calls: 2 }))
+  saveTrace(data.input, data.events)
+  const result = await checkReviewArtifacts(data.input)
+  expect(result.exitCode).toBe(route === "inert artifact" ? 0 : 5)
+  expect(result.rows).toHaveLength(reviewRowCount(data.input, frozen.fitted))
+  expect(result.rows.find(row => row.check === "writer denied")).toMatchObject({ ok: route === "inert artifact" })
+  for (const check of ["candidate producer", "SHA-256", "built verify()", "lock released"]) expect(result.rows.find(row => row.check === check)).toMatchObject({ ok: true })
+  if (route === "inert artifact") expect(result.rows.filter(row => !row.ok)).toEqual([])
+})
+
 test("CLI emits one SMOKE_RESULT JSON line with per-check status and the process exit code", async () => {
   const { input, root } = await fixture()
    const args = [input.fixture, input.owner, input.repo, input.pr, input.head, input.jsonl, input.hostlog, input.audit, "--db", input.db!, "--bare", input.bare!, "--branch", input.branch!]
@@ -1155,6 +1428,7 @@ test("CLI emits one SMOKE_RESULT JSON line with per-check status and the process
     const child = Bun.spawn([process.execPath, "run", resolve(import.meta.dirname, "../../scripts/check-review-artifacts.ts"), ...argv], { stdout: "pipe", stderr: "pipe" })
     const [stdout, stderr, exitCode] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited])
     const summaries = stdout.split("\n").filter(line => line.startsWith("SMOKE_RESULT "))
+    // The CLI emits exactly one terminal SMOKE_RESULT record, independent of its row count.
     expect(summaries).toHaveLength(1)
     const summary = JSON.parse(summaries[0].slice("SMOKE_RESULT ".length))
     expect(summary.exitCode).toBe(exitCode)
@@ -1201,8 +1475,8 @@ function seedWriter(db: Database, tools: Array<[string, object, string]>, texts:
 
 /**
  * Writer-execution fixture: a v1 run whose parent dispatched pr-comment-writer after
- * verify and received a completed task result, plus a host DB holding the writer
- * child's real-shaped tool sequence (read → pr.head → pr.diff → verify → post).
+ * freeze and received a completed task result, plus a host DB holding the writer
+ * child's real-shaped tool sequence (read → pr.head → pr.diff → pr.reviews → post).
  * The real post operation uses an injected exec to capture plugin argv and blocked transport.
  */
 async function writerFixture(inline = true, retry = false) {
@@ -1225,7 +1499,8 @@ async function writerFixture(inline = true, retry = false) {
       : { code: 1, stdout: "", stderr: "CORVUS_SMOKE_MUTATION_BLOCKED" }
   } })
   expect(transport).toEqual({ outcome: "unknown", reason: "transport-error", tool_api_calls: retry ? 3 : 2 })
-  const postResult = { status: "local_only", review_url: null, reason: transport.reason, remote_state: "unknown", inline_comments_posted: 0, comments_moved_to_body: 0, api_calls: (inline ? 2 : 1) + transport.tool_api_calls }
+  // API calls: head 1 + optional diff 1 + required marker reviews 2 + post's GET/POST (and optional retry).
+  const postResult = { status: "local_only", review_url: null, reason: transport.reason, remote_state: "unknown", inline_comments_posted: 0, comments_moved_to_body: 0, api_calls: 1 + Number(inline) + 2 + transport.tool_api_calls }
   writerEvent.part.tool = "task"
   writerEvent.part.state = { status: "completed", input: { subagent_type: "pr-comment-writer", description: "Post verified review artifact", prompt: "{...}" },
     metadata: { sessionId: "ses_writer" },
@@ -1235,9 +1510,12 @@ async function writerFixture(inline = true, retry = false) {
   const listing = { ok: true, reviews: [], threads: [], dispositions: [], complete_pagination: true, complete_threads: true, api_calls: 2 }
   const writerIndex = events.indexOf(writerEvent)
   events.splice(writerIndex, 0, prEvent("metadata", { ok: true, headRefOid: input.head, code_head: input.head, baseRefOid: "b".repeat(40), state: "OPEN", isDraft: false, mergeable: "MERGEABLE", api_calls: 1 }), prEvent("reviews", listing))
-  events.splice(events.indexOf(writerEvent) + 1, 0, prEvent("reviews", listing), { type: "tool_use", sessionID: "ses_smoke", part: { tool: "corvus_review_persist",
-    state: { status: "completed", input: { op: "write_meta", reviewRoot: relative, headSha: input.head, meta: { ...verdictMeta(input.head), completion: postResult } }, output: JSON.stringify({ ok: true, path: `${relative}/${input.head}/meta.yaml` }) } } })
-  writeFileSync(join(root, input.head, "meta.yaml"), JSON.stringify({ ...verdictMeta(input.head), completion: postResult, verified_facts: { facts: [], open_questions: [], config_absent_at_base: false } }))
+  events.splice(events.indexOf(writerEvent) + 1, 0, prEvent("reviews", listing))
+  const meta = { ...verdictMeta(input.head), completion: postResult, verified_facts: { facts: [], open_questions: [], config_absent_at_base: false } }
+  writeFileSync(join(root, input.head, "meta.yaml"), dump(meta))
+  const metaEvent = events.find(event => event.part?.state?.input?.op === "write_meta")
+  metaEvent.part.state.input.meta = meta
+  metaEvent.part.state.output = JSON.stringify(receipt(input.fixture, `${relative}/${input.head}/meta.yaml`))
   writeFileSync(input.jsonl, events.map(event => JSON.stringify(event)).join("\n") + "\n")
   const post = `gh api --method POST repos/owner/repo/pulls/8/reviews --input ${relative}/post-request.json`
    const prInput = { owner: "owner", name: "repo", pr: 8 }
@@ -1246,7 +1524,7 @@ async function writerFixture(inline = true, retry = false) {
     ["read", { filePath: join(root, "post-request.json") }, "<content>{...}</content>"],
     ["corvus_review_pr", { op: "head", ...prInput }, JSON.stringify({ ok: true, head_sha: input.head, code_head: input.head, base_sha: "b".repeat(40), api_calls: 1 })],
     ...(inline ? [diffTool] : []),
-    ["corvus_review_verify", { op: "verify", artifactPath: `${relative}/post-request.json`, expectedSha256: digest }, JSON.stringify({ ok: true, sha256Match: true, canonical: true, violations: [], measurements: {} })],
+    ["corvus_review_pr", { op: "reviews", ...prInput }, JSON.stringify(listing)],
     ["corvus_review_post", postInput, JSON.stringify(transport)],
   ]
   const db = join(directory, "opencode.db")
@@ -1283,7 +1561,7 @@ async function writerRepostFixture(count: number, reconcile = true) {
     const id = index === 0 ? "ses_writer" : `ses_writer_${index + 1}`
     const tools = structuredClone(data.childTools)
     tools[1][2] = JSON.stringify({ ...JSON.parse(tools[1][2]), api_calls: index === 0 ? 2 : 1 })
-    tools.splice(3, 0, ["corvus_review_pr", { op: "reviews", ...prInput }, JSON.stringify(listing)])
+    // Per-session API totals: (head 2 then 1) + diff 1 + marker reviews 2 + post 2 = 7 then 6.
     const result = { ...data.postResult, api_calls: index === 0 ? 7 : 6 }
     const event = toolEvent("task", data.writerEvent.part.state.input, result)
     Object.assign(event.part.state, { metadata: { sessionId: id } })
@@ -1308,20 +1586,201 @@ async function writerRepostFixture(count: number, reconcile = true) {
   return { ...data, writers, between, save }
 }
 
+test("failed checkpoint plus failed failure-metadata write is disclosed and still permits writer/post behind the barrier", async () => {
+  const data = await writerFixture()
+  failCheckpoint(data)
+  const metadata = operation(data.events, "corvus_review_persist", "write_meta")
+  Object.assign(metadata.part.state.input, { meta: { ...verdictMeta(data.input.head), status: "checkpoint-failed", stage: "document",
+    failed_op: "finalize", part: 0, reason: "incomplete-staging", recoverable: true } })
+  failMetadata(data)
+  terminalNote(data.events, `Checkpoint-failed: document checkpoint and staging failed: incomplete-staging.\nHead verdict failed: not-found.\nmeta.yaml write_meta failed: metadata-write-error.\nSynthesis counts: Standards: 1; Spec: 1.\n${lastNote(data.events).split("\n").at(-1)}`)
+  saveTrace(data.input, data.events)
+  const result = await checkReviewArtifacts(data.input)
+  expect(result.exitCode).toBe(0)
+  expect(result.rows.filter(row => !row.ok)).toEqual([])
+  for (const check of ["checkpoint-failed route", "checkpoint writes", "metadata", "verdict persisted", "artifacts", "review-state tools"]) {
+    expect(result.rows.find(row => row.check === check)?.detail).toStartWith("N/A-PASS:")
+  }
+  for (const check of ["candidate producer", "writer dispatched", "writer POST attempted", "R5 PR transport", "GitHub barrier", "lock released"]) {
+    expect(result.rows.find(row => row.check === check)).toMatchObject({ ok: true })
+  }
+  expect(result.audit.blocked).toBe(1) // One plugin POST attempt, blocked by the independent shim.
+})
+
+/** Real staged producer and payload operations; only the host transcript/DB is synthesized.
+ * Parts are bounded before persistence, and the saved candidate must equal canonical source bytes.
+ * Negative cases mutate this complete evidence afterwards, never repair it during scoring. */
+async function fittedWriterFixture() {
+  const data = await writerFixture()
+  const relative = reviewRoot(data.input), opts = { reviewStateRoot: join(data.input.fixture, ".corvus") }
+  const candidate: CandidateRequest = {
+    commit_id: data.input.head, event: "COMMENT",
+    body: `<!-- corvus-review v2 path=${relative} head=${data.input.head} round=1 -->\n> Draft PR notice\n## Standards\nStandards headline\n## Spec\nSpec headline\n**minor** (Standards/code-quality, ST-1): detail\n${"Long supporting prose ✓ ".repeat(1400)}`,
+    comments: [
+      { path: Array.from({ length: 64 }, () => '"'.repeat(49)).join("/"), line: 2, side: "RIGHT", start_line: 1, start_side: "RIGHT", body: '"'.repeat(4001) },
+      { path: "x", line: 1, side: "RIGHT", body: "Second inline record stays second" },
+    ],
+  }
+  const startInput = { reviewRoot: relative, target: "candidate", commit_id: candidate.commit_id, event: candidate.event }
+  const started = begin(startInput, opts)
+  if (!started.ok || !("staging_id" in started)) throw new Error(JSON.stringify(started))
+  const staged = [toolEvent("corvus_review_persist", { op: "begin", ...startInput }, started)]
+  const stageString = (field: "body" | "path", text: string, comment?: number, anchor?: object) => {
+    const parts = Math.ceil(text.length / 1800)
+    for (let part = 0; part < parts; part++) {
+      const input = { reviewRoot: relative, staging_id: started.staging_id, field, part, parts, text: text.slice(part * 1800, (part + 1) * 1800),
+        ...(comment === undefined ? {} : { comment }), ...(anchor && part === 0 ? { anchor } : {}) }
+      expect(JSON.stringify({ op: "append", ...input }).length).toBeLessThanOrEqual(6000)
+      const result = append(input, opts)
+      expect(result.ok, JSON.stringify(result)).toBe(true)
+      staged.push(toolEvent("corvus_review_persist", { op: "append", ...input }, result))
+    }
+  }
+  stageString("body", candidate.body)
+  // Stage comments in reverse arrival order: logical indexes, reconstructed strings and scalar anchors govern final order.
+  for (const comment of [1, 0]) {
+    const { path, body, ...anchor } = candidate.comments[comment]
+    stageString("path", path, comment, anchor)
+    stageString("body", body, comment)
+  }
+  const finalInput = { reviewRoot: relative, staging_id: started.staging_id, expected_comments: candidate.comments.length }
+  const finalized = finalize(finalInput, opts)
+  expect(finalized.ok, JSON.stringify(finalized)).toBe(true)
+  staged.push(toolEvent("corvus_review_persist", { op: "finalize", ...finalInput }, finalized))
+  expect(readFileSync(join(data.root, "candidate.json"), "utf8")).toBe(canonicalize(candidate))
+  const producer = operation(data.events, "corvus_review_persist", "write_candidate")
+  data.events.splice(data.events.indexOf(producer), 1, ...staged)
+  const measured = measureFile(join(data.root, "candidate.json"), opts)
+  expect(measured.ok).toBe(false)
+  if (!("violations" in measured)) throw new Error(JSON.stringify(measured))
+  expect(Array.isArray(measured.violations)).toBe(true)
+  expect(measured.violations.length).toBeGreaterThan(0)
+  operation(data.events, "corvus_review_payload", "measure").part.state.output = JSON.stringify(measured)
+  const frozen = freeze(join(data.root, "candidate.json"), join(data.root, "post-request.json"), opts)
+  if (!frozen.ok) throw new Error(JSON.stringify(frozen))
+  expect(frozen.fitted).toBe(true)
+  expect(frozen.omitted.comments).toBe(candidate.comments.length)
+  operation(data.events, "corvus_review_payload", "freeze").part.state.output = JSON.stringify(frozen)
+  const shown = operation(data.events, "corvus_review_payload", "preview")
+  Object.assign(shown.part.state.input, { expectedSha256: frozen.sha256 })
+  shown.part.state.output = JSON.stringify(preview(join(data.root, "post-request.json"), frozen.sha256, opts))
+  expect(JSON.parse(shown.part.state.output)).toMatchObject({ ok: true, comments: [], sha256: frozen.sha256 })
+  Object.assign(data.childTools.find(([name]) => name === "corvus_review_post")![1], { expectedSha256: frozen.sha256 })
+  // Exercise post's own verification against the fitted bytes, not the fixture's earlier unfitted artifact.
+  const pluginCalls: string[][] = []
+  const transport = await postReview({ artifactPath: join(data.root, "post-request.json"), expectedSha256: frozen.sha256,
+    repo: { owner: data.input.owner, name: data.input.repo }, prNumber: Number(data.input.pr), headSha: data.input.head, event: candidate.event },
+  { ...opts, exec: async argv => {
+    pluginCalls.push(argv.slice(1))
+    return argv[3] === "GET" ? { code: 0, stdout: JSON.stringify([[{ sha: data.input.head, commit: { message: "Product change" } }]]), stderr: "" }
+      : { code: 1, stdout: "", stderr: "CORVUS_SMOKE_MUTATION_BLOCKED" }
+  } })
+  expect(transport).toEqual({ outcome: "unknown", reason: "transport-error", tool_api_calls: 2 })
+  data.childTools.find(([name]) => name === "corvus_review_post")![2] = JSON.stringify(transport)
+  writeFileSync(data.input.audit, pluginCalls.map(argv => JSON.stringify({ marker: argv[2] === "POST" ? "CORVUS_SMOKE_MUTATION_BLOCKED" : "CORVUS_SMOKE_GH_FORWARD", argv })).join("\n") + "\n")
+  const omitted = frozen.omitted.comments + frozen.omitted.findings
+  terminalNote(data.events, `${lastNote(data.events)}\nReview limits: ${omitted} findings omitted for size. Full report is local; preview contains the fitted summary and no inline comments.`)
+  const save = () => { data.writeDb(data.childTools); saveTrace(data.input, data.events) }
+  save()
+  return { ...data, staged, frozen, candidate, save }
+}
+
+test("complete staged over-budget candidate → violating measure → fitted freeze → preview → writer/barrier passes with size fit", async () => {
+  const data = await fittedWriterFixture()
+  expect(traceTools(data.events).some(event => (event.part.state.input as { op?: string }).op === "write_candidate")).toBe(false)
+  const result = await checkReviewArtifacts(data.input)
+  expect(result.exitCode).toBe(0)
+  expect(result.rows.filter(row => !row.ok)).toEqual([])
+  // Full PR writer base is 38 + 2 + 5 + 6 = 51; fitted:true adds exactly one size fit row, not one per comment/part.
+  expect(result.rows).toHaveLength(reviewRowCount(data.input, true))
+  expect(result.rows.filter(row => row.check === "size fit")).toHaveLength(1)
+  expect(result.rows.find(row => row.check === "candidate producer")?.detail).toStartWith("finalize=")
+  expect(result.rows.find(row => row.check === "size fit")?.detail).toBe("fitted artifact within limits; empty comments, identity/event, omission footer/terminal count and digest agree")
+  expect(result.audit).toMatchObject({ blocked: 1, unsafe: 0 })
+})
+
+test.each(["missing body part", "missing comment path part", "missing comment body part", "wrong staging id", "wrong final path", "wrong final digest", "comment order"])("staged candidate integrity rejects %s", async mutation => {
+  const data = await fittedWriterFixture()
+  const final = operation(data.events, "corvus_review_persist", "finalize")
+  if (mutation.startsWith("missing")) {
+    const missing = data.staged.find(event => {
+      const input = event.part.state.input as { field?: string; comment?: number; part?: number }
+      return input.part === 1 && (mutation === "missing body part" ? input.comment === undefined
+        : input.comment === 0 && input.field === (mutation === "missing comment path part" ? "path" : "body"))
+    })!
+    data.events.splice(data.events.indexOf(missing), 1)
+  }
+  if (mutation === "wrong staging id") Object.assign(data.staged[1].part.state.input, { staging_id: "candidate:wrong" })
+  if (mutation === "wrong final path") final.part.state.output = JSON.stringify({ ...JSON.parse(final.part.state.output), path: `${reviewRoot(data.input)}/other.json` })
+  if (mutation === "wrong final digest") final.part.state.output = JSON.stringify({ ...JSON.parse(final.part.state.output), sha256: "b".repeat(64) })
+  if (mutation === "comment order") writeFileSync(join(data.root, "candidate.json"), canonicalize({ ...data.candidate, comments: [...data.candidate.comments].reverse() }))
+  data.save()
+  const result = await checkReviewArtifacts(data.input)
+  expect(result.exitCode).toBe(5)
+  const producer = result.rows.find(row => row.check === "candidate producer")
+  expect(producer?.ok).toBe(false)
+  expect(producer?.detail).toMatch(/^forged:/)
+  expect(result.rows.find(row => row.check === "tool chain")).toMatchObject({ ok: false })
+})
+
+test.each(["missing measurements", "invalid violations", "claimed in-budget", "wrong digest"])("fitted chain rejects malformed measurement: %s", async mutation => {
+  const data = await fittedWriterFixture()
+  const event = operation(data.events, "corvus_review_payload", "measure"), output = JSON.parse(event.part.state.output)
+  if (mutation === "missing measurements") delete output.measurements
+  if (mutation === "invalid violations") output.violations = ["too big"]
+  if (mutation === "claimed in-budget") output.ok = true
+  if (mutation === "wrong digest") output.sha256 = "b".repeat(64)
+  event.part.state.output = JSON.stringify(output)
+  data.save()
+  const result = await checkReviewArtifacts(data.input)
+  expect(result.exitCode).toBe(5)
+  expect(result.rows.find(row => row.check === "candidate producer")).toMatchObject({ ok: true })
+  expect(result.rows.find(row => row.check === "tool chain")).toMatchObject({ ok: false })
+  expect(result.rows.find(row => row.check === "size fit")).toMatchObject({ ok: false, detail: expect.stringMatching(/^forged:/) })
+})
+
+test.each(["footer count", "nonempty comments", "silent omissions"])("size fit rejects inconsistent fitted evidence: %s", async mutation => {
+  const data = await fittedWriterFixture()
+  const path = join(data.root, "post-request.json"), payload = JSON.parse(readFileSync(path, "utf8")) as CandidateRequest
+  if (mutation === "footer count") payload.body = payload.body.replace(/Review limits: \d+ findings omitted for size$/, "Review limits: 999 findings omitted for size")
+  if (mutation === "nonempty comments") payload.comments = [{ path: "x", line: 1, side: "RIGHT", body: "Must have been omitted" }]
+  if (mutation === "silent omissions") terminalNote(data.events, lastNote(data.events).split("\nReview limits:")[0])
+  else {
+    // Keep digest, measurements, preview and writer descriptor consistent: only the fitting invariant is wrong.
+    writeFileSync(path, canonicalize(payload))
+    const size = measureFile(path, { reviewStateRoot: join(data.input.fixture, ".corvus") })
+    if (!("sha256" in size)) throw new Error(JSON.stringify(size))
+    Object.assign(data.frozen, { sha256: size.sha256, measurements: size.measurements })
+    operation(data.events, "corvus_review_payload", "freeze").part.state.output = JSON.stringify(data.frozen)
+    const shown = operation(data.events, "corvus_review_payload", "preview")
+    Object.assign(shown.part.state.input, { expectedSha256: size.sha256 })
+    shown.part.state.output = JSON.stringify(preview(path, size.sha256, { reviewStateRoot: join(data.input.fixture, ".corvus") }))
+    Object.assign(data.childTools.find(([name]) => name === "corvus_review_post")![1], { expectedSha256: size.sha256 })
+  }
+  data.save()
+  const result = await checkReviewArtifacts(data.input)
+  expect(result.exitCode).toBe(5)
+  expect(result.rows.find(row => row.check === "SHA-256")).toMatchObject({ ok: true })
+  expect(result.rows.find(row => row.check === "size fit")).toMatchObject({ ok: false,
+    detail: expect.stringMatching(mutation === "silent omissions" ? /^undisclosed:/ : /^forged:/) })
+})
+
 test.each([[2, true, true], [3, true, false], [2, false, false]] as const)("R5 scores %i writer dispatches with reconciliation=%s", async (count, reconcile, ok) => {
   const data = await writerRepostFixture(count, reconcile)
   const result = await checkReviewArtifacts(data.input)
   expect(result.rows.find(row => row.check === "R5 PR transport")).toMatchObject({ ok })
   expect(result.exitCode).toBe(ok ? 0 : 5)
-  expect(result.rows).toHaveLength(50)
+  expect(result.rows).toHaveLength(reviewRowCount(data.input))
   expect(result.audit.blocked).toBe(count)
   if (ok) {
     expect(result.rows.filter(row => !row.ok)).toEqual([])
     const reads = result.rows.find(row => row.check === "writer PR reads")!
-    expect(reads.detail.match(/3 structured PR calls/g)).toHaveLength(2)
+    // Two matched writer sessions, each with head + diff + marker reviews (3 PR calls).
+    expect(reads.detail.match(/3 structured PR calls/g)).toHaveLength(count)
     expect(reads.detail).toContain("reviews=1 (required)")
     const writerResult = result.rows.find(row => row.check === "writer result")!
     expect(writerResult.ok).toBe(true)
+    // Final session totals 1+1+2+2=6; first totals 2+1+2+2=7; aggregate PR 5+4=9 plus POST 2+2=4 gives 13.
     expect(writerResult.detail).toStartWith("final dispatch: status=local_only, remote_state=unknown, review_url=null, api_calls=6")
     expect(writerResult.detail.split("; ").slice(-2)).toEqual([
       "aggregate api_calls=13", "expected Σ(PR+POST)=9+4=13",
@@ -1392,24 +1851,28 @@ test("writer repost requires per-session reads, safe DB counts, final-result tru
   }
 }, 30_000)
 
-test("writer mode requires the writer child's verify → post tool → blocked plugin POST and closed local_only/unknown result", async () => {
+test("writer mode requires head → marker reviews → post tool → blocked plugin POST and closed local_only/unknown result", async () => {
   const data = await writerFixture()
   const { input } = data
   const result = await checkReviewArtifacts(input)
   expect(result.rows.filter(row => !row.ok)).toEqual([])
   expect(result.exitCode).toBe(0)
   const names = result.rows.map(row => row.check)
-  expect(result.rows).toHaveLength(50)
+  expect(result.rows).toHaveLength(reviewRowCount(input))
   expect(names).toContain("writer dispatched")
-  expect(names).toEqual(expect.arrayContaining(["writer verify", "writer POST attempted", "writer shell discipline", "writer result"]))
+  for (const name of ["retired tool absent", "candidate producer", "writer POST attempted", "writer PR reads", "writer shell discipline", "writer result"]) {
+    expect(names).toContain(name)
+  }
   expect(names).not.toContain("writer denied")
   expect(result.rows.find(row => row.check === "plugin loaded")?.ok).toBe(true)
-  expect(result.rows.find(row => row.check === "writer verify")?.detail).toMatch(/ok:true at event 3 \(sha256Match=true, canonical=true\)/)
-  expect(result.rows.find(row => row.check === "writer POST attempted")?.detail).toMatch(/corvus_review_post at event 4 \(after verify 3\); outcome=unknown; shim audit: CORVUS_SMOKE_MUTATION_BLOCKED/)
+  // Leading read=0, head=1, diff=2, required marker reviews=3, post=4 (no separate integrity call).
+  expect(result.rows.find(row => row.check === "writer PR reads")?.detail).toBe("head=1, diff=2, files=unused/missing, reviews=1 (required); post=4; 3 structured PR calls")
+  expect(result.rows.find(row => row.check === "writer POST attempted")?.detail).toMatch(/corvus_review_post at event 4; outcome=unknown; shim audit: CORVUS_SMOKE_MUTATION_BLOCKED/)
   expect(result.rows.find(row => row.check === "writer shell discipline")?.detail).toBe("0 bash call(s): no GitHub shell calls, 0 granted JSON validator(s) (informational); no shell measurement")
-  expect(result.rows.find(row => row.check === "writer result")?.detail).toStartWith("status=local_only, remote_state=unknown, review_url=null, api_calls=4")
+  expect(result.rows.find(row => row.check === "writer result")?.detail).toStartWith("status=local_only, remote_state=unknown, review_url=null, api_calls=6")
   expect(result.rows.find(row => row.check === "R5 PR transport")?.ok).toBe(true)
   expect(result.rows.find(row => row.check === "orchestrator GitHub reads")?.ok).toBe(true)
+  // Audit records: fixture PR read + writer head + diff + post's head GET = 4 forwarded; its POST is blocked once.
   expect(result.audit).toEqual({ forwarded: 4, canned: 0, blocked: 1, unsafe: 0 })
   const row = async (check: string) => (await checkReviewArtifacts(input)).rows.find(item => item.check === check)
 
@@ -1422,7 +1885,7 @@ test("writer mode requires the writer child's verify → post tool → blocked p
   saveRoute(data.events.filter(event => !(event.part?.tool === "corvus_review_pr" && event.part.state.input.op === "reviews")))
   expect(await row("R5 PR transport")).toMatchObject({ ok: false })
   saveRoute(data.events)
-  for (const op of ["head", "diff"]) {
+  for (const op of ["head", "diff", "reviews"]) {
     data.writeDb(data.childTools.filter(([name, args]) => !(name === "corvus_review_pr" && (args as { op?: string }).op === op)))
     expect(await row("writer PR reads")).toMatchObject({ ok: false })
   }
@@ -1477,25 +1940,24 @@ test("writer mode requires the writer child's verify → post tool → blocked p
   data.writerEvent.part.state.status = "error"
   data.writerEvent.part.state.error = "Subagent denied: pr-comment-writer"
   save(data.events)
-  expect((await row("writer dispatched"))?.detail).toContain("without a completed result after verify")
+  expect((await row("writer dispatched"))?.detail).toContain("without a completed result after freeze")
   data.writerEvent.part.state.status = "completed"
   delete data.writerEvent.part.state.error
   save(data.events)
 
-  // Negative: verify missing, ok:false, wrong digest, or errored fails "writer verify".
+  // Negative: a retired tool in the child trace fails both audit gates, even with successful output.
   const without = (name: string) => data.childTools.filter(([tool]) => tool !== name)
-  data.writeDb(without("corvus_review_verify"))
-  expect(await row("writer verify")).toMatchObject({ ok: false, detail: "no corvus_review_verify call by the writer" })
-  data.writeDb(data.childTools.map(([name, toolInput, output]) => name === "corvus_review_verify" ? [name, toolInput, JSON.stringify({ ok: false, reason: "sha256-mismatch" })] : [name, toolInput, output]))
-  expect((await row("writer verify"))?.detail).toContain("without a completed ok:true")
-  data.writeDb(data.childTools.map(([name, toolInput, output]) => name === "corvus_review_verify" ? [name, { ...toolInput, expectedSha256: "b".repeat(64) }, output] : [name, toolInput, output]))
-  expect(await row("writer verify")).toMatchObject({ ok: false })
+  data.writeDb([...data.childTools, ["corvus_review_verify", { op: "verify" }, JSON.stringify({ ok: true })]])
+  expect(await row("retired tool absent")).toMatchObject({ ok: false, detail: expect.stringMatching(/^forged:/) })
+  expect(checkWriterRun({ ...input, digest: data.digest }).rows.find(item => item.check === "retired tool absent")).toMatchObject({ ok: false })
 
-  // Negative: tool absent, before verify, repeated, or with a changed descriptor cannot attest to the approved post.
+  // Negative: tool absent, before head/reviews, repeated, or with a changed descriptor cannot attest to the approved post.
   data.writeDb(without("corvus_review_post"))
   expect(await row("writer POST attempted")).toMatchObject({ ok: false })
   data.writeDb([data.childTools[4], ...data.childTools.slice(0, 4)])
   expect(await row("writer POST attempted")).toMatchObject({ ok: false })
+  data.writeDb([...data.childTools.slice(0, 3), data.childTools[4], data.childTools[3]])
+  expect(await row("writer POST attempted")).toMatchObject({ ok: false, detail: "post lacks ordered writer head/anchor/marker reads" })
   data.writeDb([...data.childTools, data.childTools[4]])
   expect(await row("writer POST attempted")).toMatchObject({ ok: false })
   for (const changed of [{ expectedSha256: "b".repeat(64) }, { artifactPath: "other.json" }, { repo: { owner: "other", name: "repo" } }, { prNumber: 9 }, { headSha: "b".repeat(40) }, { event: "APPROVE" }, { body: "override" }]) {
@@ -1567,6 +2029,7 @@ test("the audit counts canned reads separately, accepts the read-only Accept hea
   ])
   const result = await checkReviewArtifacts(input)
   expect(result.exitCode).toBe(0)
+  // Base audit 4 forwarded/1 blocked plus this case's 1 forwarded diff and 2 canned reads.
   expect(result.audit).toEqual({ forwarded: 5, canned: 2, blocked: 1, unsafe: 0 })
   expect(result.rows.find(row => row.check === "GitHub barrier")?.detail).toBe("5 forwarded reads; 2 canned reads; 1 blocked (informational); 0 unsafe/malformed")
   for (const header of ["Accept: application/vnd.github.v3.diff\nX-HTTP-Method-Override: DELETE", "X-HTTP-Method-Override: DELETE", "Accept: text/html"]) {
@@ -1580,7 +2043,9 @@ test("the audit counts canned reads separately, accepts the read-only Accept hea
 })
 
 test("both writer gates account for body-only, inline, paginated 406 fallback and the tool's bounded retry", async () => {
-  for (const [inline, fallback, retry, expected] of [[false, false, false, 3], [true, false, false, 4], [true, true, false, 6], [true, true, true, 7]] as const) {
+  for (const [inline, fallback, retry] of [[false, false, false], [true, false, false], [true, true, false], [true, true, true]] as const) {
+    // head 1 + mandatory reviews 2 + optional diff 1 + fallback files 2 + post GET/POST 2 + retry 1.
+    const expected = 1 + 2 + Number(inline) + (fallback ? 2 : 0) + 2 + Number(retry)
     const data = await writerFixture(inline, retry)
     const { input } = data
     const tools = [...data.childTools]
@@ -1689,10 +2154,12 @@ test("the direct writer-run checker scores the relay dispatch plus the DB child 
   const result = checkWriterRun(args)
   expect(result.rows.filter(row => !row.ok)).toEqual([])
   expect(result.exitCode).toBe(0)
-  expect(result.rows.map(row => row.check)).toEqual(["JSONL", "host/provider", "fixture artifact", "model state writes", "writer dispatched", "writer verify", "writer POST attempted", "writer PR reads", "writer shell discipline", "writer result"])
-  expect(result.sequence).toHaveLength(5)
-  expect(result.sequence[3]).toBe("3:corvus_review_verify(verify) → completed")
-  expect(result.sequence[4]).toBe("4:corvus_review_post(unknown, tool_api_calls=2) → completed")
+  // Relay inventory: 5 base rows + writer dispatched + 4 execution rows = 10; no R5 transport or on-fit row.
+  expect(result.rows.map(row => row.check)).toEqual(["JSONL", "host/provider", "fixture artifact", "model state writes", "retired tool absent", "writer dispatched", "writer POST attempted", "writer PR reads", "writer shell discipline", "writer result"])
+  // Core head → diff → reviews → post is 4 entries; this fixture adds one leading artifact read.
+  expect(result.sequence).toHaveLength(4 + 1)
+  expect(result.sequence).toEqual(["0:read → completed", "1:corvus_review_pr(head) → completed", "2:corvus_review_pr(diff) → completed",
+    "3:corvus_review_pr(reviews) → completed", "4:corvus_review_post(unknown, tool_api_calls=2) → completed"])
   writeFileSync(stderr, '! agent "pr-comment-writer" is a subagent, not a primary agent. Falling back to default agent\n')
   const fallback = checkWriterRun(args)
   expect(fallback.exitCode).toBe(3)
@@ -1701,7 +2168,7 @@ test("the direct writer-run checker scores the relay dispatch plus the DB child 
   const drift = checkWriterRun({ ...args, digest: "b".repeat(64) })
   expect(drift.exitCode).toBe(4)
   expect(drift.rows.find(row => row.check === "fixture artifact")?.ok).toBe(false)
-  expect(drift.rows.find(row => row.check === "writer verify")?.ok).toBe(false)
+  expect(drift.rows.find(row => row.check === "writer POST attempted")?.ok).toBe(false)
   expect(checkWriterRun({ ...args, db: undefined }).rows.find(row => row.check === "writer dispatched")).toMatchObject({ ok: false, detail: "host DB path not supplied (--db)" })
 })
 
@@ -1714,8 +2181,11 @@ test("head-moved mode requires the post tool's own rejection after the writer's 
   const transport = await postReview({ artifactPath: join(input.fixture, relative, "post-request.json"), expectedSha256: data.digest, repo: { owner: input.owner, name: input.repo }, prNumber: Number(input.pr), headSha: input.head, event: "COMMENT" },
     { reviewStateRoot: join(input.fixture, ".corvus/reviews"), exec: async argv => { pluginCalls.push(argv.slice(1)); return { code: 0, stdout: JSON.stringify([[{ sha: "c".repeat(40), commit: { message: "New product change" } }]]), stderr: "" } } })
   expect(transport).toEqual({ outcome: "rejected", reason: "head-moved", tool_api_calls: 1 })
+  // Only post's independent head GET runs; the moved head prevents any POST.
   expect(pluginCalls).toHaveLength(1)
-  const postResult = { status: "local_only", review_url: null, reason: "head-moved", remote_state: "not_posted", inline_comments_posted: 0, comments_moved_to_body: 0, api_calls: 3 }
+  // Head 1 + diff 1 + marker reviews 2 + post's independent head GET 1 = 5 API calls.
+  const postResult = { status: "local_only", review_url: null, reason: "head-moved", remote_state: "not_posted", inline_comments_posted: 0, comments_moved_to_body: 0, api_calls: 1 + 1 + 2 + 1 }
+  // read=0, head=1, diff=2, marker reviews=3; replace only the post at index 4.
   const tools: Array<[string, object, string]> = [...data.childTools.slice(0, 4), ["corvus_review_post", data.childTools[4][1], JSON.stringify(transport)]]
   const headGet = ["api", "--method", "GET", "repos/owner/repo/pulls/8", "-H", "Accept: application/vnd.github+json", "--jq", ".head.sha"]
   const save = (result: object, audit: object[]) => {
@@ -1734,8 +2204,8 @@ test("head-moved mode requires the post tool's own rejection after the writer's 
   const result = checkWriterRun(args)
   expect(result.rows.filter(row => !row.ok)).toEqual([])
   expect(result.exitCode).toBe(0)
-  expect(result.rows.find(row => row.check === "writer POST attempted")?.detail).toBe("corvus_review_post at event 4 (after verify 3); outcome=rejected head-moved (tool_api_calls=1); shim served pull.moved.json to the tool's head GET; no POST in audit")
-  expect(result.rows.find(row => row.check === "writer result")?.detail).toStartWith('status=local_only, remote_state=not_posted, review_url=null, api_calls=3, reason="head-moved"; expected remote_state=not_posted, api_calls=2+1=3')
+  expect(result.rows.find(row => row.check === "writer POST attempted")?.detail).toBe("corvus_review_post at event 4; outcome=rejected head-moved (tool_api_calls=1); shim served pull.moved.json to the tool's head GET; no POST in audit")
+  expect(result.rows.find(row => row.check === "writer result")?.detail).toStartWith('status=local_only, remote_state=not_posted, review_url=null, api_calls=5, reason="head-moved"; expected remote_state=not_posted, api_calls=4+1=5')
   expect(result.sequence[4]).toBe("4:corvus_review_post(rejected, tool_api_calls=1) → completed")
   const row = (check: string) => checkWriterRun(args).rows.find(item => item.check === check)
   // Negative: the same evidence scored in default (blocked) mode fails — the modes are not interchangeable.

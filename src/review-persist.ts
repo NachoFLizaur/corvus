@@ -71,9 +71,9 @@ const KEYS: Record<Operation, readonly string[]> = {
 }
 const META_NAMES = new Set(["meta.yaml", "decision.yaml", "completion.yaml", "authorization.yaml", "review-action.yaml"])
 const STAGING_KEYS: Record<StagingOperation, readonly string[]> = {
-  begin: ["reviewRoot", "headSha", "target", "expected_sections", "frontmatterYaml"],
-  append: ["reviewRoot", "staging_id", "index", "part", "parts", "heading", "body", "key", "value", "chunk", "path"],
-  finalize: ["reviewRoot", "staging_id", "expected_sections", "expected_keys"],
+  begin: ["reviewRoot", "headSha", "target", "expected_sections", "frontmatterYaml", "commit_id", "event"],
+  append: ["reviewRoot", "staging_id", "index", "part", "parts", "heading", "body", "key", "value", "chunk", "path", "comment", "field", "text", "anchor"],
+  finalize: ["reviewRoot", "staging_id", "expected_sections", "expected_keys", "expected_comments"],
   abort: ["reviewRoot", "staging_id"],
   status: ["reviewRoot", "staging_id"],
 }
@@ -555,9 +555,7 @@ function execute(op: Operation, input: unknown, opts: PersistOptions, metaNames:
         file = "verified_facts.yaml"
         break
       case "write_candidate": {
-        const measured = measure(args.candidate)
-        if ("reason" in measured) return { ok: false, reason: measured.reason }
-        text = measured.canonical
+        text = assembleCandidate(args.candidate)
         file = "candidate.json"
         break
       }
@@ -603,26 +601,70 @@ export function read_document(input: ReadDocumentInput, opts: PersistOptions): R
 }
 
 export type StagingGap = { index?: number; key?: string; parts?: number[] }
-type StagedPart = { index?: number; key?: string; path?: string[]; part: number; parts: number; heading?: string; file: string; bytes: number; sha256: string }
+type CandidateAnchor = Omit<CandidateRequest["comments"][number], "path" | "body">
+type CandidatePart = { comment?: number; field: "path" | "body"; anchor?: CandidateAnchor }
+type StagedPart = Partial<CandidatePart> & { index?: number; key?: string; path?: string[]; part: number; parts: number; heading?: string; file: string; bytes: number; sha256: string }
 type StagingManifest = {
-  staging_id: string; target: "document" | "input"; reviewRoot: string; headSha?: string
+  staging_id: string; target: "document" | "input" | "candidate"; reviewRoot: string; headSha?: string
+  commit_id?: string; event?: CandidateRequest["event"]
   expected_sections?: number; frontmatterYaml?: string; received: StagedPart[]
 }
 export type StagingResult = PersistRejection | {
   ok: true; staging_id: string; replaced_stale?: boolean; received?: StagedPart[]; missing?: StagingGap[]
-} | (Extract<WriteResult, { ok: true }> & { sections?: number; keys?: string[]; parts: number; staged_bytes: number; cleanup_pending?: boolean })
-const STAGING_ID = /^(?:document:([a-f0-9]{40})|input):([a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12})$/
+} | (Extract<WriteResult, { ok: true }> & { sections?: number; keys?: string[]; parts?: number; staged_bytes?: number; cleanup_pending?: boolean })
+const STAGING_ID = /^(?:document:([a-f0-9]{40})|input|candidate):([a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12})$/
 const nonnegative = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value) && value >= 0
 const positive = (value: unknown): value is number => nonnegative(value) && value > 0
-const partIdentity = (part: StagedPart): number | string => part.index ?? part.key!
+const candidateIdentity = (comment: number | undefined, field: "path" | "body"): string => comment === undefined ? field : `comments[${comment}].${field}`
+const partIdentity = (part: StagedPart): number | string => part.field === undefined ? part.index ?? part.key! : candidateIdentity(part.comment, part.field)
 const valueType = (value: JsonValue): string => Array.isArray(value) ? "array" : value === null ? "null" : typeof value
+
+/**
+ * The shared candidate schema is read before either writer mutates its final
+ * target. Both paths use measure's canonical bytes and reject schema failures;
+ * size violations deliberately remain input to freeze, not persistence failures.
+ * No option disables schema validation or routes candidates through input formatting.
+ */
+function assembleCandidate(candidate: unknown): string {
+  const measured = measure(candidate)
+  if ("reason" in measured) fail(measured.reason)
+  return measured.canonical
+}
+
+function candidateHeader(value: Record<string, unknown>): boolean {
+  return !("reason" in measure({ commit_id: value.commit_id, event: value.event, body: "staged", comments: [] }))
+}
+
+/**
+ * Snapshotted append fields (and manifest records on every later read) are the
+ * protocol oracle before part writes or reassembly. Each comment's anchor occurs
+ * exactly on path part 0; numeric comment indexes define final order, independent
+ * of arrival order. Missing/misplaced anchors and non-scalar/unknown anchor fields
+ * reject. Manifest part identities/counts are checked before append: duplicate
+ * candidate parts or changed counts reject, with no bypass. The completed
+ * path/body still undergo normal validation; document/input replacement is unchanged.
+ */
+function candidatePart(value: Record<string, unknown>): CandidatePart {
+  if ((value.field !== "body" && value.field !== "path")
+    || (Object.hasOwn(value, "comment") ? !nonnegative(value.comment) : value.field !== "body")) fail("invalid-arguments")
+  const needsAnchor = value.comment !== undefined && value.field === "path" && value.part === 0
+  if (needsAnchor && !Object.hasOwn(value, "anchor")) fail("incomplete-staging")
+  if (needsAnchor) {
+    if (!isRecord(value.anchor) || Object.keys(value.anchor).some(key => !["line", "side", "start_line", "start_side"].includes(key))
+      || "reason" in measure({ commit_id: "0".repeat(40), event: "COMMENT", body: "staged", comments: [{ ...value.anchor, path: "staged", body: "staged" }] })) fail("invalid-arguments")
+  } else if (Object.hasOwn(value, "anchor")) fail("invalid-arguments")
+  return { field: value.field, ...(value.comment !== undefined ? { comment: value.comment as number } : {}),
+    ...(needsAnchor ? { anchor: value.anchor as CandidateAnchor } : {}) }
+}
 
 /**
  * R17-1 pins append payloads to 6,000 UTF-16 code units, half R2's 12,000-character
  * dispatch cap; this is independent of host token budgets, not a token guarantee.
  * The oracle is body.length or JSON.stringify(value).length, read before any
- * append mutation. Both targets reject excess payloads with their observed length;
- * no option or output-budget setting disables this ceiling.
+ * append mutation. Candidate text uses JSON string encoding, preserving even split
+ * surrogate pairs. All targets reject excess payloads with their observed length;
+ * no option or output-budget setting disables this ceiling. Callers must also keep
+ * the complete serialized arguments (envelope and escaping included) within 6,000.
  */
 function boundedPart(value: JsonValue, document: boolean): string {
   const text = document ? value as string : JSON.stringify(value)
@@ -657,7 +699,7 @@ function stagingLocation(reviewRoot: string, stagingId: unknown, opts: PersistOp
   if (typeof stagingId !== "string") fail("unknown-staging")
   const match = STAGING_ID.exec(stagingId)
   if (!match || match[0] !== stagingId) fail("unknown-staging")
-  const file = match[1] ? `${match[1]}/.staging/document` : ".staging/input"
+  const file = match[1] ? `${match[1]}/.staging/document` : `.staging/${stagingId.split(":")[0]}`
   const directory = stagingDirectory(reviewRoot, file, opts, false)
   return { directory, file }
 }
@@ -722,9 +764,11 @@ function readManifest(reviewRoot: string, stagingId: unknown, opts: PersistOptio
   try { value = snapshot(JSON.parse(fs.readFileSync(path).toString("utf8"))) } catch { fail("unknown-staging") }
   const root = resolveReviewDirectory(reviewRoot, opts.reviewStateRoot, fs, false).path
   if (!isRecord(value) || value.staging_id !== stagingId || value.reviewRoot !== root
-    || (value.target !== "document" && value.target !== "input") || !Array.isArray(value.received)
+    || (value.target !== "document" && value.target !== "input" && value.target !== "candidate") || !Array.isArray(value.received)
     || (value.target === "document" ? !(stagingId as string).startsWith("document:") || value.headSha !== (stagingId as string).split(":")[1]
-      : !(stagingId as string).startsWith("input:") || value.headSha !== undefined)
+      : !(stagingId as string).startsWith(`${value.target}:`) || value.headSha !== undefined)
+    || (value.target === "candidate" ? !candidateHeader(value) || value.expected_sections !== undefined || value.frontmatterYaml !== undefined
+      : value.commit_id !== undefined || value.event !== undefined)
     || (value.expected_sections !== undefined && !positive(value.expected_sections))
     || (value.frontmatterYaml !== undefined && typeof value.frontmatterYaml !== "string")) fail("unknown-staging")
   const seen = new Set<string>()
@@ -733,9 +777,12 @@ function readManifest(reviewRoot: string, stagingId: unknown, opts: PersistOptio
       || !nonnegative(item.bytes) || typeof item.sha256 !== "string" || item.sha256.length !== 64 || !/^[a-f0-9]{64}$/.test(item.sha256)
       || typeof item.file !== "string" || item.file.length !== 41 || !/^[a-f0-9-]{36}\.part$/.test(item.file)
        || (item.path !== undefined && (!Array.isArray(item.path) || !item.path.every(segment => typeof segment === "string")))
-       || (value.target === "document" ? !nonnegative(item.index) || item.key !== undefined || item.path !== undefined
-        || (item.heading !== undefined && typeof item.heading !== "string") : typeof item.key !== "string" || item.index !== undefined)) fail("unknown-staging")
-    const identity = JSON.stringify([item.index ?? item.key, item.part])
+        || (value.target === "candidate" ? ["index", "key", "path", "heading"].some(key => Object.hasOwn(item, key))
+          : ["comment", "field", "anchor"].some(key => Object.hasOwn(item, key))
+            || (value.target === "document" ? !nonnegative(item.index) || item.key !== undefined || item.path !== undefined
+              || (item.heading !== undefined && typeof item.heading !== "string") : typeof item.key !== "string" || item.index !== undefined))) fail("unknown-staging")
+    if (value.target === "candidate") candidatePart(item)
+    const identity = JSON.stringify([partIdentity(item as StagedPart), item.part])
     if (seen.has(identity)) fail("unknown-staging")
     seen.add(identity)
   }
@@ -836,20 +883,22 @@ function executeStaging(op: StagingOperation, input: unknown, opts: PersistOptio
     if (!isRecord(args) || typeof args.reviewRoot !== "string" || Object.keys(args).some(key => !STAGING_KEYS[op].includes(key))) fail("invalid-arguments")
     const fs = stagingFs(opts)
     if (op === "begin") {
-      if (args.target !== "document" && args.target !== "input") fail("invalid-arguments")
+      if (args.target !== "document" && args.target !== "input" && args.target !== "candidate") fail("invalid-arguments")
       if (args.target === "document" && (typeof args.headSha !== "string" || args.headSha.length !== 40 || !/^[a-f0-9]{40}$/.test(args.headSha))) fail("invalid-head-sha")
-      if (args.target === "input" && (Object.hasOwn(args, "headSha") || Object.hasOwn(args, "expected_sections") || Object.hasOwn(args, "frontmatterYaml"))) fail("invalid-arguments")
+      if (args.target !== "document" && (Object.hasOwn(args, "headSha") || Object.hasOwn(args, "expected_sections") || Object.hasOwn(args, "frontmatterYaml"))) fail("invalid-arguments")
+      if (args.target === "candidate" ? !candidateHeader(args) : Object.hasOwn(args, "commit_id") || Object.hasOwn(args, "event")) fail("invalid-arguments")
       if (args.expected_sections !== undefined && !positive(args.expected_sections)) fail("invalid-arguments")
       if (args.frontmatterYaml !== undefined && typeof args.frontmatterYaml !== "string") fail("invalid-arguments")
       const root = resolveReviewDirectory(args.reviewRoot, opts.reviewStateRoot, fs, true).path
-      const file = args.target === "document" ? `${args.headSha}/.staging/document` : ".staging/input"
+      const file = args.target === "document" ? `${args.headSha}/.staging/document` : `.staging/${args.target}`
       let replaced_stale = false
       try {
         const prior = stagingDirectory(args.reviewRoot, file, opts, false)
         fs.rmSync(prior, { recursive: true, force: true }); replaced_stale = true
       } catch (error) { if (!missing(error) && !(error instanceof ReviewDirectoryError && error.reason === "not-found")) throw error }
-      const staging_id = `${args.target === "document" ? `document:${args.headSha}` : "input"}:${randomUUID()}`
+      const staging_id = `${args.target === "document" ? `document:${args.headSha}` : args.target}:${randomUUID()}`
       const manifest: StagingManifest = { staging_id, target: args.target, reviewRoot: root, received: [],
+        ...(args.target === "candidate" ? { commit_id: args.commit_id as string, event: args.event as CandidateRequest["event"] } : {}),
         ...(args.target === "document" ? { headSha: args.headSha as string, expected_sections: args.expected_sections as number | undefined, frontmatterYaml: args.frontmatterYaml as string | undefined } : {}) }
       stageWrite(args.reviewRoot, `${file}/manifest.json`, JSON.stringify(manifest), opts)
       return { ok: true, staging_id, replaced_stale }
@@ -861,27 +910,36 @@ function executeStaging(op: StagingOperation, input: unknown, opts: PersistOptio
     }
     const { manifest, directory, file } = loaded
     const document = manifest.target === "document"
+    const candidate = manifest.target === "candidate"
     if (op === "abort") { fs.rmSync(directory, { recursive: true, force: true }); return { ok: true, staging_id: manifest.staging_id } }
     if (op === "append") {
       const part = args.part ?? 0, parts = args.parts ?? 1
       if (!nonnegative(part) || !positive(parts) || part >= parts) fail("invalid-arguments")
+      let candidateFields: CandidatePart | undefined
+      if (candidate) {
+        if (!nonnegative(args.part) || !positive(args.parts) || typeof args.text !== "string"
+          || ["index", "heading", "body", "key", "value", "chunk", "path"].some(key => Object.hasOwn(args, key))) fail("invalid-arguments")
+        candidateFields = candidatePart(args)
+      } else if (["comment", "field", "text", "anchor"].some(key => Object.hasOwn(args, key))) fail("invalid-arguments")
       if (args.path !== undefined && (!Array.isArray(args.path) || !args.path.every(segment => typeof segment === "string") || typeof args.chunk !== "string" || Object.hasOwn(args, "value"))) fail("invalid-arguments")
-      if (document ? !nonnegative(args.index) || typeof args.body !== "string" || ["key", "value", "chunk", "path"].some(key => Object.hasOwn(args, key))
+      if (!candidate && (document ? !nonnegative(args.index) || typeof args.body !== "string" || ["key", "value", "chunk", "path"].some(key => Object.hasOwn(args, key))
         || (args.heading !== undefined && typeof args.heading !== "string")
         : typeof args.key !== "string" || ["index", "body", "heading"].some(key => Object.hasOwn(args, key))
-        || Object.hasOwn(args, "value") === Object.hasOwn(args, "chunk")) fail("invalid-arguments")
-      const value = (document ? args.body : Object.hasOwn(args, "value") ? args.value : args.chunk) as JsonValue
+        || Object.hasOwn(args, "value") === Object.hasOwn(args, "chunk"))) fail("invalid-arguments")
+      const value = (candidate ? args.text : document ? args.body : Object.hasOwn(args, "value") ? args.value : args.chunk) as JsonValue
       const text = boundedPart(value, document)
-      const identity = (document ? args.index : args.key) as number | string
+      const identity = candidateFields ? candidateIdentity(candidateFields.comment, candidateFields.field) : (document ? args.index : args.key) as number | string
       const siblings = manifest.received.filter(item => partIdentity(item) === identity)
       if (siblings.some(item => item.parts !== parts)) fail("part-count-conflict")
+      // Candidate parts are immutable: duplicate indexes reject before any write.
+      if (candidate && siblings.some(item => item.part === part)) fail("incomplete-staging")
       const others = siblings.filter(item => item.part !== part)
       const heading = args.heading as string | undefined ?? (part === 0 ? "" : undefined)
       if (document && heading !== undefined && others.some(item => item.heading !== undefined && item.heading !== heading)) fail("heading-conflict")
-      const record: StagedPart = { ...(document ? { index: args.index as number, ...(heading !== undefined ? { heading } : {}) } : { key: args.key as string }),
+      const record: StagedPart = { ...(candidateFields ?? (document ? { index: args.index as number, ...(heading !== undefined ? { heading } : {}) } : { key: args.key as string })),
         ...(args.path !== undefined ? { path: args.path as string[] } : {}),
         part, parts, file: `${randomUUID()}.part`, bytes: Buffer.byteLength(text, "utf8"), sha256: digest(Buffer.from(text, "utf8")) }
-      if (!document) {
+      if (!document && !candidate) {
         const items = [...others, record].sort((a, b) => a.part - b.part)
         const merged = mergeInputParts(items, items.map(item => item === record ? value : readPart(args.reviewRoot as string, file, item, false, opts)), parts === 1)
         const entries: Array<[string, JsonValue]> = [[args.key as string, merged]]
@@ -905,7 +963,14 @@ function executeStaging(op: StagingOperation, input: unknown, opts: PersistOptio
       return { ok: true, staging_id: manifest.staging_id, received: [record] }
     }
     let expected: Array<number | string>
-    if (document) {
+    if (!candidate && Object.hasOwn(args, "expected_comments")) fail("invalid-arguments")
+    if (candidate) {
+      if (Object.hasOwn(args, "expected_sections") || Object.hasOwn(args, "expected_keys")
+        || (op === "finalize" && !nonnegative(args.expected_comments))) fail("invalid-arguments")
+      const count = op === "finalize" ? args.expected_comments as number
+        : manifest.received.reduce((total, item) => Math.max(total, (item.comment ?? -1) + 1), 0)
+      expected = ["body", ...Array.from({ length: count }, (_, comment) => [candidateIdentity(comment, "path"), candidateIdentity(comment, "body")]).flat()]
+    } else if (document) {
       if (Object.hasOwn(args, "expected_keys")) fail("invalid-arguments")
       const count = args.expected_sections ?? manifest.expected_sections
       if (op === "finalize" && !positive(count)) fail("invalid-arguments")
@@ -935,13 +1000,21 @@ function executeStaging(op: StagingOperation, input: unknown, opts: PersistOptio
       if (items.some(item => item.parts !== items[0].parts)) fail("part-count-conflict")
       if (document && items.some(item => item.heading !== undefined && item.heading !== items[0].heading)) fail("heading-conflict")
       const values = items.map(item => readPart(args.reviewRoot as string, file, item, document, opts))
+      if (candidate) {
+        if (!values.every(value => typeof value === "string")) fail("part-type-conflict")
+        return (values as string[]).join("")
+      }
       return document ? { heading: items[0].heading!, body: (values as string[]).join("") } : mergeInputParts(items, values, items[0].parts === 1)
     })
-    const text = document ? assembleDocument({ reviewRoot: args.reviewRoot, headSha: manifest.headSha!, sections: assembled as DocumentSection[],
+    const text = candidate ? assembleCandidate({ commit_id: manifest.commit_id, event: manifest.event, body: assembled[0],
+      comments: Array.from({ length: args.expected_comments as number }, (_, comment) => ({
+        ...manifest.received.find(item => item.comment === comment && item.field === "path" && item.part === 0)!.anchor,
+        path: assembled[1 + comment * 2], body: assembled[2 + comment * 2],
+      })) }) : document ? assembleDocument({ reviewRoot: args.reviewRoot, headSha: manifest.headSha!, sections: assembled as DocumentSection[],
       ...(manifest.frontmatterYaml !== undefined ? { frontmatterYaml: manifest.frontmatterYaml } : {}) })
       : assembleInput(Object.fromEntries(expected.map((key, index) => [key, assembled[index]])) as JsonValue)
     if (Buffer.from(text, "utf8").toString("utf8") !== text) fail("encoding-error")
-    const path = targetPath(args.reviewRoot, document ? `${manifest.headSha}/REVIEW_DOCUMENT.md` : "review-input.json", opts, true)
+    const path = targetPath(args.reviewRoot, candidate ? "candidate.json" : document ? `${manifest.headSha}/REVIEW_DOCUMENT.md` : "review-input.json", opts, true)
     const completed = resolve(dirname(directory), `.completed-${randomUUID()}`)
     fs.renameSync(directory, completed)
     const result = installVerified(path, text, fs, completed)
@@ -951,6 +1024,7 @@ function executeStaging(op: StagingOperation, input: unknown, opts: PersistOptio
     }
     let cleanup_pending = false
     try { fs.rmSync(completed, { recursive: true, force: true }) } catch { cleanup_pending = true }
+    if (candidate) return { ...result, ...(cleanup_pending ? { cleanup_pending } : {}) }
     return { ...result, ...(document ? { sections: expected.length } : { keys: expected as string[] }), parts: manifest.received.length,
       staged_bytes: manifest.received.reduce((total, item) => total + item.bytes, 0), ...(cleanup_pending ? { cleanup_pending } : {}) }
   } catch (error) {

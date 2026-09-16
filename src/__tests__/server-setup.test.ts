@@ -105,7 +105,8 @@ describe("plugin.server", () => {
 
     expect(Object.keys(hooks).sort()).toEqual(Object.keys(legacyHooks).sort())
     expect(typeof hooks.config).toBe("function")
-    expect(Object.keys(hooks.tool ?? {}).sort()).toEqual(["corvus_review_lock", "corvus_review_payload", "corvus_review_persist", "corvus_review_post", "corvus_review_pr", "corvus_review_sync", "corvus_review_verdict", "corvus_review_verify"])
+    expect(Object.keys(hooks.tool ?? {}).sort()).toEqual(["corvus_review_lock", "corvus_review_payload", "corvus_review_persist", "corvus_review_post", "corvus_review_pr", "corvus_review_sync", "corvus_review_verdict"])
+    expect(hooks.tool).not.toHaveProperty("corvus_review_verify")
     expect(Object.keys(legacyHooks.tool).sort()).toEqual(Object.keys(hooks.tool ?? {}).sort())
   })
 })
@@ -118,7 +119,7 @@ describe("plugin.setup", () => {
       const orchestrators = ["corvus-review", "corvus-review-auto"]
       const policies = [
         { name: "corvus_review_payload", allowed: orchestrators, args: { op: "measure", candidatePath: "" } },
-        { name: "corvus_review_verify", allowed: [...orchestrators, "pr-comment-writer"], args: { op: "verify", artifactPath: "", expectedSha256: "0".repeat(64) } },
+        { name: "corvus_review_payload", allowed: orchestrators, args: { op: "preview", artifactPath: "", expectedSha256: "0".repeat(64) } },
         { name: "corvus_review_post", allowed: ["pr-comment-writer"], args: {} },
         { name: "corvus_review_persist", allowed: orchestrators, args: { op: "write_candidate", reviewRoot: "" } },
         { name: "corvus_review_lock", allowed: orchestrators, args: { op: "acquire", reviewRoot: "" } },
@@ -169,7 +170,7 @@ describe("plugin.setup", () => {
     expect([...fake.commands.keys()].sort()).toEqual(COMMANDS)
     expect(fake.skills.size).toBe(18)
     expect([...fake.mcp.keys()]).toEqual(["web-research"])
-    expect([...fake.tools.keys()]).toEqual(["corvus_review_payload", "corvus_review_verify", "corvus_review_post", "corvus_review_persist", "corvus_review_lock", "corvus_review_pr", "corvus_review_verdict", "corvus_review_sync"])
+    expect([...fake.tools.keys()]).toEqual(["corvus_review_payload", "corvus_review_post", "corvus_review_persist", "corvus_review_lock", "corvus_review_pr", "corvus_review_verdict", "corvus_review_sync"])
     for (const tool of fake.tools.values()) {
       expect(tool.options).toEqual({ codemode: false })
       expect(tool.input).toMatchObject({ type: "object", additionalProperties: ["corvus_review_persist", "corvus_review_lock", "corvus_review_pr"].includes(tool.name) })
@@ -179,10 +180,18 @@ describe("plugin.setup", () => {
       expect(tool.input).not.toHaveProperty("properties.reviewStateRoot")
     }
     expect(fake.tools.get("corvus_review_payload")!.input).toMatchObject({
-      properties: { op: { enum: ["measure", "freeze"] } },
-      required: ["op", "candidatePath"],
+      properties: {
+        op: { enum: ["measure", "freeze", "preview"] },
+        candidatePath: { type: "string", minLength: 1 },
+        artifactPath: { type: "string", minLength: 1 },
+        expectedSha256: { type: "string", pattern: "^[a-f0-9]{64}$" },
+      },
+      required: ["op"],
     })
-    expect(fake.tools.get("corvus_review_verify")!.input).toMatchObject({ properties: { op: { const: "verify" } } })
+    expect(fake.tools.get("corvus_review_payload")!.description).toContain("Freeze fits over-budget candidates mechanically")
+    expect(fake.tools.get("corvus_review_payload")!.description).toContain("preview(artifactPath, expectedSha256)")
+    expect(fake.tools.get("corvus_review_payload")!.description).toContain("JSON-decoded frozen artifact")
+    expect(fake.tools.has("corvus_review_verify")).toBe(false)
     for (const [name, ops, required] of [
       ["corvus_review_persist", ["write_document", "write_input", "write_meta", "write_candidate", "read_document", "write_facts", "read_facts", "begin", "append", "finalize", "abort", "status"], ["op", "reviewRoot"]],
       ["corvus_review_lock", ["acquire", "release", "status"], ["op", "reviewRoot"]],
@@ -199,8 +208,18 @@ describe("plugin.setup", () => {
     expect(fake.tools.get("corvus_review_pr")!.description).toContain("find takes optional cwd/branch")
     expect(fake.tools.get("corvus_review_pr")!.description).toContain("local takes optional cwd/base")
     expect(fake.tools.get("corvus_review_persist")!.input).toMatchObject({
-      properties: { facts: { type: "object", additionalProperties: true }, name: { type: "string" } },
+      properties: {
+        facts: { type: "object", additionalProperties: true }, name: { type: "string" },
+        target: { enum: ["document", "input", "candidate"], description: expect.stringContaining("zero-based part/parts with a fixed parts count") },
+        commit_id: { type: "string", pattern: "^[a-f0-9]{40}$" },
+        event: { enum: ["APPROVE", "REQUEST_CHANGES", "COMMENT"] },
+        comment: { type: "integer", minimum: 0 }, field: { enum: ["path", "body"] },
+        text: { type: "string", description: expect.stringContaining("complete JSON-serialized append arguments <=6,000") },
+        anchor: { additionalProperties: false, required: ["line", "side"], description: expect.stringContaining("exactly on comment path part 0") },
+        expected_comments: { type: "integer", minimum: 0 },
+      },
     })
+    expect(fake.tools.get("corvus_review_persist")!.description).toContain("target: document|input|candidate")
     expect(postInput).toEqual({
       type: "object",
       properties: {
@@ -257,7 +276,7 @@ describe("plugin.setup", () => {
     expect(fake.commands.size).toBe(4)
     expect(fake.skills.size).toBe(18)
     expect(fake.mcp.size).toBe(1)
-    expect(fake.tools.size).toBe(8)
+    expect(fake.tools.size).toBe(7)
   })
 
   test.each(["tool.transform", "mcp.transform"])("unwinds earlier cleanups in reverse when %s throws", async (failAt) => {

@@ -31,12 +31,12 @@ R2 assigns collision-free dimension/axis IDs and leaves suppression false. Origi
 | base_sha, head_sha, code_head; branch, default_branch, merge_base, dirty | Lowercase 40-hex OIDs: head_sha is observed tip, code_head is newest non-review-state commit from pr.metadata/head/local and review identity; LOCAL base_sha = merge_base, with branch (string or null if detached), default_branch, merge_base and dirty from `pr.local`; these four local-only fields are null in PR |
 | review_root, remote, task; legacy_root? | sync.resolve root and remote strings, task string or null, optional read-only legacy root; see [state layouts](state.md#namespace-and-lock) |
 | base_branch, head_branch, author, title; labels, reviewers_requested, linked_issues | Evidence strings; string lists respectively |
-| description; self_review | Complete PR description verbatim from metadata.body, including an empty string; null only when unavailable (distinguished in rail_inputs); true, false, or unknown respectively |
-| state, is_merged, is_draft, mergeable | open/closed/merged; booleans; mergeable may be null |
+| description; self_review | Complete PR description verbatim from metadata.body, including an empty string; null only when unavailable (distinguished in rail_inputs); self_review is true, false, or unknown evidence for notices, not an action cap |
+| state, is_merged, is_draft, mergeable | open/closed/merged; booleans; mergeable may be null; draft/merged are notice evidence, with CLOSED/MERGED still excluding delivery at R5 |
 | ci_status, ci_checks | pass/fail/pending/none; list of `{name, status: pass|fail|pending, url}` |
 | files_changed, additions, deletions, changed_files | Non-negative counts, path list |
 | flags | Boolean is_large_pr, missing_description, has_ci_failures, is_draft, has_breaking_labels |
-| rail_inputs | identity_trust, config_trust, is_draft, is_merged, self_review and triage records, each `{value, evidence}`; unavailable values explicit unknown |
+| rail_inputs | identity_trust, config_trust, is_draft, is_merged, self_review and triage records, each `{value, evidence}`; unavailable values explicit unknown; state/identity records supply notices, not action caps |
 | prior_corvus_review | Always `{review_id: integer|null, reviewed_head_sha: lowercase 40-hex|null, url: string|null, review_series_round: positive integer|null, dispositions: [<PriorReviewDisposition>]}` |
 | verified_facts_path, verified_facts | Validated series path and knowledge object from [state](state.md); unavailable metadata fields use schema-empty values with explicit rail_inputs gaps, never confirmed absence |
 | config, config_provenance | [Configuration](config.md) |
@@ -116,7 +116,7 @@ REVIEW_DOCUMENT:
   reviewability: "complete | partial | skipped | failed"
   verdict: "converged | not_converged"
   coverage_warning: <derived string or null>
-  state_notices: [<derived notices>]
+  state_notices: [<informational notices: draft_pr when is_draft true; self_review when self_review true; identity_unknown when login/self_review unknown>]
   summary:
     title: "<non-empty neutral assessment>"
     body: "<rendered summary with separate axis groups>"
@@ -124,13 +124,13 @@ REVIEW_DOCUMENT:
     by_axis:
       standards: {stats: <Stats>, key_concern: "<axis-local concern or none>", assessment: "<text>"}
       spec: {stats: <Stats>, key_concern: "<axis-local concern, none, or no spec available>", assessment: "<text>"}
-  action: "APPROVE | REQUEST_CHANGES | COMMENT_ONLY"
-  action_reasoning: "<non-empty controlling layer/cap>"
+  action: "APPROVE | REQUEST_CHANGES | COMMENT_ONLY" # default_action/trusted override under shared delivery/coverage precedence; state notices do not select the event
+  action_reasoning: "<non-empty controlling layer: delivery, coverage caps, trusted override or configured action>"
   findings: [<Finding, Standards group then Spec group>]
   inline_comments: [<InlineComment>]
   review_body: "<full rendered Markdown, marker first>"
-  overflow: <boolean; true when size overflow changed presentation>
-  overflow_log: [<{finding_id, axis, operation: collapsed|counted, original_body: string}>]
+  overflow: <boolean; compatibility field, false for new synthesis; freeze fits mechanically>
+  overflow_log: [<{finding_id, axis, operation: collapsed|counted, original_body: string}>] # compatibility field; [] for new synthesis, preserve prior audits on resume
   dedup_log: [<DedupEntry>]
   filtered_log: [<FilterEntry>]
   edit_history: [<EditEntry>]
@@ -145,16 +145,16 @@ FilterEntry is `{finding_id, axis, dimension, reason, details}`; reasons: exact_
 
 ```yaml
 REVIEW_ACTION:
-  decision: "post | edit | local_only | rerun | auto_post"
+  decision: "post | edit | local_only | rerun | auto_post" # authorization/route, separate from action and state_notices
   decision_reason: "<non-empty>"
-  rails_applied: ["<rail/cap names in precedence order>"]
+  rails_applied: ["<delivery/coverage/override/configured-action rails in precedence order; size_fit when fitted>"]
   edits: [<EditEntry>]
   rerun_scope: ["<dimension name>"]
 ```
 
 ## POST_REQUEST and POST_RESULT — R5/Writer
 
-POST_REQUEST is the API-ready JSON shape, not a dispatch envelope: `corvus_review_persist` op `write_candidate` produces candidate.json at R3 and each overflow/relocation revision; R4 freezes post-request.json only after authorization, under [state](state.md#freeze-at-r4). Closed fields and key order:
+POST_REQUEST is the API-ready JSON shape, not a dispatch envelope: `corvus_review_persist` produces candidate.json at R3 and each presentation revision via `write_candidate` or staged target `candidate` under [Persist at R3](state.md#persist-at-r3). R4 freezes post-request.json before the `preview` op and authorization under [Freeze at R4](state.md#freeze-at-r4). Closed fields and key order:
 
 ```yaml
 POST_REQUEST:
@@ -167,18 +167,18 @@ POST_REQUEST:
 
 Multi-line comments include paired `start_line` and `start_side` before body; omit both for single-line comments. No wrapper, schema_version, repository, changed_files, or internal identity keys enter the JSON file. Preserve axis/dimension/ID in rendered strings and the full local document.
 
-The tool serializes in the listed key order as UTF-8 JSON, two-space indentation, LF line endings, no BOM, and one final LF (equivalent to `JSON.stringify(payload, null, 2) + "\n"`). Preserve decoded strings exactly and array order (Standards then Spec); escape strings as JSON data, never shell text. Map APPROVE→APPROVE, REQUEST_CHANGES→REQUEST_CHANGES, COMMENT_ONLY→COMMENT; commit_id is PR_CONTEXT.code_head, body is exact review_body, comments map exact inline_comments with only the API keys above.
+The tool serializes in the listed key order as UTF-8 JSON, two-space indentation, LF line endings, no BOM, and one final LF (equivalent to `JSON.stringify(payload, null, 2) + "\n"`). Candidate mapping preserves decoded strings and array order (Standards then Spec); escape strings as JSON data, never shell text. Map the configured/override action APPROVE→APPROVE, REQUEST_CHANGES→REQUEST_CHANGES, COMMENT_ONLY→COMMENT; commit_id is PR_CONTEXT.code_head, body is exact review_body, comments map exact inline_comments with only the API keys above. Freeze may fit the presentation, preserving commit_id/event; authorization binds its previewed artifact, not the candidate.
 
-<!-- Size invariant: decoded bodies and canonical serialization are checked at R3 measurement before R4 writes and R5 dispatch. Overflow returns to R3 for a concise summary, not a delivery veto. No config, approval, resume or empty comments disables tool limits; the Delivery Principle governs recovery. -->
-Posting-size limits are owned by `corvus_review_payload` (`LIMITS`), reported with violations in its results alongside measurements in code points and UTF-8 bytes. Local source findings and overflow_log retain full text outside the posting budget. Use [R3 overflow](../corvus-review-r3/SKILL.md#size-overflow) before authorization, never writer-side trimming.
+<!-- Size invariant: decoded bodies and canonical serialization are checked at R3 measurement, then fitted/measured by freeze before artifact writes and preview/authorization. Schema-valid size violations proceed to fitting, never a delivery veto. No config, approval, resume or empty comments disables tool limits; the Delivery Principle governs other failures. -->
+Posting-size limits are owned by `corvus_review_payload` (`LIMITS`), reported with measurements/violations in code points and UTF-8 bytes. Local source findings retain full text outside the posting budget; overflow/overflow_log are compatibility fields. Under [Freeze at R4](state.md#freeze-at-r4), fitting happens in freeze before preview; the writer never trims. `fitted`/`omitted` and `size_fit` bind to the artifact digest.
 
 R5 sends only the closed POST_ARTIFACT descriptor below. The writer carries these field sets inline because it has no skill access:
 | Object | Fields / mapping |
 |--------|------------------|
 | POST_ARTIFACT | artifact_path: `<PR_CONTEXT.review_root>/post-request.json`; expected_sha256: 64 lowercase hex digits (SHA-256 of exact persisted bytes); repository: {owner: validated owner, name: validated repository}; pr_number: positive safe integer; head_sha: PR_CONTEXT.code_head; event: APPROVE/REQUEST_CHANGES/COMMENT |
-| POST_RESULT | Writer maps TransportResult via [step 7](../../agent/pr-comment-writer.md#7-map-remote-truth) into the closed shape below: posted → posted/posted; rejected → local_only/not_posted with HTTP status in reason when supplied; unknown → local_only/unknown. Transport fields never become extra POST_RESULT keys |
+| POST_RESULT | Writer maps TransportResult via [step 6](../../agent/pr-comment-writer.md#6-map-remote-truth) into the closed shape below: posted → posted/posted; rejected → local_only/not_posted with HTTP status in reason when supplied; unknown → local_only/unknown. Local artifact rejections use not_posted/verify below; transport fields never become extra POST_RESULT keys |
 
-Derive artifact_path from PR_CONTEXT.review_root, never review text: `.corvus/reviews/pr<pr_number>/post-request.json` or `.corvus/tasks/<task>/reviews/pr<pr_number>/post-request.json`; task is one `[A-Za-z0-9._-]+` segment excluding dot/dot-dot. The digest stays in the descriptor, not its hashed file. Tool arguments map artifact_path→artifactPath and expected_sha256→expectedSha256; post additionally maps repository→repo, pr_number→prNumber, head_sha→headSha, event unchanged; freeze returns sha256. Permission globs do not normalize paths: reject traversal, extra segments, shell decoration, or inequality to the resolved-root path before tools.
+Derive artifact_path from PR_CONTEXT.review_root, never review text: `.corvus/reviews/pr<pr_number>/post-request.json` or `.corvus/tasks/<task>/reviews/pr<pr_number>/post-request.json`; task is one `[A-Za-z0-9._-]+` segment excluding dot/dot-dot. The digest stays in the descriptor, not its hashed file. The `preview` op and post map artifact_path→artifactPath and expected_sha256→expectedSha256; post additionally maps repository→repo, pr_number→prNumber, head_sha→headSha, event unchanged; freeze returns the artifact's sha256. Permission globs do not normalize paths: reject traversal, extra segments, shell decoration, or inequality to the resolved-root path before tools.
 
 | TransportResult (`corvus_review_post`) | Shape |
 |--------------------------------------|-------|
@@ -196,4 +196,4 @@ POST_RESULT:
   unverifiable_anchors: [{path: <string>, line_start: <positive safe integer>, line_end: <safe integer >= line_start>}] # required only for reason anchors-unverifiable; otherwise omitted
   api_calls: <non-negative integer>
 ```
-Posted requires remote_state posted, a usable review URL and null reason; local_only requires a reason, null URL and truthful not_posted/unknown state. Status not_posted requires remote_state not_posted, null URL, zero inline_comments_posted and reason anchors-unverifiable, verify: <diagnostic>, head-moved or not-exposed: <inventory>. Only anchors-unverifiable includes non-empty unverifiable_anchors matching submitted anchors exactly; other reasons omit them and select R4 repair or the host exception. api_calls sums each writer `corvus_review_pr` result's api_calls and post tool_api_calls; reads/hashes/validators are not API calls. Count newly posted inline comments only; marker reuse reports 0 for this invocation. The writer's comments_moved_to_body is 0; R5 tracks relocation via [Conventional Comments](SKILL.md#conventional-comments). Done when identity, evidence, coverage and authorization remain separate.
+Posted requires remote_state posted, a usable review URL and null reason; local_only requires a reason, null URL and truthful not_posted/unknown state. Status not_posted requires remote_state not_posted, null URL, zero inline_comments_posted and reason anchors-unverifiable, verify: <diagnostic> (including the writer's mapping of artifact-verify-failed:<detail>), head-moved or not-exposed: <inventory>. Only anchors-unverifiable includes non-empty unverifiable_anchors matching submitted anchors exactly; other reasons omit them and select R4 repair or the host exception. api_calls sums each writer `corvus_review_pr` result's api_calls and post tool_api_calls; reads/hashes/validators are not API calls. Count newly posted inline comments only; marker reuse reports 0 for this invocation. The writer's comments_moved_to_body is 0; R5 tracks relocation via [Conventional Comments](SKILL.md#conventional-comments), separately from freeze's omitted counts. Done when identity, evidence, coverage and authorization remain separate.

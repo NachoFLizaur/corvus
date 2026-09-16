@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import * as fs from "node:fs"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { join, relative } from "node:path"
 import { freeze, type CandidateRequest } from "../review-payload"
 import { createPostExecutor, post, type PostExec, type PostExecResult, type PostInput, type PostOptions } from "../review-post"
 
@@ -24,6 +24,7 @@ const postedResponse: PostExecResult = {
 }
 
 type Fixture = {
+  directory: string
   opts: PostOptions
   input: PostInput
   outsidePath: string
@@ -40,6 +41,7 @@ async function withFixture(run: (fixture: Fixture) => Promise<void>): Promise<vo
     const frozen = freeze(candidatePath, join(root, "artifact.json"), opts)
     if (!frozen.ok) throw new Error(`Expected a frozen artifact, got ${JSON.stringify(frozen)}`)
     await run({
+      directory: tempRoot,
       opts,
       input: {
         artifactPath: frozen.artifactPath,
@@ -73,12 +75,14 @@ function mismatchedDigest(input: PostInput): PostInput {
 }
 
 describe("review post transport", () => {
-  test("posts a successful response using GET then POST with the artifact realpath", () => withFixture(async ({ opts, input }) => {
+  test.each(["absolute", "workspace-relative"] as const)("posts %s artifacts using GET then POST with the artifact realpath when process cwd differs from the host directory", kind => withFixture(async ({ directory, opts, input }) => {
+    expect(process.cwd()).not.toBe(directory)
     const alias = join(opts.reviewStateRoot, "artifact-link.json")
     fs.symlinkSync(input.artifactPath, alias)
+    const artifactPath = kind === "absolute" ? alias : relative(directory, alias)
     const { exec, calls } = recordingExec(headResponse, postedResponse)
 
-    const result = await post({ ...input, artifactPath: alias }, { ...opts, exec })
+    const result = await post({ ...input, artifactPath }, { ...opts, directory, exec })
 
     expect(result).toEqual({ outcome: "posted", review_url: REVIEW_URL, tool_api_calls: 2 })
     expect(calls.map(argv => argv.slice(1))).toEqual([
@@ -87,6 +91,38 @@ describe("review post transport", () => {
     ])
     expect(JSON.stringify(result)).not.toContain(BODY)
     expect(JSON.stringify(result)).not.toContain(INLINE_BODY)
+  }))
+
+  test("retains cwd-based verification for relative artifacts without a directory option", () => withFixture(async ({ directory, opts, input }) => {
+    expect(process.cwd()).not.toBe(directory)
+    expect(opts.directory).toBeUndefined()
+    const { exec, calls } = recordingExec()
+
+    expect(await post({ ...input, artifactPath: relative(directory, input.artifactPath) }, { ...opts, exec })).toEqual({
+      outcome: "rejected", reason: "artifact-verify-failed:path-outside-root", tool_api_calls: 0,
+    })
+    expect(calls).toEqual([])
+  }))
+
+  test.each(["../x.json", ".corvus/../../x.json", "review-state/../review-state/artifact.json"])("rejects workspace-relative traversal %s before exec without normalizing it", artifactPath => withFixture(async ({ directory, opts, input }) => {
+    const { exec, calls } = recordingExec()
+
+    expect(await post({ ...input, artifactPath }, { ...opts, directory, exec })).toEqual({
+      outcome: "rejected", reason: "artifact-verify-failed:path-outside-root", tool_api_calls: 0,
+    })
+    expect(calls).toEqual([])
+  }))
+
+  test("rejects a workspace-relative symlink outside the review root before exec", () => withFixture(async ({ directory, opts, input, outsidePath }) => {
+    fs.copyFileSync(input.artifactPath, outsidePath)
+    const alias = join(opts.reviewStateRoot, "outside-link.json")
+    fs.symlinkSync(outsidePath, alias)
+    const { exec, calls } = recordingExec()
+
+    expect(await post({ ...input, artifactPath: relative(directory, alias) }, { ...opts, directory, exec })).toEqual({
+      outcome: "rejected", reason: "artifact-verify-failed:path-outside-root", tool_api_calls: 0,
+    })
+    expect(calls).toEqual([])
   }))
 
   test("rejects HTTP 422 with the diagnostic message but no body text", () => withFixture(async ({ opts, input }) => {

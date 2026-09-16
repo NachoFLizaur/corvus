@@ -102,7 +102,7 @@ const plugin: Plugin = async (input) => {
   const directory = input.directory || input.worktree
   const review = createReviewToolExecutors(directory)
   const reviewStateRoot = typeof directory === "string" && isAbsolute(directory) ? resolve(directory, ".corvus") : ""
-  const post = createPostExecutor(reviewStateRoot)
+  const post = createPostExecutor(reviewStateRoot, directory)
   const persist = createPersistExecutor(reviewStateRoot)
   const lock = createLockExecutor(reviewStateRoot)
   const pr = createPrExecutor({ cwd: directory })
@@ -123,11 +123,12 @@ const plugin: Plugin = async (input) => {
     },
     tool: {
       corvus_review_payload: {
-        description: "Measure or freeze a review candidate under .corvus/reviews or .corvus/tasks/<task>/reviews. Paths are relative to the session directory or absolute; freeze requires artifactPath.",
+        description: "Measure, freeze or preview under .corvus/reviews or .corvus/tasks/<task>/reviews. Paths are relative to the session directory or absolute. Supply only the op's fields: measure(candidatePath), freeze(candidatePath, artifactPath), preview(artifactPath, expectedSha256). Freeze fits over-budget candidates mechanically. Read-only preview verifies the digest and returns the JSON-decoded frozen artifact (commit_id, event, body, comments), sha256 and measurements. Only preview returns review text; failures never do. The module validates operation-specific arguments.",
         args: {
-          op: z.enum(["measure", "freeze"]),
-          candidatePath: z.string().min(1),
+          op: z.enum(["measure", "freeze", "preview"]),
+          candidatePath: z.string().min(1).optional(),
           artifactPath: z.string().min(1).optional(),
+          expectedSha256: z.string().regex(/^[a-f0-9]{64}$/).optional(),
         },
         /** Host ctx.agent is read before payload I/O; only the two review orchestrators pass. Missing/unknown callers fail closed, and no argument or option disables the check. */
         execute: async (args, ctx) => {
@@ -135,21 +136,8 @@ const plugin: Plugin = async (input) => {
           return review.payload(args)
         },
       },
-      corvus_review_verify: {
-        description: "Verify a frozen review artifact and its expected SHA-256 under .corvus/reviews or .corvus/tasks/<task>/reviews without writing. Paths are session-relative or absolute.",
-        args: {
-          op: z.literal("verify"),
-          artifactPath: z.string().min(1),
-          expectedSha256: z.string().regex(/^[a-f0-9]{64}$/),
-        },
-        /** Host ctx.agent is read before artifact I/O; only the review orchestrators and writer pass. Missing/unknown callers fail closed, and no argument or option disables the check. */
-        execute: async (args, ctx) => {
-          if (!["corvus-review", "corvus-review-auto", "pr-comment-writer"].includes(ctx?.agent)) return JSON.stringify({ ok: false, reason: "caller-not-allowed" })
-          return review.verify(args)
-        },
-      },
       corvus_review_post: {
-        description: "Post a frozen review artifact under .corvus/reviews or .corvus/tasks/<task>/reviews after verifying its digest and current PR code_head. Use the absolute artifactPath returned by freeze.",
+        description: "Post a frozen review artifact under .corvus/reviews or .corvus/tasks/<task>/reviews after verifying its digest and current PR code_head. Paths are relative to the session directory or absolute.",
         args: {
           artifactPath: z.string().min(1),
           expectedSha256: z.string().regex(/^[a-f0-9]{64}$/),
@@ -164,7 +152,7 @@ const plugin: Plugin = async (input) => {
         execute: async (args, ctx) => post(args, ctx?.agent),
       },
       corvus_review_persist: {
-        description: "Write or read review state under the host's .corvus/reviews or .corvus/tasks/<task>/reviews roots. Supply op and reviewRoot plus only that op's fields: write_document(headSha, sections, optional frontmatterYaml), write_input(input), write_meta(headSha, meta, optional name: meta.yaml/decision.yaml/completion.yaml/authorization.yaml/review-action.yaml), write_candidate(candidate), read_document(headSha), write_facts(facts), read_facts(), begin(target: document|input, headSha required only for document, optional expected_sections/frontmatterYaml), append(staging_id, index/heading/body for document or key/value for input, optional part/parts), finalize(staging_id, expected_sections for document or ordered expected_keys for input), abort(staging_id), status(staging_id). The module validates operation-specific arguments.",
+        description: "Write or read review state under the host's .corvus/reviews or .corvus/tasks/<task>/reviews roots. Supply op and reviewRoot plus only that op's fields: write_document(headSha, sections, optional frontmatterYaml), write_input(input), write_meta(headSha, meta, optional name: meta.yaml/decision.yaml/completion.yaml/authorization.yaml/review-action.yaml), write_candidate(candidate), read_document(headSha), write_facts(facts), read_facts(), begin(target: document|input|candidate), append(staging_id; document: index/heading/body; input: key/value; candidate: field/text, optional comment/anchor; part/parts), finalize(staging_id; document: expected_sections; input: ordered expected_keys; candidate: expected_comments), abort(staging_id), status(staging_id). The module validates operation-specific arguments.",
         args: {
           op: z.enum(["write_document", "write_input", "write_meta", "write_candidate", "read_document", "write_facts", "read_facts", "begin", "append", "finalize", "abort", "status"]),
           reviewRoot: z.string(),
@@ -176,10 +164,17 @@ const plugin: Plugin = async (input) => {
           name: z.string().optional(),
           facts: z.object({}).passthrough().optional(),
           candidate: z.object({}).passthrough().optional(),
-          target: z.enum(["document", "input"]).optional(),
+          target: z.enum(["document", "input", "candidate"]).optional().describe("Begin document: headSha, optional expected_sections/frontmatterYaml. Begin candidate: commit_id/event, no document checkpoint needed. Split body and each comment's path/body into zero-based part/parts with a fixed parts count; concatenate text without separators. comment indexes define final order."),
+          commit_id: z.string().regex(/^[a-f0-9]{40}$/).optional(),
+          event: z.enum(["APPROVE", "REQUEST_CHANGES", "COMMENT"]).optional(),
           staging_id: z.string().optional(),
           expected_sections: z.number().int().positive().optional(),
           expected_keys: z.array(z.string()).optional(),
+          expected_comments: z.number().int().nonnegative().optional(),
+          comment: z.number().int().nonnegative().optional(),
+          field: z.enum(["path", "body"]).optional(),
+          text: z.string().optional().describe("Candidate string part. Keep complete JSON-serialized append arguments <=6,000 characters including escaping."),
+          anchor: z.object({ line: z.number().int().positive(), side: z.enum(["LEFT", "RIGHT"]), start_line: z.number().int().positive().optional(), start_side: z.enum(["LEFT", "RIGHT"]).optional() }).strict().optional().describe("Required exactly on comment path part 0; supply line/side and optional start_line/start_side once."),
           index: z.number().int().nonnegative().optional(),
           part: z.number().int().nonnegative().optional(),
           parts: z.number().int().positive().optional(),

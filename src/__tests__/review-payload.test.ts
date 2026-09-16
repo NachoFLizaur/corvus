@@ -4,8 +4,9 @@ import { createHash } from "node:crypto"
 import * as fs from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { LIMITS, canonicalize, freeze, measure, verify } from "../review-payload"
+import { LIMITS, canonicalize, freeze, measure, measureFile, preview, verify } from "../review-payload"
 import type { CandidateRequest, ReviewPayloadFs, ReviewPayloadOptions } from "../review-payload"
+import { post } from "../review-post"
 
 type Comment = CandidateRequest["comments"][number]
 
@@ -269,7 +270,7 @@ describe("review payload limits", () => {
 })
 
 describe("review payload freeze", () => {
-  test("writes canonical artifact bytes and returns their hash after successful read-back", () => withFixture(fixture => {
+  test("keeps in-budget canonical bytes identical and returns fitted:false after successful read-back", () => withFixture(fixture => {
     const { opts, candidatePath, artifactPath } = fixture
     const req = candidate("é 👍\r\nReview", [comment("Inline")])
     fs.writeFileSync(candidatePath, JSON.stringify(req, null, 4))
@@ -287,22 +288,57 @@ describe("review payload freeze", () => {
     expect(bytes.equals(Buffer.from(canonicalize(req), "utf8"))).toBe(true)
     expect(result).toEqual({
       ok: true, artifactPath, sha256: sha256(bytes), measurements: measured(req).measurements,
+      fitted: false, omitted: { comments: 0, findings: 0 },
     })
     expect(reads).toEqual([candidatePath, artifactPath])
     expect(fs.readFileSync(candidatePath, "utf8")).toBe(JSON.stringify(req, null, 4))
   }))
 
-  test("returns budget-violation without creating an artifact", () => withFixture(({ opts, candidatePath, artifactPath }) => {
-    fs.writeFileSync(candidatePath, JSON.stringify(candidate("a".repeat(24001))))
-    expect(freeze(candidatePath, artifactPath, opts)).toMatchObject({
-      ok: false, reason: "budget-violation",
-      violations: [
-        { field: "body", unit: "codePoints", limit: 24000, actual: 24001, reason: "limit-exceeded" },
-        { field: "body", unit: "utf8Bytes", limit: 24000, actual: 24001, reason: "limit-exceeded" },
-      ],
+  test("fits an oversized body instead of returning budget-violation and verify accepts the written digest", () => withFixture(({ opts, candidatePath, artifactPath }) => {
+    const req = candidate("Recognizable original summary: " + "a".repeat(24001), [comment("Inline")])
+    const original = canonicalize(req)
+    fs.writeFileSync(candidatePath, original)
+    const result = freeze(candidatePath, artifactPath, opts)
+    expect(result.ok).toBe(true)
+    if (!result.ok) throw new Error("Expected fitted artifact")
+    const bytes = fs.readFileSync(artifactPath)
+    const fitted = JSON.parse(bytes.toString("utf8")) as CandidateRequest
+    expect(result).toEqual({
+      ok: true, artifactPath, sha256: sha256(bytes), measurements: measured(fitted).measurements,
+      fitted: true, omitted: { comments: 1, findings: 0 },
     })
-    expect(fs.existsSync(artifactPath)).toBe(false)
+    expect(fitted.body.startsWith("Recognizable original summary: ")).toBe(true)
+    expect(fitted.body.endsWith("Review limits: 1 findings omitted for size")).toBe(true)
+    expect(fitted.comments).toEqual([])
+    expect(result.sha256).not.toBe(sha256(original))
+    expect(measured(fitted).violations).toEqual([])
+    expect(verify(artifactPath, result.sha256, opts)).toEqual({
+      ok: true, sha256Match: true, canonical: true, violations: [], measurements: result.measurements,
+    })
+    expect(fs.readFileSync(candidatePath, "utf8")).toBe(original)
   }))
+
+  const oversizedCases: Array<[string, CandidateRequest]> = [
+    ["inline comment", candidate("Summary", [comment("a".repeat(4001))])],
+    ["multibyte body", candidate("界😀".repeat(24000))],
+    ["canonical escapes", candidate('"\\\n'.repeat(8000))],
+    ["notice", candidate("> " + "a".repeat(24001))],
+    ["headlines", candidate("## Standards\n" + "a".repeat(24001) + "\n## Spec\n" + "b".repeat(24001))],
+    ["unbounded marker prefix", candidate("<!-- corvus-review " + "a".repeat(24001))],
+    ["comment path", candidate("Summary", [{ ...comment(), path: '"'.repeat(48001) }])],
+  ]
+  for (const [name, req] of oversizedCases) {
+    test(`freezes oversized ${name} without a size rejection`, () => withFixture(({ opts, candidatePath, artifactPath }) => {
+      expect(measured(req).ok).toBe(false)
+      fs.writeFileSync(candidatePath, canonicalize(req))
+      const result = freeze(candidatePath, artifactPath, opts)
+      expect(result).toMatchObject({ ok: true, fitted: true })
+      expect(JSON.stringify(result)).not.toContain("budget-violation")
+      if (!result.ok) throw new Error("Expected fitted artifact")
+      expect(verify(artifactPath, result.sha256, opts)).toMatchObject({ ok: true, sha256Match: true, violations: [] })
+      expect(JSON.parse(fs.readFileSync(artifactPath, "utf8")).comments).toEqual([])
+    }))
+  }
 
   test("rejects a candidate BOM", () => withFixture(({ opts, candidatePath, artifactPath }) => {
     fs.writeFileSync(candidatePath, "\ufeff" + JSON.stringify(candidate()))
@@ -432,6 +468,119 @@ describe("review payload verify", () => {
   }
 })
 
+describe("review payload preview", () => {
+  test("previews the fitted artifact body and empty comments rather than the over-budget candidate", () => withFixture(({ opts, candidatePath, artifactPath }) => {
+    const req = candidate([
+      `<!-- corvus-review v1 head:${"a".repeat(40)} -->`,
+      "> Draft review notice",
+      "## Standards", "Standards headline",
+      "## Spec", "Spec headline",
+      "Unbounded prose: " + "x".repeat(24001),
+    ].join("\n"), [comment("Omitted inline body")])
+    const source = canonicalize(req)
+    fs.writeFileSync(candidatePath, source)
+    const frozen = freeze(candidatePath, artifactPath, opts)
+    expect(frozen).toMatchObject({ ok: true, fitted: true })
+    if (!frozen.ok) throw new Error("Expected fitted artifact")
+    const bytes = fs.readFileSync(artifactPath)
+    const result = preview(artifactPath, frozen.sha256, opts)
+
+    expect(result).toEqual({ ok: true, ...JSON.parse(bytes.toString("utf8")), sha256: sha256(bytes), measurements: frozen.measurements })
+    if (!result.ok) throw new Error("Expected preview")
+    expect(result.body).not.toBe(req.body)
+    expect(result.body).toStartWith(req.body.split("\n")[0])
+    expect(result.body).toContain("> Draft review notice")
+    expect(result.body).toContain("Standards headline")
+    expect(result.body).toContain("Spec headline")
+    expect(result.body).toEndWith("Review limits: 1 findings omitted for size")
+    expect(result.comments).toEqual([])
+    expect(fs.readFileSync(candidatePath, "utf8")).toBe(source)
+    expect(fs.readFileSync(artifactPath)).toEqual(bytes)
+  }))
+
+  test("previews an unfitted artifact with decoded body, all comment anchors and bodies in order", () => withFixture(({ opts, candidatePath, artifactPath }) => {
+    const req: CandidateRequest = { ...candidate('Résumé 🚀\r\n"Review"\\', [
+      { ...comment('Range\n"body"'), start_line: 8, start_side: "RIGHT" },
+      { path: 'src/quoted"name.ts', line: 3, side: "LEFT", body: "Other\t👍" },
+    ]), event: "REQUEST_CHANGES" }
+    fs.writeFileSync(candidatePath, JSON.stringify(req))
+    const frozen = freeze(candidatePath, artifactPath, opts)
+    expect(frozen).toMatchObject({ ok: true, fitted: false })
+    if (!frozen.ok) throw new Error("Expected unfitted artifact")
+    const before = fs.readFileSync(artifactPath)
+
+    expect(preview(artifactPath, frozen.sha256, opts)).toEqual({
+      ok: true, ...req, sha256: sha256(before), measurements: frozen.measurements,
+    })
+    expect(fs.readFileSync(artifactPath)).toEqual(before)
+  }))
+
+  test("decodes only the captured verified read and never writes", () => withFixture(({ opts, artifactPath }) => {
+    const req = candidate("VERIFIED_BODY", [comment("VERIFIED_COMMENT")])
+    const bytes = Buffer.from(canonicalize(req))
+    fs.writeFileSync(artifactPath, bytes)
+    const reads: string[] = []
+    let writes = 0
+    const io: ReviewPayloadFs = {
+      ...fs,
+      readFileSync(path) {
+        reads.push(path)
+        return reads.length === 1 ? bytes : Buffer.from(canonicalize(candidate("UNCHECKED_REPLACEMENT")))
+      },
+      writeFileSync() { writes++ },
+    }
+
+    expect(preview(artifactPath, sha256(bytes), { ...opts, fs: io })).toEqual({
+      ok: true, ...req, sha256: sha256(bytes), measurements: measured(req).measurements,
+    })
+    expect(reads).toEqual([artifactPath])
+    expect(writes).toBe(0)
+    expect(fs.readFileSync(artifactPath)).toEqual(bytes)
+  }))
+
+  test("rejects a wrong digest with verify's failure shape and no review text", () => withFixture(({ opts, artifactPath }) => {
+    const sentinel = "PREVIEW_BODY_MUST_NOT_LEAK"
+    const bytes = canonicalize(candidate(sentinel, [comment(sentinel)]))
+    fs.writeFileSync(artifactPath, bytes)
+    const wrongDigest = sha256(bytes + "x")
+    const result = preview(artifactPath, wrongDigest, opts)
+
+    const failed = verify(artifactPath, wrongDigest, opts)
+    expect(failed.ok).toBe(false)
+    expect(result).toEqual({ ...failed, ok: false })
+    expect(result).toMatchObject({ ok: false, reason: "sha256-mismatch" })
+    expect(result).not.toHaveProperty("body")
+    expect(result).not.toHaveProperty("comments")
+    expect(JSON.stringify(result)).not.toContain(sentinel)
+    expect(fs.readFileSync(artifactPath, "utf8")).toBe(bytes)
+  }))
+
+  for (const kind of escapeCases) {
+    test(`rejects ${kind} before reading or writing and without review text`, () => withFixture(fixture => {
+      const sentinel = "PREVIEW_ESCAPED_BODY_MUST_NOT_LEAK"
+      const bytes = canonicalize(candidate(sentinel, [comment(sentinel)]))
+      fs.writeFileSync(fixture.outsidePath, bytes)
+      const escape = escapedPath(kind, fixture)
+      let reads = 0, writes = 0
+      const io: ReviewPayloadFs = {
+        ...fs,
+        readFileSync() { reads++; return Buffer.from(bytes) },
+        writeFileSync() { writes++ },
+      }
+      const result = preview(escape, sha256(bytes), { ...fixture.opts, fs: io })
+
+      expect(result).toEqual({
+        ok: false, sha256Match: false, canonical: false, violations: [], measurements: null,
+        reason: "path-outside-root", path: escape,
+      })
+      expect(JSON.stringify(result)).not.toContain(sentinel)
+      expect(reads).toBe(0)
+      expect(writes).toBe(0)
+      expect(fs.readFileSync(fixture.outsidePath, "utf8")).toBe(bytes)
+    }))
+  }
+})
+
 describe("review payload result hygiene", () => {
   test("does not expose body text in measurement diagnostics, freeze or verify results", () => withFixture(({ opts, candidatePath, artifactPath }) => {
     const sentinel = "BODY_TEXT_MUST_NOT_APPEAR_IN_RESULTS"
@@ -443,8 +592,11 @@ describe("review payload result hygiene", () => {
       expect(JSON.stringify(diagnostics.violations)).not.toContain(sentinel)
 
       fs.writeFileSync(candidatePath, JSON.stringify(req))
+      const fileMeasurement = measureFile(candidatePath, opts)
+      expect(fileMeasurement.ok).toBe(!overLimit)
+      expect(JSON.stringify(fileMeasurement)).not.toContain(sentinel)
       const frozen = freeze(candidatePath, artifactPath, opts)
-      expect(frozen.ok).toBe(!overLimit)
+      expect(frozen).toMatchObject({ ok: true, fitted: overLimit })
       expect(JSON.stringify(frozen)).not.toContain(sentinel)
 
       fs.writeFileSync(artifactPath, canonical)
@@ -453,4 +605,67 @@ describe("review payload result hygiene", () => {
       expect(JSON.stringify(verified)).not.toContain(sentinel)
     }
   }))
+
+  test("does not expose body text in measure or freeze parsing, schema and I/O failures", () => withFixture(({ opts, candidatePath, artifactPath }) => {
+    const sentinel = "FAILED_BODY_TEXT_MUST_NOT_APPEAR_IN_RESULTS"
+    const req = candidate(sentinel, [comment(sentinel)])
+    const cases = [
+      [JSON.stringify(req).slice(0, -1), "candidate-parse-error"],
+      [JSON.stringify({ ...req, event: "INVALID" }), "invalid-field"],
+      ["\ufeff" + canonicalize(req), "candidate-bom"],
+    ] as const
+    for (const [bytes, reason] of cases) {
+      fs.writeFileSync(candidatePath, bytes)
+      for (const result of [measureFile(candidatePath, opts), freeze(candidatePath, artifactPath, opts)]) {
+        expect(result).toMatchObject({ ok: false, reason })
+        expect(JSON.stringify(result)).not.toContain(sentinel)
+      }
+      expect(fs.existsSync(artifactPath)).toBe(false)
+    }
+    fs.writeFileSync(candidatePath, canonicalize(req))
+    const readFailure: ReviewPayloadFs = { ...fs, readFileSync() { throw new Error(sentinel) } }
+    const writeFailure: ReviewPayloadFs = { ...fs, writeFileSync() { throw new Error(sentinel) } }
+    for (const [result, reason] of [
+      [measureFile(candidatePath, { ...opts, fs: readFailure }), "candidate-read-error"],
+      [freeze(candidatePath, artifactPath, { ...opts, fs: readFailure }), "candidate-read-error"],
+      [freeze(candidatePath, artifactPath, { ...opts, fs: writeFailure }), "artifact-write-error"],
+      [freeze(candidatePath, artifactPath, { ...opts, fs: readbackFs(artifactPath, bytes => bytes.subarray(0, -1)) }), "readback-mismatch"],
+    ] as const) {
+      expect(result).toMatchObject({ ok: false, reason })
+      expect(JSON.stringify(result)).not.toContain(sentinel)
+    }
+  }))
+
+  test("does not expose body text in post verification or transport failures", async () => {
+    const root = fs.realpathSync(fs.mkdtempSync(join(tmpdir(), "corvus-payload-post-hygiene-")))
+    try {
+      const sentinel = "POST_BODY_TEXT_MUST_NOT_APPEAR_IN_RESULTS"
+      const inline = "POST_INLINE_TEXT_MUST_NOT_APPEAR_IN_RESULTS"
+      const req = candidate(sentinel, [comment(inline)])
+      const bytes = canonicalize(req)
+      const artifactPath = join(root, "artifact.json")
+      fs.writeFileSync(artifactPath, bytes)
+      const input = { artifactPath, expectedSha256: sha256(bytes), repo: { owner: "o", name: "r" }, prNumber: 1, headSha: req.commit_id, event: req.event }
+      const calls: string[][] = []
+      const opts = { reviewStateRoot: root, exec: async (argv: string[]) => {
+        calls.push(argv)
+        return argv[3] === "GET"
+          ? { code: 0, stdout: JSON.stringify([[{ sha: req.commit_id, commit: { message: "Change" } }]]), stderr: "" }
+          : { code: 1, stdout: JSON.stringify({ status: 422, message: sentinel + inline, body: sentinel, comments: req.comments }), stderr: "" }
+      } }
+      const verificationFailure = await post({ ...input, expectedSha256: sha256(bytes + "x") }, opts)
+      expect(verificationFailure).toEqual({ outcome: "rejected", reason: "artifact-verify-failed:sha256-mismatch", tool_api_calls: 0 })
+      expect(calls).toEqual([])
+      const transportFailure = await post(input, opts)
+      expect(transportFailure).toEqual({ outcome: "rejected", http_status: 422, reason: "HTTP 422: remote message redacted", tool_api_calls: 2 })
+      expect(calls.map(argv => argv[3])).toEqual(["GET", "POST"])
+      for (const result of [verificationFailure, transportFailure]) {
+        expect(JSON.stringify(result)).not.toContain(sentinel)
+        expect(JSON.stringify(result)).not.toContain(inline)
+      }
+      expect(fs.readFileSync(artifactPath, "utf8")).toBe(bytes)
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
 })

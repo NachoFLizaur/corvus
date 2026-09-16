@@ -1,7 +1,7 @@
 import { Buffer } from "node:buffer"
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process"
 import * as nodeFs from "node:fs"
-import { isAbsolute } from "node:path"
+import { isAbsolute, sep } from "node:path"
 import { verify, type CandidateRequest, type ReviewPayloadFs } from "./review-payload"
 
 export type PostInput = {
@@ -17,6 +17,7 @@ export type PostExecResult = { code: number; stdout: string; stderr: string }
 export type PostExec = (argv: string[]) => Promise<PostExecResult>
 export type PostOptions = {
   reviewStateRoot: string
+  directory?: string
   fs?: ReviewPayloadFs
   exec?: PostExec
   timeoutMs?: number
@@ -60,15 +61,19 @@ type ArtifactResult = { ok: true; path: string; request: CandidateRequest } | { 
 
 /**
  * verify owns containment, schema, canonical-byte, digest and budget checks.
+ * Prefix relative paths with the captured host directory before verification;
+ * preserve traversal segments so containment rejects them rather than normalizing.
  * Capture its read so commit/event checks inspect those same bytes, not a second
  * unchecked read. Before GET and each POST, failures reject without that exec;
  * injected filesystems cannot disable verification. No filesystem write is used.
  */
 function readArtifact(input: PostInput, opts: PostOptions): ArtifactResult {
   const fs = opts.fs ?? nodeFs
+  const artifactPath = isAbsolute(input.artifactPath) || !opts.directory
+    ? input.artifactPath : `${opts.directory}${sep}${input.artifactPath}`
   let bytes: Buffer | undefined
-  let path = input.artifactPath
-  const checked = verify(input.artifactPath, input.expectedSha256, {
+  let path = artifactPath
+  const checked = verify(artifactPath, input.expectedSha256, {
     reviewStateRoot: opts.reviewStateRoot,
     fs: {
       readFileSync(target) {
@@ -273,21 +278,23 @@ export async function post(input: PostInput, opts: PostOptions): Promise<Transpo
 }
 
 /**
- * Capture the host-supplied absolute review-state root, never a tool argument.
+ * Capture the host-supplied absolute review-state root and optional session
+ * directory, never tool arguments. Relative paths use that directory when supplied;
+ * otherwise they retain verify's path semantics. Absolute paths are unchanged.
  * Both hosts receive JSON transport results; invalid context rejects before I/O.
- * No input overrides the root. Artifact paths retain verify's path semantics.
+ * No input overrides the root or directory.
  *
  * The caller oracle is host ctx.agent, forwarded separately on each invocation
  * before artifact I/O or transport. Only pr-comment-writer passes; missing or
  * other identities reject with zero tool_api_calls for both hosts. No tool
  * argument or option disables this check.
  */
-export function createPostExecutor(reviewStateRoot: string): (input: unknown, caller?: unknown) => Promise<string> {
+export function createPostExecutor(reviewStateRoot: string, directory?: string): (input: unknown, caller?: unknown) => Promise<string> {
   const root = typeof reviewStateRoot === "string" && isAbsolute(reviewStateRoot) ? reviewStateRoot : undefined
   return async (input, caller) => {
     if (caller !== "pr-comment-writer") return JSON.stringify(rejected("caller-not-allowed"))
     return JSON.stringify(root
-      ? await post(input as PostInput, { reviewStateRoot: root })
+      ? await post(input as PostInput, { reviewStateRoot: root, directory })
       : rejected("invalid-review-state-root"))
   }
 }

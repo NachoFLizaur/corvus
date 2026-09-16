@@ -5,6 +5,22 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Changed
+
+- Oversized reviews now fit mechanically at freeze: every schema-valid over-budget candidate becomes a bounded summary with no inline comments, retained marker/notices and per-axis headlines (or a leading-summary anchor), and one `Review limits: N findings omitted for size` footer. Staged candidate persistence supports large bodies and comment paths/bodies. R4 previews the frozen artifact before authorization, reports `fitted`/`omitted`, and keeps the full report local; no model size loop or size-based no-post remains. Replacement artifacts, including anchor relocation, require fresh preview and authorization.
+- Draft, self-review and unknown authenticated identity are notices, not action caps. Event precedence is Delivery → Coverage caps → Trusted override → Configured action; LOCAL and CLOSED/MERGED-at-R5 delivery exclusions are unchanged.
+- Checkpoint, verdict, metadata and sync bookkeeping stays in place as best-effort, never a posting prerequisite. The smoke audit accepts consistent evidence or disclosed unavailability, distinguishes undisclosed failures from forged success, accepts labelled synthesis counts and staged-candidate finalization, and checks fitted artifacts with a `size fit` row. Disclosure requires a final note naming the unavailable operation and diagnostic, including failed failure-metadata writes. `.corvus/reviews/` must not be gitignored in target repositories for state commits to land; sync failures never block posting.
+
+### Fixed
+
+- `corvus_review_post` resolves workspace-relative artifact paths against the host session directory rather than process cwd, avoiding false `path-outside-root` failures when they differ. Absolute paths still work; traversal, outside-root and symlink escapes remain rejected.
+
+### Removed
+
+- **Breaking:** `corvus_review_verify` is removed from both hosts and the payload executor factory; seven review tools remain. `corvus_review_post` verifies internally before its GET and every POST. Writer preflight now requires only `corvus_review_pr` and `corvus_review_post`; artifact rejection routes to R4 repair with fresh preview/authorization, not a standalone verification call or one-shot re-freeze ritual. The shared `verify()` library and offline `built verify()` audit remain.
+
 ## 0.10.0-beta.11 — 2026-09-15
 
 ### Fixed
@@ -17,7 +33,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Detectors (pr-code-reviewer, security-reviewer) may call read-only `corvus_review_pr` ops (metadata/head/files/diff/reviews/checks) to fill evidence gaps themselves; review input carries the complete PR description verbatim (staged when large).
 - Writer checks for an existing marker before POST; R5 reconciles unknown transport via `pr.reviews` and re-dispatches once when the review is confirmed absent.
 - Checkpoint-failed route no longer goes local-only: the candidate is built from in-memory synthesis and posted.
-- Bounded checkpoint persistence: corvus_review_persist gains staged begin/append/finalize/status/abort (≤6,000 chars per call, lossless multipart, atomic finalize never replaces a complete checkpoint on failure); R3 always stages the checkpoint, R2 stages large review input; R4 calls verdict only after a finalized checkpoint; checkpoint-failed route releases the lock with a diagnostic and no verdict retries. Fixes 'Invalid input for tool corvus_review_persist: JSON Parse error: Unterminated string' on large reviews.
+- Bounded checkpoint persistence: corvus_review_persist gains staged begin/append/finalize/status/abort (≤6,000 chars per call, lossless multipart, atomic finalize never replaces a complete checkpoint on failure); R3 always stages the checkpoint, R2 stages large review input; R4 calls verdict only after a finalized checkpoint; checkpoint-failed route releases the lock with a diagnostic and no verdict retries (superseded in Unreleased: checkpoint failure is disclosed and never blocks posting). Fixes 'Invalid input for tool corvus_review_persist: JSON Parse error: Unterminated string' on large reviews.
 
 ## 0.10.0-beta.9 — 2026-09-13
 

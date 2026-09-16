@@ -5,7 +5,7 @@ import { join } from "node:path"
 import { z } from "zod"
 import plugin from "../index"
 import { PROTECTED_AGENTS } from "../protected-agents"
-import { canonicalize, freeze, measure, verify, type CandidateRequest } from "../review-payload"
+import { canonicalize, freeze, measure, type CandidateRequest } from "../review-payload"
 import { registerTools } from "../v2/register-tools"
 import { createFakeContext } from "./fake-context"
 
@@ -28,10 +28,10 @@ describe("plugin entry point", () => {
     expect(result).toHaveProperty("config")
     expect(typeof result.config).toBe("function")
     expect(typeof result["chat.params"]).toBe("function")
-    expect(Object.keys(result.tool ?? {})).toEqual(["corvus_review_payload", "corvus_review_verify", "corvus_review_post", "corvus_review_persist", "corvus_review_lock", "corvus_review_pr", "corvus_review_verdict", "corvus_review_sync"])
-    expect(Object.keys(result.tool!.corvus_review_payload.args)).toEqual(["op", "candidatePath", "artifactPath"])
+    expect(Object.keys(result.tool ?? {})).toEqual(["corvus_review_payload", "corvus_review_post", "corvus_review_persist", "corvus_review_lock", "corvus_review_pr", "corvus_review_verdict", "corvus_review_sync"])
+    expect(Object.keys(result.tool!.corvus_review_payload.args)).toEqual(["op", "candidatePath", "artifactPath", "expectedSha256"])
     expect(z.safeParse(result.tool!.corvus_review_payload.args.op, "verify").success).toBe(false)
-    expect(z.safeParse(result.tool!.corvus_review_verify.args.op, "freeze").success).toBe(false)
+    expect(result.tool).not.toHaveProperty("corvus_review_verify")
     for (const tool of Object.values(result.tool!)) {
       const schema = z.toJSONSchema(z.object(tool.args))
       expect(schema).toMatchObject({ type: "object", additionalProperties: false })
@@ -39,7 +39,17 @@ describe("plugin entry point", () => {
         expect(schema).not.toHaveProperty(combinator)
       }
     }
-    expect(z.toJSONSchema(z.object(result.tool!.corvus_review_payload.args)).required).toEqual(["op", "candidatePath"])
+    const payloadSchema = z.object(result.tool!.corvus_review_payload.args)
+    expect(z.toJSONSchema(payloadSchema)).toMatchObject({
+      properties: { op: { enum: ["measure", "freeze", "preview"] }, expectedSha256: { type: "string", pattern: "^[a-f0-9]{64}$" } },
+      required: ["op"],
+    })
+    const previewArgs = { op: "preview", artifactPath: ".corvus/reviews/pr/post-request.json", expectedSha256: "0".repeat(64) }
+    expect(z.safeParse(payloadSchema, previewArgs)).toMatchObject({ success: true, data: previewArgs })
+    expect(z.safeParse(payloadSchema, { ...previewArgs, expectedSha256: "bad" }).success).toBe(false)
+    expect(result.tool!.corvus_review_payload.description).toContain("Freeze fits over-budget candidates mechanically")
+    expect(result.tool!.corvus_review_payload.description).toContain("preview(artifactPath, expectedSha256)")
+    expect(result.tool!.corvus_review_payload.description).toContain("JSON-decoded frozen artifact")
     for (const [name, ops, required] of [
       ["corvus_review_persist", ["write_document", "write_input", "write_meta", "write_candidate", "read_document", "write_facts", "read_facts", "begin", "append", "finalize", "abort", "status"], ["op", "reviewRoot"]],
       ["corvus_review_lock", ["acquire", "release", "status"], ["op", "reviewRoot"]],
@@ -55,12 +65,26 @@ describe("plugin entry point", () => {
       expect(z.safeParse(result.tool!.corvus_review_persist.args[field], { content: { nested: ["preserved"] } }))
         .toMatchObject({ success: true, data: { content: { nested: ["preserved"] } } })
     }
+    const persist = result.tool!.corvus_review_persist
+    expect(persist.description).toContain("target: document|input|candidate")
+    expect(z.toJSONSchema(z.object(persist.args))).toMatchObject({ properties: {
+      target: { enum: ["document", "input", "candidate"], description: expect.stringContaining("zero-based part/parts with a fixed parts count") },
+      text: { description: expect.stringContaining("complete JSON-serialized append arguments <=6,000") },
+      anchor: { additionalProperties: false, required: ["line", "side"], description: expect.stringContaining("exactly on comment path part 0") },
+      expected_comments: { type: "integer", minimum: 0 },
+    } })
+    for (const args of [
+      { op: "begin", reviewRoot: "reviews/pr", target: "candidate", commit_id: "a".repeat(40), event: "COMMENT" },
+      { op: "append", reviewRoot: "reviews/pr", staging_id: "candidate:id", comment: 0, field: "path", part: 0, parts: 2, text: "src/", anchor: { line: 10, side: "RIGHT", start_line: 5, start_side: "RIGHT" } },
+      { op: "finalize", reviewRoot: "reviews/pr", staging_id: "candidate:id", expected_comments: 1 },
+    ]) expect(z.safeParse(z.object(persist.args), args)).toMatchObject({ success: true, data: args })
     for (const args of [{ op: "find" }, { op: "find", cwd: "/repo", branch: "topic/B" }, { op: "local", cwd: "/repo", base: "main" }]) {
       expect(z.safeParse(z.object(result.tool!.corvus_review_pr.args), args)).toMatchObject({ success: true, data: args })
     }
     expect(result.tool!.corvus_review_pr.description).toContain("find takes optional cwd/branch")
     expect(result.tool!.corvus_review_pr.description).toContain("local takes optional cwd/base")
     const post = result.tool!.corvus_review_post
+    expect(post.description).toContain("Paths are relative to the session directory or absolute")
     const postFields = ["artifactPath", "expectedSha256", "repo", "prNumber", "headSha", "event"]
     expect(Object.keys(post.args)).toEqual(postFields)
     expect(z.toJSONSchema(z.object(post.args)).required).toEqual(postFields)
@@ -211,7 +235,7 @@ describe("plugin entry point", () => {
   })
 })
 
-type ReviewToolName = "corvus_review_payload" | "corvus_review_verify" | "corvus_review_post" | "corvus_review_persist" | "corvus_review_lock" | "corvus_review_pr" | "corvus_review_verdict" | "corvus_review_sync"
+type ReviewToolName = "corvus_review_payload" | "corvus_review_post" | "corvus_review_persist" | "corvus_review_lock" | "corvus_review_pr" | "corvus_review_verdict" | "corvus_review_sync"
 type ToolCall = (name: ReviewToolName, args: Record<string, unknown>, agent?: unknown) => Promise<Record<string, unknown>>
 async function withReviewTools(host: "v1" | "v2", run: (directory: string, call: ToolCall) => Promise<void>) {
   const directory = realpathSync(mkdtempSync(join(tmpdir(), "corvus-tool-hooks-")))
@@ -222,6 +246,7 @@ async function withReviewTools(host: "v1" | "v2", run: (directory: string, call:
       const hooks = await plugin({ directory, worktree: "/unrelated-worktree" } as Parameters<typeof plugin>[0])
       await run(directory, async (name, args, agent) => {
         const tool = hooks.tool![name]
+        if (!tool) throw new Error(`Unknown review tool: ${name}`)
         const output = await tool.execute(args, { agent } as Parameters<typeof tool.execute>[1])
         expect(typeof output).toBe("string")
         return JSON.parse(output as string)
@@ -231,7 +256,8 @@ async function withReviewTools(host: "v1" | "v2", run: (directory: string, call:
       cleanup = await registerTools(fake.ctx)
       expect(fake.registrations.map(registration => registration.kind)).toEqual(["tool.transform"])
       await run(directory, async (name, args, agent) => {
-        const tool = fake.tools.get(name)!
+        const tool = fake.tools.get(name)
+        if (!tool) throw new Error(`Unknown review tool: ${name}`)
         const output = await tool.execute(args, { agent } as Parameters<typeof tool.execute>[1])
         expect(typeof output.content).toBe("string")
         return JSON.parse(output.content as string)
@@ -244,12 +270,22 @@ async function withReviewTools(host: "v1" | "v2", run: (directory: string, call:
 }
 
 describe("review tool hooks", () => {
-  test.each(["v1", "v2"] as const)("%s gates payload, verify, post, persist and lock on host identity for every op", async host => {
+  test.each(["v1", "v2"] as const)("%s treats corvus_review_verify calls as unknown tools", async host => {
+    await withReviewTools(host, async (directory, call) => {
+      // Deliberately cross the typed-name boundary to exercise registration lookup.
+      const name = "corvus_review_verify" as ReviewToolName
+      const args = { op: "verify", artifactPath: join(directory, ".corvus/reviews/pr/post-request.json"), expectedSha256: "0".repeat(64) }
+      for (const agent of ["corvus-review", "corvus-review-auto", "pr-comment-writer", "pr-code-reviewer", "security-reviewer", "unknown", undefined]) {
+        await expect(call(name, args, agent)).rejects.toThrow("Unknown review tool: corvus_review_verify")
+      }
+    })
+  })
+
+  test.each(["v1", "v2"] as const)("%s gates payload, post, persist and lock on host identity for every op", async host => {
     await withReviewTools(host, async (_directory, call) => {
       const orchestrators = ["corvus-review", "corvus-review-auto"]
       const policies = [
-        { name: "corvus_review_payload", ops: ["measure", "freeze"], allowed: orchestrators },
-        { name: "corvus_review_verify", ops: ["verify"], allowed: [...orchestrators, "pr-comment-writer"] },
+        { name: "corvus_review_payload", ops: ["measure", "freeze", "preview"], allowed: orchestrators },
         { name: "corvus_review_post", ops: [undefined], allowed: ["pr-comment-writer"] },
         { name: "corvus_review_persist", ops: ["write_document", "write_input", "write_meta", "write_candidate", "read_document", "write_facts", "read_facts", "begin", "append", "finalize", "abort", "status"], allowed: orchestrators },
         { name: "corvus_review_lock", ops: ["acquire", "release", "status"], allowed: orchestrators },
@@ -289,11 +325,9 @@ describe("review tool hooks", () => {
       for (const agent of ["pr-comment-writer", "pr-code-reviewer", "security-reviewer", undefined]) {
         expect(await call("corvus_review_payload", { op: "measure", candidatePath }, agent)).toEqual(rejected)
         expect(await call("corvus_review_payload", { op: "freeze", candidatePath, artifactPath: join(reviewRoot, "unauthorized.json") }, agent)).toEqual(rejected)
+        expect(await call("corvus_review_payload", { op: "preview", artifactPath, expectedSha256: frozen.sha256 }, agent)).toEqual(rejected)
         expect(await call("corvus_review_persist", { op: "write_candidate", reviewRoot, candidate: { ...candidate, body: "Changed" } }, agent)).toEqual(rejected)
         expect(await call("corvus_review_lock", { op: "acquire", reviewRoot, runId: "unauthorized" }, agent)).toEqual(rejected)
-      }
-      for (const agent of ["pr-code-reviewer", "security-reviewer", undefined]) {
-        expect(await call("corvus_review_verify", { op: "verify", artifactPath, expectedSha256: frozen.sha256 }, agent)).toEqual(rejected)
       }
       const descriptor = { artifactPath, expectedSha256: frozen.sha256, repo: { owner: "o", name: "r" }, prNumber: 1, headSha: "b".repeat(40), event: "COMMENT" }
       for (const agent of ["corvus-review", "corvus-review-auto", "pr-code-reviewer", "security-reviewer", undefined]) {
@@ -324,6 +358,31 @@ describe("review tool hooks", () => {
       expect(await call("corvus_review_persist", { op: "read_facts", reviewRoot }, "corvus-review")).toMatchObject({ ok: true, facts })
       expect(await call("corvus_review_persist", { op: "write_candidate", reviewRoot, candidate: { commit_id: headSha, event: "COMMENT", body: "Review", comments: [] } }, "corvus-review")).toMatchObject({ ok: true })
       expect(await call("corvus_review_payload", { op: "measure", candidatePath: join(reviewRoot, "candidate.json") }, "corvus-review")).toMatchObject({ ok: true })
+      const stagedRoot = join(reviewRoot, "staged")
+      const started = await call("corvus_review_persist", { op: "begin", reviewRoot: stagedRoot, target: "candidate", commit_id: headSha, event: "COMMENT" }, "corvus-review")
+      expect(started.ok).toBe(true)
+      expect(typeof started.staging_id).toBe("string")
+      expect(started.staging_id).toMatch(/^candidate:/)
+      const session = { reviewRoot: stagedRoot, staging_id: started.staging_id }
+      const anchor = { line: 10, side: "LEFT" as const, start_line: 5, start_side: "LEFT" as const }
+      for (const fields of [
+        { field: "body", text: "Review ", part: 0, parts: 2 },
+        { field: "body", text: '"body"', part: 1, parts: 2 },
+        { comment: 0, field: "path", text: "src/", anchor, part: 0, parts: 2 },
+        { comment: 0, field: "path", text: 'a"b.ts', part: 1, parts: 2 },
+        { comment: 0, field: "body", text: "Finding", part: 0, parts: 1 },
+      ]) {
+        const appendArgs = { op: "append", ...session, ...fields }
+        expect(JSON.stringify(appendArgs).length).toBeLessThanOrEqual(6_000)
+        expect(await call("corvus_review_persist", appendArgs, "corvus-review")).toMatchObject({ ok: true })
+      }
+      const finalized = await call("corvus_review_persist", { op: "finalize", ...session, expected_comments: 1 }, "corvus-review")
+      expect(finalized.ok).toBe(true)
+      expect(finalized.path).toBe(join(stagedRoot, "candidate.json"))
+      expect(typeof finalized.sha256).toBe("string")
+      expect(readFileSync(join(stagedRoot, "candidate.json"), "utf8")).toBe(canonicalize({
+        commit_id: headSha, event: "COMMENT", body: 'Review "body"', comments: [{ ...anchor, path: 'src/a"b.ts', body: "Finding" }],
+      }))
       expect(await call("corvus_review_lock", { op: "acquire", reviewRoot, runId: "run-1" }, "corvus-review")).toMatchObject({ ok: true, state: "acquired" })
       expect(await call("corvus_review_lock", { op: "status", reviewRoot }, "corvus-review")).toMatchObject({ held: true, holders: expect.arrayContaining([expect.objectContaining({ run_id: "run-1" })]) })
       expect(await call("corvus_review_lock", { op: "release", reviewRoot, runId: "run-1", mode: "complete" }, "corvus-review")).toMatchObject({ ok: true })
@@ -398,7 +457,7 @@ describe("review tool hooks", () => {
     })
   })
 
-  test.each(["v1", "v2"] as const)("%s routes measure, freeze and read-only verify to the shared core", async host => {
+  test.each(["v1", "v2"] as const)("%s routes measure and freeze to the shared core", async host => {
     await withReviewTools(host, async (directory, call) => {
       const candidatePath = ".corvus/reviews/pr/candidate.json", artifactPath = ".corvus/reviews/pr/post-request.json"
       const absoluteCandidate = join(directory, candidatePath), absoluteArtifact = join(directory, artifactPath)
@@ -414,20 +473,89 @@ describe("review tool hooks", () => {
       const frozen = await call("corvus_review_payload", { op: "freeze", candidatePath: absoluteCandidate, artifactPath }, "corvus-review")
       expect(frozen).toEqual(freeze(absoluteCandidate, absoluteArtifact, opts))
       expect(readFileSync(absoluteArtifact, "utf8")).toBe(canonicalize(candidate))
-      for (const expectedSha256 of [frozen.sha256, "0".repeat(64)]) {
-        expect(typeof expectedSha256).toBe("string")
-        const before = readFileSync(absoluteArtifact)
-        expect(await call("corvus_review_verify", { op: "verify", artifactPath, expectedSha256 }, "pr-comment-writer"))
-          .toEqual(verify(absoluteArtifact, expectedSha256 as string, opts))
-        expect(readFileSync(absoluteArtifact)).toEqual(before)
-      }
       const beforePost = readFileSync(absoluteArtifact)
+      expect(process.cwd()).not.toBe(directory)
+      const postArtifactPath = ".corvus/reviews/pr1/post-request.json"
+      mkdirSync(join(directory, ".corvus/reviews/pr1"))
+      writeFileSync(join(directory, postArtifactPath), beforePost)
       expect(await call("corvus_review_post", {
-        artifactPath: absoluteArtifact, expectedSha256: frozen.sha256,
+        artifactPath: postArtifactPath, expectedSha256: frozen.sha256,
         repo: { owner: "o", name: "r" }, prNumber: 1, headSha: "b".repeat(40), event: "COMMENT",
       }, "pr-comment-writer")).toEqual({ outcome: "rejected", reason: "artifact-head-mismatch", tool_api_calls: 0 })
+      expect(readFileSync(join(directory, postArtifactPath))).toEqual(beforePost)
       expect(readFileSync(absoluteArtifact)).toEqual(beforePost)
       expect(readFileSync(absoluteCandidate, "utf8")).toBe(source)
+    })
+  })
+
+  test.each(["v1", "v2"] as const)("%s routes read-only preview through the host directory for both orchestrators", async host => {
+    await withReviewTools(host, async (directory, call) => {
+      expect(process.cwd()).not.toBe(directory)
+      for (const reviewRoot of [".corvus/reviews/pr", ".corvus/tasks/topic/reviews/pr"]) {
+        mkdirSync(join(directory, reviewRoot), { recursive: true })
+        const candidatePath = join(directory, reviewRoot, "candidate.json")
+        const artifactPath = `${reviewRoot}/post-request.json`
+        const absoluteArtifact = join(directory, artifactPath)
+        for (const overLimit of [false, true]) {
+          const candidate: CandidateRequest = {
+            commit_id: "a".repeat(40), event: "COMMENT", body: "Résumé 🚀\n" + (overLimit ? "x".repeat(24001) : "Unfitted body"),
+            comments: [{ path: "src/example.ts", line: 10, side: "RIGHT", start_line: 8, start_side: "RIGHT", body: 'Inline\n"body"' }],
+          }
+          const source = canonicalize(candidate)
+          writeFileSync(candidatePath, source)
+          const frozen = await call("corvus_review_payload", { op: "freeze", candidatePath, artifactPath }, "corvus-review")
+          expect(frozen).toMatchObject({ ok: true, fitted: overLimit })
+          const before = readFileSync(absoluteArtifact)
+          const decoded = JSON.parse(before.toString("utf8"))
+          for (const agent of ["corvus-review", "corvus-review-auto"]) {
+            for (const path of [artifactPath, absoluteArtifact]) {
+              const result = await call("corvus_review_payload", { op: "preview", artifactPath: path, expectedSha256: frozen.sha256 }, agent)
+              expect(result).toEqual({ ok: true, ...decoded, sha256: frozen.sha256, measurements: frozen.measurements })
+              expect(result.comments).toEqual(overLimit ? [] : candidate.comments)
+              if (overLimit) expect(result.body).toContain("Review limits:")
+              else expect(result.body).toBe(candidate.body)
+              expect(readFileSync(absoluteArtifact)).toEqual(before)
+            }
+          }
+          expect(readFileSync(candidatePath, "utf8")).toBe(source)
+        }
+      }
+    })
+  })
+
+  test.each(["v1", "v2"] as const)("%s rejects missing, cross-op and invalid preview arguments without text", async host => {
+    await withReviewTools(host, async (directory, call) => {
+      const artifactPath = ".corvus/reviews/pr/post-request.json"
+      const sentinel = "PREVIEW_HOST_BODY_MUST_NOT_LEAK"
+      const source = canonicalize({ commit_id: "a".repeat(40), event: "COMMENT", body: sentinel, comments: [] })
+      writeFileSync(join(directory, artifactPath), source)
+      const args = { op: "preview", artifactPath, expectedSha256: "0".repeat(64) }
+      for (const [input, reason, field] of [
+        [{ op: "preview" }, "missing-field", "artifactPath"],
+        [{ op: "preview", artifactPath }, "missing-field", "expectedSha256"],
+        [{ ...args, expectedSha256: "" }, "invalid-field", "expectedSha256"],
+        [{ ...args, expectedSha256: 1 }, "invalid-field", "expectedSha256"],
+        [{ ...args, artifactPath: "" }, "invalid-field", "artifactPath"],
+        [{ ...args, candidatePath: "candidate.json" }, "unknown-field", "candidatePath"],
+        [{ ...args, reviewStateRoot: directory }, "unknown-field", "reviewStateRoot"],
+        [{ op: "measure", candidatePath: "candidate.json", expectedSha256: args.expectedSha256 }, "unknown-field", "expectedSha256"],
+        [{ op: "freeze", candidatePath: "candidate.json", artifactPath, expectedSha256: args.expectedSha256 }, "unknown-field", "expectedSha256"],
+      ] as const) {
+        const result = await call("corvus_review_payload", input, "corvus-review")
+        expect(result).toEqual({ ok: false, reason, field })
+        expect(JSON.stringify(result)).not.toContain(sentinel)
+      }
+      for (const [input, reason] of [
+        [args, "sha256-mismatch"],
+        [{ ...args, artifactPath: "../x.json" }, "path-outside-root"],
+      ] as const) {
+        const result = await call("corvus_review_payload", input, "corvus-review")
+        expect(result).toMatchObject({ ok: false, reason })
+        expect(result).not.toHaveProperty("body")
+        expect(result).not.toHaveProperty("comments")
+        expect(JSON.stringify(result)).not.toContain(sentinel)
+      }
+      expect(readFileSync(join(directory, artifactPath), "utf8")).toBe(source)
     })
   })
 
@@ -446,13 +574,9 @@ describe("review tool hooks", () => {
         { op: "verify", artifactPath, expectedSha256: "0".repeat(64) },
         { op: "freeze", candidatePath, artifactPath, reviewStateRoot: directory },
       ]) expect((await call("corvus_review_payload", args, "corvus-review")).ok).toBe(false)
-      expect(await call("corvus_review_verify", { op: "freeze", candidatePath, artifactPath }, "pr-comment-writer"))
-        .toEqual({ ok: false, reason: "invalid-field", field: "op" })
-      expect((await call("corvus_review_verify", { op: "verify", artifactPath, expectedSha256: "0".repeat(64), reviewStateRoot: directory }, "pr-comment-writer")).ok).toBe(false)
       for (const escaped of [join(directory, "outside.json"), ".corvus/reviews/pr/../candidate.json"]) {
         expect((await call("corvus_review_payload", { op: "measure", candidatePath: escaped }, "corvus-review")).reason).toBe("path-outside-root")
         expect((await call("corvus_review_payload", { op: "freeze", candidatePath, artifactPath: escaped }, "corvus-review")).reason).toBe("path-outside-root")
-        expect((await call("corvus_review_verify", { op: "verify", artifactPath: escaped, expectedSha256: "0".repeat(64) }, "pr-comment-writer")).reason).toBe("path-outside-root")
         expect(await call("corvus_review_post", { ...post, artifactPath: escaped }, "pr-comment-writer"))
           .toEqual({ outcome: "rejected", reason: "artifact-verify-failed:path-outside-root", tool_api_calls: 0 })
       }

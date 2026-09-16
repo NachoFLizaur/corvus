@@ -11,7 +11,7 @@ import type { Registrar, SetupContext } from "./types"
 type ToolDraft = Parameters<Parameters<SetupContext["tool"]["transform"]>[0]>[0]
 
 /**
- * One transform contributes eight name-keyed tools. The host's draft.add upserts
+ * One transform contributes seven name-keyed tools. The host's draft.add upserts
  * by name, so replay replaces rather than duplicates them. codemode:false keeps
  * all directly callable under their own permission keys, even when execute is
  * denied. Host location is captured before registration; the shared executors
@@ -21,7 +21,7 @@ export const registerTools: Registrar = async (ctx) => {
   const directory = ctx.location.directory
   const review = createReviewToolExecutors(directory)
   const reviewStateRoot = typeof directory === "string" && isAbsolute(directory) ? resolve(directory, ".corvus") : ""
-  const post = createPostExecutor(reviewStateRoot)
+  const post = createPostExecutor(reviewStateRoot, directory)
   const persist = createPersistExecutor(reviewStateRoot)
   const lock = createLockExecutor(reviewStateRoot)
   const pr = createPrExecutor({ cwd: directory })
@@ -30,15 +30,16 @@ export const registerTools: Registrar = async (ctx) => {
   const registration = await ctx.tool.transform((draft: ToolDraft) => {
     draft.add({
       name: "corvus_review_payload",
-      description: "Measure or freeze a review candidate under .corvus/reviews or .corvus/tasks/<task>/reviews. Paths are relative to the session directory or absolute; freeze requires artifactPath.",
+      description: "Measure, freeze or preview under .corvus/reviews or .corvus/tasks/<task>/reviews. Paths are relative to the session directory or absolute. Supply only the op's fields: measure(candidatePath), freeze(candidatePath, artifactPath), preview(artifactPath, expectedSha256). Freeze fits over-budget candidates mechanically. Read-only preview verifies the digest and returns the JSON-decoded frozen artifact (commit_id, event, body, comments), sha256 and measurements. Only preview returns review text; failures never do. The module validates operation-specific arguments.",
       input: {
         type: "object",
         properties: {
-          op: { type: "string", enum: ["measure", "freeze"] },
+          op: { type: "string", enum: ["measure", "freeze", "preview"] },
           candidatePath: { type: "string", minLength: 1 },
           artifactPath: { type: "string", minLength: 1 },
+          expectedSha256: { type: "string", pattern: "^[a-f0-9]{64}$" },
         },
-        required: ["op", "candidatePath"],
+        required: ["op"],
         additionalProperties: false,
       },
       options: { codemode: false },
@@ -49,28 +50,8 @@ export const registerTools: Registrar = async (ctx) => {
       },
     })
     draft.add({
-      name: "corvus_review_verify",
-      description: "Verify a frozen review artifact and its expected SHA-256 under .corvus/reviews or .corvus/tasks/<task>/reviews without writing. Paths are session-relative or absolute.",
-      input: {
-        type: "object",
-        properties: {
-          op: { type: "string", const: "verify" },
-          artifactPath: { type: "string", minLength: 1 },
-          expectedSha256: { type: "string", pattern: "^[a-f0-9]{64}$" },
-        },
-        required: ["op", "artifactPath", "expectedSha256"],
-        additionalProperties: false,
-      },
-      options: { codemode: false },
-      /** Host ctx.agent is read before artifact I/O; only the review orchestrators and writer pass. Missing/unknown callers fail closed, and no argument or option disables the check. */
-      execute: async (args: unknown, ctx) => {
-        if (!["corvus-review", "corvus-review-auto", "pr-comment-writer"].includes(ctx?.agent)) return { content: JSON.stringify({ ok: false, reason: "caller-not-allowed" }) }
-        return { content: review.verify(args) }
-      },
-    })
-    draft.add({
       name: "corvus_review_post",
-      description: "Post a frozen review artifact under .corvus/reviews or .corvus/tasks/<task>/reviews after verifying its digest and current PR code_head. Use the absolute artifactPath returned by freeze.",
+      description: "Post a frozen review artifact under .corvus/reviews or .corvus/tasks/<task>/reviews after verifying its digest and current PR code_head. Paths are relative to the session directory or absolute.",
       input: {
         type: "object",
         properties: {
@@ -97,7 +78,7 @@ export const registerTools: Registrar = async (ctx) => {
     })
     draft.add({
       name: "corvus_review_persist",
-      description: "Write or read review state under the host's .corvus/reviews or .corvus/tasks/<task>/reviews roots. Supply op and reviewRoot plus only that op's fields: write_document(headSha, sections, optional frontmatterYaml), write_input(input), write_meta(headSha, meta, optional name: meta.yaml/decision.yaml/completion.yaml/authorization.yaml/review-action.yaml), write_candidate(candidate), read_document(headSha), write_facts(facts), read_facts(), begin(target: document|input, headSha required only for document, optional expected_sections/frontmatterYaml), append(staging_id, index/heading/body for document or key/value for input, optional part/parts), finalize(staging_id, expected_sections for document or ordered expected_keys for input), abort(staging_id), status(staging_id). The module validates operation-specific arguments.",
+      description: "Write or read review state under the host's .corvus/reviews or .corvus/tasks/<task>/reviews roots. Supply op and reviewRoot plus only that op's fields: write_document(headSha, sections, optional frontmatterYaml), write_input(input), write_meta(headSha, meta, optional name: meta.yaml/decision.yaml/completion.yaml/authorization.yaml/review-action.yaml), write_candidate(candidate), read_document(headSha), write_facts(facts), read_facts(), begin(target: document|input|candidate), append(staging_id; document: index/heading/body; input: key/value; candidate: field/text, optional comment/anchor; part/parts), finalize(staging_id; document: expected_sections; input: ordered expected_keys; candidate: expected_comments), abort(staging_id), status(staging_id). The module validates operation-specific arguments.",
       input: {
         type: "object",
         properties: {
@@ -111,10 +92,17 @@ export const registerTools: Registrar = async (ctx) => {
           name: { type: "string" },
           facts: { type: "object", additionalProperties: true },
           candidate: { type: "object", additionalProperties: true },
-          target: { type: "string", enum: ["document", "input"] },
+          target: { type: "string", enum: ["document", "input", "candidate"], description: "Begin document: headSha, optional expected_sections/frontmatterYaml. Begin candidate: commit_id/event, no document checkpoint needed. Split body and each comment's path/body into zero-based part/parts with a fixed parts count; concatenate text without separators. comment indexes define final order." },
+          commit_id: { type: "string", pattern: "^[a-f0-9]{40}$" },
+          event: { type: "string", enum: ["APPROVE", "REQUEST_CHANGES", "COMMENT"] },
           staging_id: { type: "string" },
           expected_sections: { type: "integer", minimum: 1 },
           expected_keys: { type: "array", items: { type: "string" } },
+          expected_comments: { type: "integer", minimum: 0 },
+          comment: { type: "integer", minimum: 0 },
+          field: { type: "string", enum: ["path", "body"] },
+          text: { type: "string", description: "Candidate string part. Keep complete JSON-serialized append arguments <=6,000 characters including escaping." },
+          anchor: { type: "object", properties: { line: { type: "integer", minimum: 1 }, side: { type: "string", enum: ["LEFT", "RIGHT"] }, start_line: { type: "integer", minimum: 1 }, start_side: { type: "string", enum: ["LEFT", "RIGHT"] } }, required: ["line", "side"], additionalProperties: false, description: "Required exactly on comment path part 0; supply line/side and optional start_line/start_side once." },
           index: { type: "integer", minimum: 0 },
           part: { type: "integer", minimum: 0 },
           parts: { type: "integer", minimum: 1 },

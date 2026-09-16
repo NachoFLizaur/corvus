@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Direct pr-comment-writer execution proof on OpenCode 1. Runs only the writer
 # against a canned, network-free gh shim whose POST admission is blocked, so the
-# gate observes the real tool path (corvus_review_verify → corvus_review_post →
+# gate observes the real tool path (corvus_review_pr → corvus_review_post →
 # blocked POST) without a full review and without any remote mutation. The fixture
 # review body is one ≥3,000-character line, so the host read tool truncates it and
 # the run proves the writer treats that as expected. --head-moved moves the canned
@@ -162,16 +162,16 @@ cd "$WORK/fixture"
 export PWD="$WORK/fixture"
 
 cap 60 opencode debug agent pr-comment-writer >"$WORK/agents.json" 2>"$WORK/agents.stderr" || die 3 'host agent inspection failed'
-# Exposure invariant: the host-resolved writer must expose corvus_review_verify and
-# not corvus_review_payload before the model is started. Nothing relaxes this.
+# Exposure invariant: the host-resolved writer must expose corvus_review_pr and
+# corvus_review_post before model launch. Missing tools abort; no flag relaxes this.
 bun -e '
   const agent = await Bun.file(process.env.SMOKE_WORK + "/agents.json").json()
   const tools = agent.tools ?? {}
-  if (agent.name !== "pr-comment-writer" || tools.corvus_review_verify !== true || tools.corvus_review_payload === true) {
-    console.error("writer exposure: " + JSON.stringify({ name: agent.name, corvus_review_verify: tools.corvus_review_verify, corvus_review_payload: tools.corvus_review_payload }))
+  if (agent.name !== "pr-comment-writer" || tools.corvus_review_pr !== true || tools.corvus_review_post !== true) {
+    console.error("writer exposure: " + JSON.stringify({ name: agent.name, corvus_review_pr: tools.corvus_review_pr, corvus_review_post: tools.corvus_review_post }))
     process.exit(1)
   }
-  console.log("Writer exposure: corvus_review_verify=true, corvus_review_payload=" + JSON.stringify(tools.corvus_review_payload))
+  console.log("Writer exposure: corvus_review_pr=true, corvus_review_post=true")
 ' || die 6 'writer tool exposure failed; model was not started'
 
 RUN_START=$SECONDS

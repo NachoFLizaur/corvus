@@ -87,7 +87,20 @@ test.each(["v1", "v2"] as const)("%s writer preflight resolves wildcard fallback
   const agents = join(directory, "agents.json"), install = join(directory, "install/node_modules/corvus-ai")
   const harness = readFileSync(resolve(import.meta.dirname, "../../scripts/smoke-review.sh"), "utf8")
   const preflight = /bun -e '(\n  const data = await Bun\.file[\s\S]*?)\n' \|\| die 6 'posting barrier not installed; model was not started'/.exec(harness)?.[1]
-  if (!preflight) throw new Error("Writer preflight snippet not found")
+  if (!preflight?.trim()) throw new Error("Writer preflight snippet not found")
+  const env = { ...process.env, SMOKE_WORK: directory, SMOKE_HOST: host, SMOKE_ROOT: resolve(import.meta.dirname, "../..") }
+  for (const script of ["smoke-writer.sh", "smoke-review.sh"]) {
+    const source = readFileSync(resolve(import.meta.dirname, "../../scripts", script), "utf8")
+    const exposure = /# Exposure invariant:[\s\S]*?\n\s*bun -e '([\s\S]+?)\n\s*' \|\| die 6 'writer tool exposure failed; model was not started'/.exec(source)?.[1]
+    if (!exposure?.trim()) throw new Error(`${script}: writer exposure snippet not found`)
+    for (const tools of [{ corvus_review_pr: true, corvus_review_post: true }, { corvus_review_pr: true }, { corvus_review_post: true }, {}]) {
+      const fixture = JSON.stringify({ name: "pr-comment-writer", tools })
+      writeFileSync(agents, fixture)
+      writeFileSync(join(directory, "writer-agent.json"), fixture)
+      const result = Bun.spawnSync([process.execPath, "-e", exposure], { env })
+      expect(result.exitCode, `${script}: ${result.stderr}`).toBe(tools.corvus_review_pr && tools.corvus_review_post ? 0 : 1)
+    }
+  }
   type Action = "allow" | "deny" | "ask"
   const rule = (permission: string, pattern: string, action: Action) => ({ permission, pattern, action })
   const cases: Array<[string, ReturnType<typeof rule>[] | undefined, Action | undefined]> = [
@@ -103,10 +116,11 @@ test.each(["v1", "v2"] as const)("%s writer preflight resolves wildcard fallback
     ["empty rules", [], undefined],
   ]
   for (const [name, rules, action] of cases) {
-    const permission = rules && [...rules, rule("external_directory", `${install}/*`, "allow")]
+    const permission = rules && [...rules, rule("external_directory", `${install}/*`, "allow"),
+      rule("corvus_review_payload", "*", "allow"), rule("corvus_review_post", "*", "allow")]
     const agent = {
       name: "corvus-review-auto", native: false, prompt: "# Corvus Review Auto\n",
-      tools: { corvus_review_payload: true, corvus_review_verify: true, corvus_review_persist: true,
+      tools: { corvus_review_payload: true, corvus_review_post: true, corvus_review_persist: true,
         corvus_review_lock: true, corvus_review_pr: true, corvus_review_verdict: true, corvus_review_sync: true },
       permission,
     }
@@ -118,7 +132,7 @@ test.each(["v1", "v2"] as const)("%s writer preflight resolves wildcard fallback
     for (const writer of [false, true]) {
       const allowed = action === (writer ? "allow" : "deny")
       const result = Bun.spawnSync([process.execPath, "-e", preflight], {
-        env: { ...process.env, SMOKE_WORK: directory, SMOKE_HOST: host, SMOKE_WRITER: writer ? "1" : "0" },
+        env: { ...env, SMOKE_WRITER: writer ? "1" : "0" },
       })
       expect(result.exitCode, `${name}, writer=${writer}: ${result.stderr}`).toBe(allowed ? 0 : 1)
       if (host === "v1") {

@@ -128,17 +128,17 @@ describe("toV2Permissions", () => {
   })
 
   test("turns a scalar effect into one rule scoped to `*`", () => {
-    expect(toV2Permissions({ read: "allow", edit: "deny", doom_loop: "ask", corvus_review_payload: "deny", corvus_review_verify: "allow", corvus_review_post: "allow", corvus_review_persist: "deny", corvus_review_lock: "deny", corvus_review_pr: "allow", corvus_review_verdict: "deny" })).toEqual([
+    expect(toV2Permissions({ read: "allow", edit: "deny", doom_loop: "ask", corvus_review_payload: "deny", corvus_review_post: "allow", corvus_review_persist: "deny", corvus_review_lock: "deny", corvus_review_pr: "allow", corvus_review_verdict: "deny", corvus_review_sync: "deny" })).toEqual([
       { action: "read", resource: "*", effect: "allow" },
       { action: "edit", resource: "*", effect: "deny" },
       { action: "doom_loop", resource: "*", effect: "ask" },
       { action: "corvus_review_payload", resource: "*", effect: "deny" },
-      { action: "corvus_review_verify", resource: "*", effect: "allow" },
       { action: "corvus_review_post", resource: "*", effect: "allow" },
       { action: "corvus_review_persist", resource: "*", effect: "deny" },
       { action: "corvus_review_lock", resource: "*", effect: "deny" },
       { action: "corvus_review_pr", resource: "*", effect: "allow" },
       { action: "corvus_review_verdict", resource: "*", effect: "deny" },
+      { action: "corvus_review_sync", resource: "*", effect: "deny" },
     ])
   })
 
@@ -172,7 +172,7 @@ describe("toV2Permissions", () => {
 
     // Already-v2 names and actions with no v2 tool pass through, so the rename is
     // idempotent and safe to re-apply at hook time.
-    for (const action of ["shell", "subagent", "edit", "read", "lsp", "doom_loop", "corvus_review_payload", "corvus_review_verify", "corvus_review_post", "corvus_review_persist", "corvus_review_lock", "corvus_review_pr", "corvus_review_verdict", "corvus_review_sync"])
+    for (const action of ["shell", "subagent", "edit", "read", "lsp", "doom_loop", "corvus_review_payload", "corvus_review_post", "corvus_review_persist", "corvus_review_lock", "corvus_review_pr", "corvus_review_verdict", "corvus_review_sync"])
       expect(renameAction(action)).toBe(action)
   })
 
