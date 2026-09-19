@@ -11,104 +11,44 @@ Analyze commits since the README was last updated and apply relevant changes.
 
 The user provided: `$ARGUMENTS`
 
-## Task
+## Initial Context
 
-Find when the README was last modified, analyze all commits since then, identify documentation-relevant changes, and update the README accordingly.
-
-## Step 1: Find the README File
-
-First, locate the README file in the repository:
+These read-only snapshots expand before the procedure runs. Resolve the selected README and refresh its history/diff through normal tool calls where needed.
 
 !`ls -la README* readme* 2>/dev/null || echo "NO_README_FOUND"`
 
-If a specific path was provided in `$ARGUMENTS`, use that instead.
-
-**If no README exists:** Stop and ask the user if they want to create one, or specify a path.
-
-## Step 2: Find Last README Commit
-
-Get the most recent commit that modified the README:
-
 !`git log -1 --format="%H %ci %s" -- README.md README readme.md README.rst 2>/dev/null || echo "NO_COMMITS_FOUND"`
 
-**If README has never been committed:** The README is new/untracked. Analyze all recent commits instead:
 !`git log -20 --oneline`
-
-## Step 3: Get Commits Since Last README Update
-
-Using the commit hash from Step 2, get all commits that happened after it:
-
-!`git log <LAST_README_COMMIT>..HEAD --oneline --no-merges`
-
-If there are no commits since the last README update, inform the user that the README is already up to date.
-
-## Step 4: Analyze Changes for Documentation Relevance
-
-For each commit since the last README update, determine if it's documentation-relevant:
-
-**Relevant changes (should update README):**
-- New features or capabilities
-- Changed CLI arguments or API endpoints
-- New dependencies or requirements
-- Installation/setup changes
-- Breaking changes
-- New examples or usage patterns
-- Configuration changes
-
-**Usually NOT relevant (skip):**
-- Internal refactoring
-- Bug fixes (unless user-facing behavior changed)
-- Test changes
-- CI/CD changes
-- Code style/formatting
-
-Get detailed info on relevant commits:
-
-!`git show --stat <COMMIT_HASH> --format="%s%n%n%b"`
-
-## Step 5: Read Current README
-
-Read the current README content to understand its structure:
-
-Use the Read tool to read the README file identified in Step 1.
-
-Identify the sections present (e.g., Installation, Usage, Features, API, etc.)
-
-## Step 6: Determine Updates Needed
-
-Based on the analysis, identify:
-1. Which sections need updates
-2. What new content should be added
-3. What existing content needs modification
-
-**If `--dry-run` was specified:** Present the proposed changes and stop here.
-
-## Step 7: Apply Updates
-
-Make the necessary edits to the README:
-- Add new features to the appropriate section
-- Update installation instructions if dependencies changed
-- Add new CLI arguments or API documentation
-- Update examples if usage patterns changed
-
-Use the Edit tool to make targeted changes, preserving the existing structure and style.
-
-## Step 8: Show Summary
-
-After updating, show what changed:
 
 !`git diff README.md`
 
-Present a summary:
-- Number of commits analyzed
-- Changes made to README
-- Sections updated
+## Workflow
 
-## Important
+<!-- adapted from mattpocock/skills (MIT) -->
+### 1. Select the README and Commit Range
 
-- Preserve existing README content; remove it only when clearly outdated or wrong
-- Match the existing README's style and formatting
-- Include changes whose documentation relevance is uncertain — missing docs cost readers more than extra detail
-- Document breaking changes prominently
-- If the README has a changelog section, add entries there too
-- Preserve the original structure — add to existing sections rather than reorganizing
+Use the supplied path or auto-detect the README. If absent or ambiguous, ask the user to select a path or authorize creation, then stop until resolved. Read the selected file and its existing diff so local edits are preserved.
+
+Find the most recent commit for that exact path with `git log -1 --format="%H %ci %s" -- <selected-path>`. Use its verified hash in `git log <hash>..HEAD --oneline --no-merges`; for a never-committed README, analyze the recent-commit snapshot instead. Treat empty history separately from command failures. If no later commits exist, report that there are no commit-driven updates and stop.
+
+Done when the selected path, existing content, and commit range are established, or the missing prerequisite is reported.
+
+### 2. Identify Documentation Changes
+
+Inspect relevant commits with `git show --stat <hash> --format="%s%n%n%b"` and read the changed implementation as needed. Substitute verified hashes and pass selected paths as quoted arguments after `--`.
+
+Cover features, CLI/API changes, dependencies, installation, configuration, examples, user-visible fixes, and breaking changes. Skip purely internal refactoring, tests, CI, or formatting unless user-facing instructions change. When relevance is uncertain, include the supported documentation rather than leaving a gap.
+
+Map additions and corrections onto the current sections. Preserve the README's structure, style, and still-valid content; remove only clearly outdated or incorrect material. Make breaking changes prominent and update an existing changelog section when present.
+
+Done when each documentation-relevant change has a proposed edit grounded in the commits and current implementation.
+
+### 3. Preview or Apply
+
+<!-- Write invariant: the selected path, original content/diff, proposed edits, and user arguments are read before mutation. An unresolved target or missing evidence blocks edits; --dry-run disables all writes and ends after the preview. -->
+For `--dry-run`, show the proposed changes and stop without editing. Otherwise apply targeted edits only to the selected README, retaining unrelated content and local changes.
+
+Read back the result and inspect a fresh `git diff -- <selected-path>` through a normal tool call; the Initial Context diff predates these edits. Compare against the original to verify that non-target text is byte-identical.
+
+Done when the preview or completed update reports the README path, number of commits analyzed, sections affected, changes proposed/applied, and any unresolved documentation gaps.

@@ -3,147 +3,97 @@ name: corvus-phase-0
 description: Requirements analysis phases (0a initial, 0b post-discovery)
 ---
 
+# Phase 0: Requirements
+
+Orchestrate requirements-analyst; its Analysis
+Workflow owns grilling, statuses, immutable requirements, and effort proposals.
+
 ## Clarification Ownership
 
-Requirements Analyst is a non-interactive producer. It returns one complete `QUESTIONS_NEEDED` batch; it never presents questions or waits for answers. The calling orchestrator owns resolution:
+The analyst is non-interactive and returns the whole question batch as data. Resolve it
+through the caller, preserving IDs, order, and recommendations:
 
-| Caller | Batch handling |
-|--------|----------------|
-| Interactive `corvus` | Put every batch item into one `question()` tool call, preserve question IDs/order/defaults, then re-invoke the same analysis mode with `ANSWERS_BY_ID`. It owns the maximum of 3 clarification rounds. |
-| `corvus-auto` | For every batch item, record the recommended/default answer in `ASSUMPTIONS_BY_ID`, then re-invoke the same analysis mode. It never calls `question()` or delegates interaction to a child. |
+| Caller | Batch Resolution |
+|--------|------------------|
+| Interactive `corvus` | Put the whole batch in one `question()` call; return `ANSWERS_BY_ID`, using recommendations as `ASSUMPTIONS_BY_ID` for unavailable answers. |
+| `corvus-auto` | Record recommended answers as `ASSUMPTIONS_BY_ID`; keep interaction disabled. |
 
-Neither this skill nor Requirements Analyst becomes the user-facing question owner. On the final caller-owned round, resolve unanswered items to their defaults and set `FINAL_ROUND_RESOLVED: true` for re-analysis.
+The caller owns a maximum of 3 clarification rounds shared across 0a and 0b. Start at
+round 1, advance after each resolved batch, and re-invoke the same analysis mode with
+answers and assumptions. Resolve round 3's unanswered items to recommendations and set
+`FINAL_ROUND_RESOLVED: true`; preserve that closed state through later discovery.
+<!-- Round oracle: caller-maintained count, resolved batches, and closure flag, read before each analyst dispatch. Closure permits recorded assumptions rather than another question round; unresolved facts still route to discovery. Neither mode changes nor either caller resets it. -->
+If round state is missing, close clarification with recorded recommendations and `FINAL_ROUND_RESOLVED: true`; use available analysis after [bounded report recovery](../corvus-phase-4/reference/transport-retry.md). Done when resolved answers or assumptions accompany the next handoff.
 
 ## Discovery Origin Contract
 
-Every Phase 1 dispatch carries both fields below; the receiver returns to exactly the supplied target:
+Use [Phase 1's routing envelope](../corvus-phase-1/SKILL.md#required-dispatch-envelope):
+`PHASE_0A` returns to `PHASE_0B`; `DIRECT_CALLER` returns to the original caller.
+For analyst-requested discovery, preserve the former route through every additional pass.
+Send accumulated findings as `EXISTING_FINDINGS` and only unresolved facts as the scope.
+Done when findings return to their declared target with clarification round state intact.
 
-| `DISCOVERY_ORIGIN` | `RETURN_TARGET` | Completion route |
-|--------------------|-----------------|------------------|
-| `PHASE_0A` | `PHASE_0B` | Requirements Analyst in `POST_DISCOVERY`, then plan selection or direct delegation |
-| `DIRECT_CALLER` | `[original caller]` | Return findings to that caller; no implicit planning |
+## Spec-Completeness Bypass
 
-Phase 0a always uses `DISCOVERY_ORIGIN: PHASE_0A`. Additional discovery requested by Phase 0b preserves that origin and return target. Pass accumulated findings as `EXISTING_FINDINGS` so Phase 1 investigates only the unresolved delta.
+Apply corvus's Phase 0: Clarification bypass criteria before 0a; uncertainty takes
+the normal analyst route. For a qualifying request, select the caller's depth proposal via
+task-planner's Plan Format, preserving a supplied user choice,
+then run Phase 1 with `DIRECT_CALLER`. The bypass skips clarification, not discovery;
+return here for Depth and Tests Resolution. Preserve the supplied requirements and add
+`requirements-analyst: skipped (spec-complete)` to the
+Phase 2 input. Record reversible recommendations for new gaps as assumptions; immutable requirements stay unchanged.
+<!-- Bypass oracle: request evidence against the caller's criteria, read before skipping 0a. Missing evidence keeps analysis enabled for either caller; only all criteria permit bypass. -->
+Done when discovery is available and the analyst skip is visible to planning and review.
 
-## Spec-Completeness Bypass (Pre-0a)
+## Phase 0a: Initial Clarification
 
-The orchestrator may skip the Phase 0a dispatch entirely when ALL criteria of its `spec_completeness_bypass` rule hold (the orchestrator rule owns the criteria — apply it as written there; any doubt means dispatching Phase 0a normally). When skipped, control proceeds directly to Plan Selection and Direct Routing below, and the Phase 2 task-planner dispatch must record `requirements-analyst: skipped (spec-complete)` so plan-reviewer knows the analyst never ran.
-
-## Phase 0a: INITIAL CLARIFICATION
-
-**Goal**: Analyze the request and determine whether clarification is needed before discovery.
-
-**DELEGATE TO**: @requirements-analyst
+Dispatch requirements-analyst with the original request and accumulated analysis:
 
 ```markdown
-**TASK**: Analyze user request for completeness
-
 **MODE**: INITIAL_ANALYSIS
-
-**USER REQUEST**: [paste the user's original request]
-
-**ROUND**: [1/2/3] (caller-owned; shared across Phase 0a and 0b)
-**ANSWERS_BY_ID / ASSUMPTIONS_BY_ID**: [map from the caller, or "none"]
-**FINAL_ROUND_RESOLVED**: [true/false]
-
-**MUST DO**:
-- Analyze request for outcome clarity, scope, and constraints
-- Return exactly REQUIREMENTS_CLEAR, QUESTIONS_NEEDED, or DISCOVERY_NEEDED
-- On QUESTIONS_NEEDED, return one complete ordered batch with ID, priority, text, closed-ended options when applicable, recommended/default answer, and why it blocks
-
-**MUST NOT DO**:
-- Modify files
-- Interact with the user or present questions
-- Split a known question batch across responses
-
-**REPORT BACK**:
-- Status: REQUIREMENTS_CLEAR / QUESTIONS_NEEDED / DISCOVERY_NEEDED
-- If QUESTIONS_NEEDED: Complete ordered question batch
-- If DISCOVERY_NEEDED: Specific discovery scope and questions
-- Summary of confirmed requirements
+**USER REQUEST**: <original request>
+**ROUND**: <caller-owned 1, 2, or 3>
+**ANSWERS_BY_ID / ASSUMPTIONS_BY_ID**: <separate maps, or none>
+**FINAL_ROUND_RESOLVED**: <true or false>
+**PRIOR ANALYSIS**: <requirements, assumptions, waiting decisions, or none>
+**REPORT BACK**: Use your Output Format, including status and Depth proposal.
 ```
 
-### Flow Control After Phase 0a
+On `QUESTIONS_NEEDED`, use Clarification Ownership; carry independent factual requests
+alongside the batch. On `DISCOVERY_NEEDED`, dispatch the requested scope to Phase 1.
+On `REQUIREMENTS_CLEAR`, carry the proposed depth into Phase 1 for repository grounding.
+Both discovery paths use `PHASE_0A` → `PHASE_0B`.
+Done when a batch is resolved or discovery transfers control toward Phase 0b.
 
-| Status | Action |
-|--------|--------|
-| `REQUIREMENTS_CLEAR` | Continue to plan selection/direct routing below |
-| `QUESTIONS_NEEDED` | Caller resolves the complete batch per Clarification Ownership, then re-invokes Phase 0a with the answer/assumption map |
-| `DISCOVERY_NEEDED` | Invoke Phase 1 with `DISCOVERY_ORIGIN: PHASE_0A` and `RETURN_TARGET: PHASE_0B`; on return, invoke Phase 0b before any selection or planning |
-| *(not dispatched)* | Spec-complete bypass (orchestrator rule `spec_completeness_bypass`): skip 0a/0b and continue to plan selection; record the skip in the Phase-2 dispatch |
+## Phase 0b: Post-Discovery Clarification
 
-**Exit Criteria**: Requirements are clear, or the origin-tagged discovery dispatch has transferred control to Phase 1.
-
----
-
-## Phase 0b: POST-DISCOVERY CLARIFICATION
-
-**Goal**: Analyze accumulated Phase 1 findings before any plan selection or direct route.
-
-**When**: Phase 1 returns a dispatch whose `DISCOVERY_ORIGIN` is `PHASE_0A` and whose `RETURN_TARGET` is `PHASE_0B`. A direct discovery return does not enter Phase 0b.
-
-**DELEGATE TO**: @requirements-analyst
+For a `PHASE_0A` return, dispatch requirements-analyst with the accumulated payload:
 
 ```markdown
-**TASK**: Analyze discovery findings for additional questions
-
 **MODE**: POST_DISCOVERY
-**DISCOVERY_ORIGIN**: PHASE_0A
-
-**ORIGINAL REQUEST**: [user's original request]
-
-**DISCOVERY FINDINGS**: [all accumulated findings from Phase 1]
-- Files to modify: [list]
-- Patterns found: [list]
-- Constraints discovered: [list]
-- Technologies involved: [list]
-
-**ROUND**: [1/2/3] (caller-owned; continues from Phase 0a)
-**ANSWERS_BY_ID / ASSUMPTIONS_BY_ID**: [map from the caller, or "none"]
-**FINAL_ROUND_RESOLVED**: [true/false]
-
-**MUST DO**:
-- Analyze whether discovery revealed new questions, pattern conflicts, or integration constraints
-- Return exactly REQUIREMENTS_CLEAR, QUESTIONS_NEEDED, or DISCOVERY_NEEDED
-- On QUESTIONS_NEEDED, return one complete ordered batch using the Phase 0a field contract
-- On DISCOVERY_NEEDED, identify only the unresolved discovery delta
-
-**MUST NOT DO**:
-- Modify files or interact with the user
-- Re-ask answered questions
-- Request research or code exploration already present in DISCOVERY FINDINGS
-
-**REPORT BACK**:
-- Status: REQUIREMENTS_CLEAR / QUESTIONS_NEEDED / DISCOVERY_NEEDED
-- Complete question batch or additional discovery delta, when applicable
-- Updated requirements and assumptions
+**USER REQUEST**: <original request>
+**ROUND**: <same caller-owned count>
+**ANSWERS_BY_ID / ASSUMPTIONS_BY_ID**: <separate accumulated maps, or none>
+**FINAL_ROUND_RESOLVED**: <preserved closure flag>
+**DISCOVERY FINDINGS**: <accumulated findings, competing work, unresolved facts>
+**PRIOR ANALYSIS**: <requirements, assumptions, waiting decisions>
+**REPORT BACK**: Use your Output Format; identify only the remaining discovery delta.
 ```
 
-### Flow Control After Phase 0b
+On `QUESTIONS_NEEDED`, resolve the batch. On `DISCOVERY_NEEDED`, investigate only the delta through Phase 1, then re-enter 0b; if facts remain unavailable, proceed with explicit gaps, not invented facts. On `REQUIREMENTS_CLEAR`, proceed below.
+Done when available requirements and assumptions reach planning with factual gaps noted.
 
-| Status | Action |
-|--------|--------|
-| `REQUIREMENTS_CLEAR` | Continue to plan selection/direct routing below; reuse the accumulated findings |
-| `QUESTIONS_NEEDED` | Caller resolves the complete batch per Clarification Ownership, then re-invokes Phase 0b with the answer/assumption map |
-| `DISCOVERY_NEEDED` | Re-invoke Phase 1 with `DISCOVERY_ORIGIN: PHASE_0A`, `RETURN_TARGET: PHASE_0B`, accumulated `EXISTING_FINDINGS`, and only the new scope; then return to Phase 0b |
+## Depth and Tests Resolution
 
-Limit additional Phase 0b discovery passes to 2. At the cap, document unresolved discovery as assumptions, complete Phase 0b, and continue to plan selection/direct routing; never jump from the cap directly to Phase 2.
+Adopt the analyst's `**Depth**` proposal and reason, or the bypass caller's proposal,
+preserving a supplied user choice. Depth is an effort dial; use
+[Phase 1's breadth policy](../corvus-phase-1/SKILL.md#discovery-breadth), including narrow
+quick discovery and wider deep discovery. Refresh only uncovered scope if depth changes.
+The interactive user may override depth at Phase 3.
 
-## Plan Selection and Direct Routing
-
-This step runs after `REQUIREMENTS_CLEAR` from Phase 0a or Phase 0b, or directly via the Spec-Completeness Bypass (Pre-0a). The orchestrator owns interactive, autonomous, and preselected input handling.
-
-Before selecting a planned route, compare proposed apparatus with the user's
-stated scope. For disagreement/drift findings, evaluate deletion of one duplicate
-representation first. If apparatus still projects beyond roughly 10x the stated
-scope, route to the orchestrator's scope-amplification gate: interactive Corvus
-asks for explicit confirmation; Corvus Auto halts and reports the mismatch.
-
-| Plan Type | Next route |
-|-----------|------------|
-| No Plan | Delegate directly to the correct specialist. Do not load Phase 2, invoke task-planner, create a master plan, or ask test preferences. |
-| `LIGHTWEIGHT` | Phase 2 with `PLAN_TYPE: LIGHTWEIGHT`; no Phase 1 requirement |
-| `STANDARD` | Reuse any completed discovery and enter Phase 2 with `PLAN_TYPE: STANDARD`; do not repeat Phase 1 |
-| `SPEC_DRIVEN` | Reuse completed discovery. If discovery has not run, invoke Phase 1 once with `DISCOVERY_ORIGIN: DIRECT_CALLER` and return to the orchestrator before Phase 2. |
-
-A Phase 1 result is consumed once: Phase 0a-origin findings feed Phase 0b and then the selected route; direct findings return to their caller. Neither route authorizes Phase 1 to invoke planning.
+Resolve Tests through [Phase 2 Tests](../corvus-phase-2/SKILL.md#tests), using the caller's
+Depth and Test Inputs section for provenance handling. Carry the selected value forward.
+If apparatus far exceeds the stated scope, confirm with the user (corvus-auto halts and reports).
+Pass immutable requirements, assumptions, depth, Tests, and available discovery to
+Phase 2, preserving competing in-flight work and surfacing it to the interactive user first.
+Done when Phase 2 has available inputs and explicit unresolved prerequisites.

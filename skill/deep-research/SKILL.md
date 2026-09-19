@@ -5,191 +5,59 @@ description: Deep research methodology for complex technical questions requiring
 
 # Deep Research Methodology
 
-This skill provides the methodology for comprehensive, multi-source research. Use when the complexity router classifies a question as requiring comparative analysis, architectural decisions, or multi-faceted investigation.
-
-## When This Skill Applies
-
-- Comparative analysis (e.g., "Prisma vs Drizzle for our use case")
-- Architectural decisions (e.g., "Best auth pattern for microservices")
-- Multi-faceted topics requiring synthesis from many sources
-- Best practices where context and trade-offs matter
-- Technology evaluations and recommendations
-- Complex debugging requiring deep investigation
+Use the researcher Complexity Router
+to select this branch. It covers multi-source investigation, including technology
+evaluation and complex debugging.
 
 ## Workflow
 
-### Phase 1: Research Planning
+<!-- adapted from mattpocock/skills (MIT) -->
+1. **Plan** — restate the question, constraints, key dimensions, query strategy, and
+   expected source types. Done when each dimension has a research angle.
+2. **Search** — use `web-research_multi_search` with 5-10 queries covering at least
+   three angles: supporting and contrary evidence, recent developments, and production
+   experience. Use the current year where useful. Done when results cover the planned
+   angles or a tooling limitation is recorded.
+3. **Read** — use `web-research_fetch_pages` for all unique, relevant URLs, including
+   contrasting viewpoints. Prioritize official docs, technical blogs, Stack Overflow,
+   then forums. Done when promising full pages have been read or access gaps recorded.
+4. **Synthesize** — apply Evidence Quality below and the researcher's
+   Evidence Discipline (owner pointer: `../../agent/researcher.md#evidence-discipline`; informational, no file read).
+   Done when consensus, conflicts, and missing evidence are distinguished.
+5. **Report** — extend the researcher's Output Format (owner pointer: `../../agent/researcher.md#output-format`; informational, no file read),
+   starting with its TL;DR. Add Detailed Analysis by dimension, Conflicting Information
+   with resolutions, and Research Gaps feeding `UNRESOLVED_SCOPE`.
+   Done when the Quality Checklist is satisfied or each shortfall is explained.
 
-Before searching, create a research plan:
+## Evidence Quality
 
-```markdown
-## Research Plan
+For each source, extract its claims, supporting data or experience, recency, author
+context, and conflicts. Weigh evidence quality when resolving disagreements; show
+both claims with citations and explain any unresolved difference.
+Read full pages, seek disconfirming evidence, and diversify source types. Balance
+current developments with established practices and calibrate confidence to evidence.
 
-**Question**: [Restate the question clearly]
-**Type**: [Comparison | Architecture | Best Practice | Investigation | Evaluation]
-**Key Dimensions**: [What aspects need to be covered?]
-**Query Strategy**: [How to approach from multiple angles]
-**Expected Sources**: [What types of sources will be most valuable?]
-```
+## Branch Analysis
 
-Plan 5-10 queries that cover:
-- The core question from multiple angles
-- Each dimension/aspect identified
-- Contrasting viewpoints (e.g., "pros of X" AND "problems with X")
-- Recent developments (include year in queries)
-
-### Phase 2: Broad Search (5-10 queries)
-
-Execute a comprehensive search across multiple query angles:
-
-```javascript
-web-research_multi_search({
-  queries: [
-    "primary question exact terms",
-    "alternative framing of question",
-    "aspect-specific query (one per key dimension)",
-    "known problems or limitations",
-    "recent developments 2025 2026",
-    "real-world experience production"
-  ],
-  results_per_query: 8  // higher for deep research
-})
-```
-
-**Query crafting rules**:
-- Cover the topic from at least 3 different angles
-- Include queries for both positive and negative perspectives
-- Include queries for recent/current information
-- Include queries for real-world experience (not just docs)
-- Use 5-10 queries — fewer means insufficient coverage
-
-### Phase 3: Deep Page Fetching
-
-Fetch all promising URLs from search results, not just the top few:
-
-```javascript
-web-research_fetch_pages({
-  urls: [
-    // All unique, relevant URLs from search results
-    // Typically 8-15 pages for deep research
-    "url1", "url2", "url3", /* ... */ "url10"
-  ],
-  max_chars: 15000,  // full content for deep analysis
-  timeout: 30
-})
-```
-
-**Page selection rules**:
-- Fetch all unique URLs that appear relevant — aggressive pre-filtering loses coverage
-- Prioritize: official docs > technical blogs > Stack Overflow > forums
-- Include contrasting viewpoints intentionally
-- Aim for 10+ unique sources
-
-### Phase 4: Analysis & Synthesis
-
-For each source, extract and categorize:
-
-1. **Key claims** — What does this source assert?
-2. **Evidence quality** — Is it backed by data, benchmarks, or experience?
-3. **Recency** — When was this written? Is it still current?
-4. **Perspective** — What's the author's context/bias?
-5. **Conflicts** — Does this contradict other sources?
-
-Build a synthesis that:
-- Identifies consensus across sources
-- Highlights genuine disagreements
-- Notes gaps in available information
-- Weighs evidence quality
-
-### Phase 5: Structured Output
-
-Produce a comprehensive research report following this structure:
-
-```markdown
-## Executive Summary
-[2-3 sentence overview of findings and recommendation]
-
-## Research Question
-[Clear restatement of what was investigated]
-
-## TL;DR
-[Recommended approach in 1-3 sentences]
-**Effort**: [S/M/L/XL]
-
-## Detailed Analysis
-
-### [Dimension 1]
-[Analysis with citations]
-
-### [Dimension 2]
-[Analysis with citations]
-
-### [Dimension 3]
-[Analysis with citations]
-
-## Comparison Table
-| Criteria | Option A | Option B | Option C |
-|----------|----------|----------|----------|
-| [Criterion 1] | [Assessment] | [Assessment] | [Assessment] |
-| [Criterion 2] | [Assessment] | [Assessment] | [Assessment] |
-
-## Recommendation
-**Choice**: [Recommended option]
-**Confidence**: [High/Medium/Low]
-**Rationale**: [Why this choice, given the evidence]
-
-## Conflicting Information
-- **[Topic]**: Source A says X ([link]), but Source B says Y ([link]). Resolution: [analysis]
-- **[Topic]**: [Similar pattern]
-
-## Research Gaps
-- [What couldn't be determined from available sources]
-- [Areas where more investigation would be valuable]
-
-## Risks & Guardrails
-- [Risk]: [Mitigation]
-- [Risk]: [Mitigation]
-
-## When to Reconsider
-- [Trigger that would justify revisiting this decision]
-
-## Sources
-1. [Title] - [URL] - [Brief note on what it contributed]
-2. [Title] - [URL] - [Brief note]
-...
-```
+- **Comparison Table**: for comparative questions, assess each option against the same
+  criteria, including complexity, performance, and maintenance; tie the choice to constraints.
+- **Architecture**: explain the proposed structure and each consequential trade-off.
+- **Debugging**: trace the reported failure to its origin before proposing a fix.
 
 ## Quality Checklist
 
-Every deep research report meets all of these criteria before delivery:
+- [ ] 10+ unique sources consulted and cited.
+- [ ] 500+ words of synthesis, excluding code blocks and tables.
+- [ ] Evidence Discipline and Evidence Quality applied, with confidence levels
+      (High/Medium/Low) for key claims and the overall recommendation.
+- [ ] Relevant Branch Analysis included; recommendation gives an actionable next step.
 
-- [ ] **10+ unique sources** consulted and cited
-- [ ] **500+ words** in the synthesis (excluding code blocks and tables)
-- [ ] **Citations for all major claims** — no unsupported assertions
-- [ ] **Conflicting information addressed** — disagreements between sources identified and analyzed
-- [ ] **Confidence levels noted** — High/Medium/Low for the overall recommendation and key claims
-- [ ] **Comparison table included** (for comparative questions)
-- [ ] **Research gaps identified** — what couldn't be determined
-- [ ] **Recency verified** — sources are current and relevant
-- [ ] **Multiple perspectives represented** — not just one viewpoint
-- [ ] **Actionable recommendation** — clear next step, not just information
-
-**If any checklist item cannot be met**, note it explicitly in the report with an explanation of why.
-
-## Anti-Patterns
-
-- **Shallow breadth**: Searching 10 queries but only reading snippets — fetch the full pages
-- **Confirmation bias**: Only searching for evidence that supports a preconceived answer
-- **Source monoculture**: All sources from the same type (e.g., all Stack Overflow) — diversify
-- **Recency bias**: Ignoring established best practices in favor of newest trends
-- **Analysis paralysis**: Researching indefinitely — cap at 10 queries and synthesize what you have
-- **Missing conflicts**: Presenting a clean narrative when sources actually disagree — surface the disagreements
-- **Unsupported confidence**: Claiming "High confidence" without sufficient evidence
+Explain every unmet item in the report. Done when the query budget is exhausted or
+the checklist is met; synthesize the available evidence and make remaining gaps explicit.
 
 ## Fallback Behavior
 
-If MCP tools are unavailable or return insufficient results:
-1. Fall through the three-tier fallback chain (MCP → webfetch → curl)
-2. Note the degradation in the report
-3. Adjust the quality checklist expectations (e.g., fewer sources acceptable if tools are degraded)
-4. Be explicit about limitations: "This research was conducted with limited tooling — results may be incomplete"
+Follow the researcher's Three-Tier Fallback Chain (owner pointer: `../../agent/researcher.md#three-tier-fallback-chain`; informational, no file read).
+When tooling limits coverage, explain checklist shortfalls, including fewer sources,
+and mark the resulting gaps as unresolved. Done when the degraded report makes its
+incompleteness explicit.

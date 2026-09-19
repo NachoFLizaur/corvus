@@ -65,6 +65,62 @@ describe("built plugin", () => {
   })
 })
 
+describe("shared v1/v2 entry (dist/server.js)", () => {
+  test("dist/server.js exists", () => {
+    expect(existsSync(resolve(DIST, "server.js"))).toBe(true)
+  })
+
+  test("dist/server.d.ts exists", () => {
+    expect(existsSync(resolve(DIST, "server.d.ts"))).toBe(true)
+  })
+
+  test("default export has id \"corvus\", server and setup functions, and no tui", async () => {
+    // opencode v2's plugin loader decodes the default export as an OBJECT
+    // { id, setup } and rejects v1's default async function with
+    // SchemaError: Expected object at ["default"].
+    const mod = await import(resolve(DIST, "server.js"))
+    const plugin = mod.default
+    expect(typeof plugin).toBe("object")
+    expect(typeof plugin.id).toBe("string")
+    expect(plugin.id).toBe("corvus")
+    expect(typeof plugin.server).toBe("function")
+    expect(typeof plugin.setup).toBe("function")
+    expect("tui" in plugin).toBe(false)
+  })
+
+  test("v1 detect mode accepts the shared entry and rejects the old setup-only shape", async () => {
+    // Simulate readV1Plugin's server detection for default objects: an id alone
+    // opts into the v1 module contract, even when setup is present.
+    const detectServer = (value: Record<string, unknown>) => {
+      if (!("id" in value) && !("server" in value) && !("tui" in value)) return
+      if (typeof value.server !== "function") {
+        throw new TypeError("Detected v1 modules require server()")
+      }
+      return value.server
+    }
+    const { default: plugin } = await import(resolve(DIST, "server.js"))
+
+    expect(() => detectServer({ id: plugin.id, setup: plugin.setup })).toThrow(TypeError)
+    expect(detectServer(plugin)).toBe(plugin.server)
+  })
+
+  test("root server.js shim re-exports the dist default unchanged", async () => {
+    // Local-directory entries in the v2 `plugins` array ignore package
+    // `exports` and probe <dir>/server.* on disk, so the committed root shim
+    // must resolve to the very same plugin object as the dist artifact.
+    const shim = await import(resolve(ROOT, "server.js"))
+    const dist = await import(resolve(DIST, "server.js"))
+    expect(shim.default).toBe(dist.default)
+  })
+
+  test("carries no runtime @opencode-ai import (v1 hosts lack the v2 SDK)", () => {
+    // The v2 SDK must stay a type-only dependency: a value import would make
+    // the beta SDK a runtime requirement and break v1 hosts that never ship it.
+    const source = readFileSync(resolve(DIST, "server.js"), "utf-8")
+    expect(source).not.toContain("@opencode-ai")
+  })
+})
+
 describe("package.json", () => {
   const pkg = JSON.parse(readFileSync(resolve(ROOT, "package.json"), "utf-8"))
 
@@ -73,5 +129,27 @@ describe("package.json", () => {
     expect(pkg.files).toContain("agent")
     expect(pkg.files).toContain("command")
     expect(pkg.files).toContain("skill")
+  })
+
+  test("files field ships the root server.js shim", () => {
+    expect(pkg.files).toContain("server.js")
+  })
+
+  test("exports[\"./server\"] declares types, import and default in that order", () => {
+    // Condition order is significant: `types` must precede the runtime
+    // conditions so type resolution wins before `import`/`default` match.
+    const subpath = pkg.exports["./server"]
+    expect(Object.keys(subpath)).toEqual(["types", "import", "default"])
+    expect(subpath.types).toBe("./dist/server.d.ts")
+    expect(subpath.import).toBe("./dist/server.js")
+    expect(subpath.default).toBe("./dist/server.js")
+  })
+
+  test("v2 SDK devDependency alias is pinned to the exact beta version", () => {
+    // Exact-string pin: beta SDK types churn between prereleases, and the
+    // target host is opencode2 v0.0.0-beta-19086 specifically.
+    expect(pkg.devDependencies["@opencode-ai/plugin-v2"]).toBe(
+      "npm:@opencode-ai/plugin@0.0.0-beta-19086",
+    )
   })
 })

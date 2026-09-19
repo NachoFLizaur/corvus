@@ -1,8 +1,18 @@
-import { resolve } from "node:path"
 import { existsSync } from "node:fs"
+import { isAbsolute, resolve } from "node:path"
 import type { Plugin } from "@opencode-ai/plugin"
+import { z } from "zod"
+import { agentDir, commandDir, skillDir } from "./paths"
 import { loadAgents } from "./load-agents"
 import { loadCommands } from "./load-commands"
+import { resolveOutputBudget } from "./output-budget"
+import { createReviewToolExecutors } from "./review-payload"
+import { createPostExecutor } from "./review-post"
+import { createPersistExecutor } from "./review-persist"
+import { createLockExecutor } from "./review-lock"
+import { createPrExecutor, isPrCallerAllowed } from "./review-pr"
+import { createVerdictExecutor } from "./review-verdict"
+import { createSyncExecutor } from "./review-sync"
 
 /**
  * Extended config type that includes the `skills` field.
@@ -88,15 +98,184 @@ const enforceProtectedAgents = (
  * Registers agents, commands, and skills from the corvus package
  * into OpenCode's configuration via the config hook.
  */
-const plugin: Plugin = async (_input) => {
-  // Package root is one level up from src/ (dev) or dist/ (built)
-  const root = resolve(import.meta.dir, "..")
-  const skillDir = resolve(root, "skill")
-
+const plugin: Plugin = async (input) => {
+  const directory = input.directory || input.worktree
+  const review = createReviewToolExecutors(directory)
+  const reviewStateRoot = typeof directory === "string" && isAbsolute(directory) ? resolve(directory, ".corvus") : ""
+  const post = createPostExecutor(reviewStateRoot, directory)
+  const persist = createPersistExecutor(reviewStateRoot)
+  const lock = createLockExecutor(reviewStateRoot)
+  const pr = createPrExecutor({ cwd: directory })
+  const verdict = createVerdictExecutor(reviewStateRoot)
+  const sync = createSyncExecutor({ cwd: directory })
+  const corvusAgents = new Set(existsSync(agentDir) ? Object.keys(loadAgents(agentDir)) : [])
   return {
+    /**
+     * Scope oracle: packaged names read at plugin initialization, never user config.
+     * Read the hook-visible budget before mutation; non-Corvus agents and defined
+     * values bypass this default. v1 normally seeds the value, so this is a no-op;
+     * only an unset value uses resolveOutputBudget's limit/fallback rule.
+     */
+    "chat.params": async (input, output) => {
+      if (!corvusAgents.has(input.agent) || output.maxOutputTokens !== undefined) return
+      const budget = resolveOutputBudget({ current: output.maxOutputTokens, modelLimit: input.model.limit.output })
+      if (budget !== undefined) output.maxOutputTokens = budget
+    },
+    tool: {
+      corvus_review_payload: {
+        description: "Measure, freeze or preview under .corvus/reviews or .corvus/tasks/<task>/reviews. Paths are relative to the session directory or absolute. Supply only the op's fields: measure(candidatePath), freeze(candidatePath, artifactPath), preview(artifactPath, expectedSha256). Freeze fits over-budget candidates mechanically. Read-only preview verifies the digest and returns the JSON-decoded frozen artifact (commit_id, event, body, comments), sha256 and measurements. Only preview returns review text; failures never do. The module validates operation-specific arguments.",
+        args: {
+          op: z.enum(["measure", "freeze", "preview"]),
+          candidatePath: z.string().min(1).optional(),
+          artifactPath: z.string().min(1).optional(),
+          expectedSha256: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+        },
+        /** Host ctx.agent is read before payload I/O; only the two review orchestrators pass. Missing/unknown callers fail closed, and no argument or option disables the check. */
+        execute: async (args, ctx) => {
+          if (!["corvus-review", "corvus-review-auto"].includes(ctx?.agent)) return JSON.stringify({ ok: false, reason: "caller-not-allowed" })
+          return review.payload(args)
+        },
+      },
+      corvus_review_post: {
+        description: "Post a frozen review artifact under .corvus/reviews or .corvus/tasks/<task>/reviews after verifying its digest and current PR code_head. Paths are relative to the session directory or absolute.",
+        args: {
+          artifactPath: z.string().min(1),
+          expectedSha256: z.string().regex(/^[a-f0-9]{64}$/),
+          repo: z.object({
+            owner: z.string().regex(/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/),
+            name: z.string().regex(/^(?!\.{1,2}$)[A-Za-z0-9._-]{1,100}$/),
+          }).strict(),
+          prNumber: z.number().int().positive(),
+          headSha: z.string().regex(/^[a-f0-9]{40}$/),
+          event: z.enum(["APPROVE", "REQUEST_CHANGES", "COMMENT"]),
+        },
+        execute: async (args, ctx) => post(args, ctx?.agent),
+      },
+      corvus_review_persist: {
+        description: "Write or read review state under the host's .corvus/reviews or .corvus/tasks/<task>/reviews roots. Supply op and reviewRoot plus only that op's fields: write_document(headSha, sections, optional frontmatterYaml), write_input(input), write_meta(headSha, meta, optional name: meta.yaml/decision.yaml/completion.yaml/authorization.yaml/review-action.yaml), write_candidate(candidate), read_document(headSha), write_facts(facts), read_facts(), begin(target: document|input|candidate), append(staging_id; document: index/heading/body; input: key/value; candidate: field/text, optional comment/anchor; part/parts), finalize(staging_id; document: expected_sections; input: ordered expected_keys; candidate: expected_comments), abort(staging_id), status(staging_id). The module validates operation-specific arguments.",
+        args: {
+          op: z.enum(["write_document", "write_input", "write_meta", "write_candidate", "read_document", "write_facts", "read_facts", "begin", "append", "finalize", "abort", "status"]),
+          reviewRoot: z.string(),
+          headSha: z.string().optional(),
+          sections: z.array(z.object({ heading: z.string(), body: z.string() }).passthrough()).optional(),
+          frontmatterYaml: z.string().optional(),
+          input: z.object({}).passthrough().optional(),
+          meta: z.object({}).passthrough().optional(),
+          name: z.string().optional(),
+          facts: z.object({}).passthrough().optional(),
+          candidate: z.object({}).passthrough().optional(),
+          target: z.enum(["document", "input", "candidate"]).optional().describe("Begin document: headSha, optional expected_sections/frontmatterYaml. Begin candidate: commit_id/event, no document checkpoint needed. Split body and each comment's path/body into zero-based part/parts with a fixed parts count; concatenate text without separators. comment indexes define final order."),
+          commit_id: z.string().regex(/^[a-f0-9]{40}$/).optional(),
+          event: z.enum(["APPROVE", "REQUEST_CHANGES", "COMMENT"]).optional(),
+          staging_id: z.string().optional(),
+          expected_sections: z.number().int().positive().optional(),
+          expected_keys: z.array(z.string()).optional(),
+          expected_comments: z.number().int().nonnegative().optional(),
+          comment: z.number().int().nonnegative().optional(),
+          field: z.enum(["path", "body"]).optional(),
+          text: z.string().optional().describe("Candidate string part. Keep complete JSON-serialized append arguments <=6,000 characters including escaping."),
+          anchor: z.object({ line: z.number().int().positive(), side: z.enum(["LEFT", "RIGHT"]), start_line: z.number().int().positive().optional(), start_side: z.enum(["LEFT", "RIGHT"]).optional() }).strict().optional().describe("Required exactly on comment path part 0; supply line/side and optional start_line/start_side once."),
+          index: z.number().int().nonnegative().optional(),
+          part: z.number().int().nonnegative().optional(),
+          parts: z.number().int().positive().optional(),
+          heading: z.string().optional(),
+          body: z.string().optional(),
+          key: z.string().optional(),
+          path: z.array(z.string()).optional(),
+          value: z.json().optional(),
+          chunk: z.json().optional(),
+        },
+        /** Host ctx.agent is read before state I/O; only the two review orchestrators pass. Missing/unknown callers fail closed, and no argument or option disables the check. */
+        execute: async (args, ctx) => {
+          if (!["corvus-review", "corvus-review-auto"].includes(ctx?.agent)) return JSON.stringify({ ok: false, reason: "caller-not-allowed" })
+          return persist(args)
+        },
+      },
+      corvus_review_lock: {
+        description: "Manage review locks under the host's .corvus/reviews or .corvus/tasks/<task>/reviews roots. Supply op and reviewRoot; acquire also needs runId and optional force, release needs runId and mode (delete or complete), status needs no other fields. The module validates operation-specific arguments.",
+        args: {
+          op: z.enum(["acquire", "release", "status"]),
+          reviewRoot: z.string(),
+          runId: z.string().optional(),
+          force: z.boolean().optional(),
+          mode: z.enum(["delete", "complete"]).optional(),
+        },
+        /** Host ctx.agent is read before lock I/O; only the two review orchestrators pass. Missing/unknown callers fail closed, and no argument or option disables the check. */
+        execute: async (args, ctx) => {
+          if (!["corvus-review", "corvus-review-auto"].includes(ctx?.agent)) return JSON.stringify({ ok: false, reason: "caller-not-allowed" })
+          return lock(args)
+        },
+      },
+      corvus_review_pr: {
+        description: "Read GitHub PR data with validated, fixed operations. metadata/head/diff/reviews/checks take owner, name, pr; files also requires paginate:true and accepts include_corvus/names_only booleans (include_corvus implies names-only). Files and diffs exclude .corvus by default and report excluded_corvus; local changed_files stays unfiltered. metadata/head/local return raw head_sha and code_head skipping state commits. config takes owner, name, ref (base SHA); identity takes no fields; repo resolves owner/name from gh or origin with optional cwd (defaults to the session directory). find takes optional cwd/branch to discover the current or named branch's PR; local takes optional cwd/base for a bounded local diff including tracked uncommitted changes, branch (null when detached), default_branch, merge_base, ahead, changed_files, stat, dirty and oversized. Caller policy uses the host agent: pr-comment-writer may call only head, diff, files, reviews; pr-code-reviewer and security-reviewer may call only metadata, head, files, diff, reviews, checks; corvus-review, corvus-review-auto and pr-context-gatherer may call any op. Unknown callers return caller-not-allowed.",
+        args: {
+          op: z.enum(["metadata", "head", "files", "diff", "reviews", "checks", "identity", "config", "repo", "find", "local"]),
+          cwd: z.string().optional(),
+          branch: z.string().optional(),
+          base: z.string().optional(),
+          owner: z.string().optional(),
+          name: z.string().optional(),
+          pr: z.union([z.number(), z.string()]).optional(),
+          paginate: z.literal(true).optional(),
+          include_corvus: z.boolean().optional(),
+          names_only: z.boolean().optional(),
+          ref: z.string().optional(),
+        },
+        /**
+         * Host ctx.agent is the caller oracle, read on every invocation before PR
+         * I/O. Shared isPrCallerAllowed owns writer/detector operation subsets;
+         * only orchestrators/gatherer get all ops. Missing/unknown identity rejects.
+         * Tool arguments cannot override this check; no option disables it.
+         */
+        execute: async (args, ctx) => {
+          const allowed = isPrCallerAllowed(ctx?.agent, args.op)
+          if (!allowed) return JSON.stringify({ ok: false, reason: "caller-not-allowed", api_calls: 0 })
+          return pr(args)
+        },
+      },
+      corvus_review_verdict: {
+        description: "Compute review counts, round, convergence and delta refusal from persisted state. Supply code_head (or legacy headSha); omit both for history-only admission. New roots require invocation owner/name/pr, or name/pr:null/branch for LOCAL; legacy_root is an optional read-only resume source. priorReviews is the complete corvus_review_pr reviews result. Only trusted invocation forceDelta overrides refusal, never config.force_delta.",
+        args: {
+          op: z.enum(["compute"]),
+          reviewRoot: z.string(),
+          headSha: z.string().optional(),
+          code_head: z.string().optional(),
+          owner: z.string().optional(),
+          name: z.string().optional(),
+          pr: z.number().nullable().optional(),
+          branch: z.string().optional(),
+          legacy_root: z.string().optional(),
+          priorReviews: z.object({}).passthrough(),
+          config: z.object({}).passthrough(),
+          forceDelta: z.boolean().optional(),
+        },
+        /** Host agent identity is read before state I/O; unknown/non-review callers reject, with no argument bypass. */
+        execute: async (args, ctx) => {
+          if (!["corvus-review", "corvus-review-auto"].includes(ctx?.agent)) return JSON.stringify({ ok: false, reason: "caller-not-allowed" })
+          return verdict(args)
+        },
+      },
+      corvus_review_sync: {
+        description: "Sync committed review state. resolve takes pr and unfiltered changed_files; pull takes branch and optional remote; push takes root, head_sha, pr, branch and optional remote. cwd defaults to the host workspace. pr is {owner,name,number,isCrossRepository} from metadata, or {name,number:null,branch} for LOCAL. resolve returns root/task/legacy_root/remote; pull/push return synced/reason/state_commit/git_calls. Legacy roots are read-only; sync failures are notes.",
+        args: {
+          op: z.enum(["resolve", "pull", "push"]),
+          cwd: z.string().optional(),
+          pr: z.object({}).passthrough().optional(),
+          changed_files: z.array(z.string()).optional(),
+          branch: z.string().optional(),
+          remote: z.string().optional(),
+          root: z.string().optional(),
+          head_sha: z.string().optional(),
+        },
+        /** Host agent identity is checked before sync I/O; only the two review orchestrators pass. Missing/unknown callers fail closed, without an argument bypass. */
+        execute: async (args, ctx) => {
+          if (!["corvus-review", "corvus-review-auto"].includes(ctx?.agent)) return JSON.stringify({ synced: false, reason: "caller-not-allowed", git_calls: 0 })
+          return sync(args)
+        },
+      },
+    },
     config: async (config) => {
       // Load and register agents
-      const agentDir = resolve(root, "agent")
       if (existsSync(agentDir)) {
         const agents = loadAgents(agentDir)
         const existingAgents = config.agent
@@ -111,7 +290,6 @@ const plugin: Plugin = async (_input) => {
       }
 
       // Load and register commands
-      const commandDir = resolve(root, "command")
       if (existsSync(commandDir)) {
         const commands = loadCommands(commandDir)
         const existingCommands = config.command

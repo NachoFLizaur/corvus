@@ -1,6 +1,6 @@
 {
   "name": "corvus-ai",
-  "version": "0.8.0",
+  "version": "0.10.0",
   "description": "Corvus AI agent suite for OpenCode — multi-agent orchestration with specialized agents, commands, and skills",
   "type": "module",
   "main": "dist/index.js",
@@ -13,22 +13,32 @@
     ".": {
       "import": "./dist/index.js",
       "types": "./dist/index.d.ts"
+    },
+    "./server": {
+      "types": "./dist/server.d.ts",
+      "import": "./dist/server.js",
+      "default": "./dist/server.js"
     }
   },
   "files": [
     "dist",
+    "server.js",
     "bin",
     "agent",
     "command",
     "skill",
+    "docs/CORVUS-STATE-MACHINE.md",
     "AGENTS.md",
     "LICENSE",
+    "NOTICE",
     "README.md"
   ],
   "scripts": {
-    "build": "bun build src/index.ts --outdir dist --target node && bun x tsc --emitDeclarationOnly --outDir dist",
+    "build": "bun build src/index.ts src/server.ts --outdir dist --target node && bun x tsc --emitDeclarationOnly --outDir dist",
     "typecheck": "bun x tsc --noEmit",
     "test": "bun test",
+    "smoke:review": "bash scripts/smoke-review.sh",
+    "smoke:writer": "bash scripts/smoke-writer.sh",
     "prepublishOnly": "bun run build"
   },
   "keywords": [
@@ -48,8 +58,14 @@
   "peerDependencies": {
     "@opencode-ai/plugin": "*"
   },
+  "peerDependenciesMeta": {
+    "@opencode-ai/plugin": {
+      "optional": true
+    }
+  },
   "devDependencies": {
     "@opencode-ai/plugin": "1.18.3",
+    "@opencode-ai/plugin-v2": "npm:@opencode-ai/plugin@0.0.0-beta-19086",
     "@types/bun": "latest",
     "@types/js-yaml": "^4.0.9",
     "typescript": "^5.0.0"

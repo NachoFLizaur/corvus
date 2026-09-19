@@ -3,110 +3,68 @@ name: corvus-extras
 description: Extra utilities - subagent reference, todo patterns, error handling
 ---
 
-## SUBAGENT REFERENCE
+# Corvus Extras
 
-Canonical reference for all 16 agents in the corvus-ai suite. Orchestrators keep only a minimal name + purpose list and point here for the full reference.
+Use this reference to choose a specialist, track milestones, and route errors. Load the
+owning phase skill for workflow contracts and dispatch templates.
 
-### Workflow Suite
+## Subagent Reference
 
-| Agent | Purpose | Invocation Notes |
-|-------|---------|------------------|
-| corvus | Interactive workflow orchestrator (Phases 0-7) | Primary agent — not invoked as a subagent |
-| corvus-auto | Autonomous workflow orchestrator | Primary agent — zero questions (`question: deny`); local-only completion by default, guarded opt-in Git delivery |
-| requirements-analyst | Request analysis, gap identification, clarifying questions | Phase 0a (initial) and 0b (post-discovery); returns REQUIREMENTS_CLEAR / QUESTIONS_NEEDED / DISCOVERY_NEEDED |
-| researcher | External docs, best practices, library/API research | Phase 1a; run in parallel with code-explorer |
-| code-explorer | Codebase analysis, architecture, patterns, environment detection | Phase 1b; run in parallel with researcher |
-| task-planner | Creates/updates planning files through constrained planning and learning modes | Phase 2 (plan), Phase 3.5-fail (fix plan), Phase 4b-fail iteration ≥2 (FAILURE_ANALYSIS), Phase 4c (PROGRESS_UPDATE), Phase 6a (SUCCESS_EXTRACTION) |
-| plan-reviewer | High-accuracy plan review → OKAY / REJECT | Phase 3.5, only if the user chose plan review |
-| code-implementer | Implementation + task/workflow-authorized validation | Phase 4a; delegated mode with a task-file path |
-| code-quality | Tests, build validation, acceptance criteria → quality gate | Phase 4b (per phase) and Phase 5a (final, full suite) |
-| ux-dx-quality | Subjective quality: UX, DX, docs, architecture | Phase 5b, only when a task required UX/DX review |
+| Agent | Purpose | Contract Owner |
+|-------|---------|----------------|
+| corvus | Interactive workflow; primary entry point | corvus agent |
+| corvus-auto | Autonomous workflow; primary entry point | corvus-auto agent |
+| requirements-analyst | Requirements and decision questions | [Phase 0](../corvus-phase-0/SKILL.md) |
+| researcher | External technical evidence | [Phase 1](../corvus-phase-1/SKILL.md) |
+| code-explorer | Repository evidence and environment discovery | [Phase 1](../corvus-phase-1/SKILL.md) |
+| task-planner | Adaptive plan, decision records, progress and learning updates | task-planner modes |
+| plan-reviewer | Cross-model whole-plan review | [Phase 2](../corvus-phase-2/SKILL.md) |
+| code-implementer | Approved production changes and scoped validation | [Phase 4](../corvus-phase-4/SKILL.md) |
+| code-quality | Objective acceptance and validation | [Phase 4](../corvus-phase-4/SKILL.md), [Phase 5](../corvus-phase-5/SKILL.md) |
+| ux-dx-quality | Subjective UX, DX, docs, architecture assessment | [Phase 5](../corvus-phase-5/SKILL.md) |
+| corvus-review | Interactive PR review; primary entry point | corvus-review agent |
+| corvus-review-auto | Autonomous PR review; primary entry point | corvus-review-auto agent |
+| pr-context-gatherer | PR evidence and conventions | [R1](../corvus-review-r1/SKILL.md) |
+| pr-code-reviewer | Read-only PR code detection | [R2](../corvus-review-r2/SKILL.md) |
+| security-reviewer | Read-only security detection | [R2](../corvus-review-r2/SKILL.md) |
+| pr-comment-writer | Authorized GitHub review posting | [R5](../corvus-review-r5/SKILL.md) |
 
-### Workflow Ownership and Gate Contracts
+Invoke specialists through the Task tool with the selected `subagent_type`; primary agents
+are entry points. Batch independent calls in one message, using the owning skill's payload.
+Review schemas belong to [corvus-review-extras](../corvus-review-extras/SKILL.md).
+Done when the request reaches its owner with that owner's required context.
 
-| Milestone | Owner | Contract |
-|-----------|-------|----------|
-| Phase 4a | code-implementer (one invocation per task) | Implements the approved task and performs only the validation authorized by its task and active workflow mode. |
-| Phase 4b | code-quality | Runs the phase-level objective gate and returns binary `PASS` or `FAIL`. |
-| Phase 4c | task-planner (`PROGRESS_UPDATE`), with Corvus validating the result | After a 4b `PASS`, updates only authorized planning progress; Corvus verifies diff confinement before routing onward and blocks on update failure. |
-| Phase 5a | code-quality | Runs the final objective gate with binary `PASS` or `FAIL`; in deferred mode this is the first full test-suite run. |
-| Phase 5b | ux-dx-quality | Returns exactly `PASS`, `NEEDS_IMPROVEMENT`, or `CRITICAL_ISSUES` for subjective quality. |
-| Phase 6 | task-planner, then Corvus orchestrator | Runs feature-level `SUCCESS_EXTRACTION` once, then presents the final summary. |
+## Todo Patterns
 
-Objective quality gates (4b and 5a) are binary. Only the subjective 5b gate is
-three-valued: `PASS` proceeds, `NEEDS_IMPROVEMENT` records non-blocking
-recommendations and proceeds, and `CRITICAL_ISSUES` enters scoped fixing and
-revalidation. Phase 6 alone owns `SUCCESS_EXTRACTION`.
+<!-- adapted from mattpocock/skills (MIT) -->
+Track phase milestones with TodoWrite, keeping detailed tasks in PLAN.md. Set a phase
+`in_progress` when it starts and `completed` only after its closing evidence; represent
+waiting prerequisites as `pending`. Reflect routing changes rather than adding a todo
+for every tool call. Use the current tool schema, for example:
 
-### Review Suite
-
-| Agent | Purpose | Invocation Notes |
-|-------|---------|------------------|
-| corvus-review | Interactive multi-pass PR review orchestrator | Primary agent; review phases R0-R5 |
-| corvus-review-auto | Autonomous PR review | Primary agent — zero questions (`question: deny`); auto-posts review |
-| pr-context-gatherer | PR context: diffs, file maps, dependencies, conventions | Dispatched in R1 |
-| pr-code-reviewer | Mechanically read-only architecture, correctness, and conventions detection | R2 only; uses read/glob/grep and reports all findings for R3 synthesis |
-| security-reviewer | Security analysis (OWASP/CWE, taint analysis, secrets) | Dispatched in R2 |
-| pr-comment-writer | Posts formatted reviews to GitHub with error recovery | Dispatched in R5 |
-
-Review-suite schemas and detailed reference: corvus-review-extras skill.
-
-### Invoking Subagents
-
-Use the Task tool with `subagent_type`. Invoke independent subagents in the same message to run them in parallel (e.g., Phase 1):
-
-```javascript
-// These run in parallel
-task(subagent_type: "researcher", description: "Research JWT", prompt: "**TASK**: ...")
-task(subagent_type: "code-explorer", description: "Explore auth", prompt: "**TASK**: ...")
+```text
+Discovery — completed
+Implementation Phase 1 — in_progress
+Final Validation — pending
 ```
 
----
+Persistent progress belongs to [Phase 4c](../corvus-phase-4/SKILL.md#4c-record-one-phase-boundary).
+Done when visible todos agree with the current evidenced workflow position.
 
-## TODO TRACKING
+## Error Handling
 
-Track progress with TodoWrite at the phase level — phases, not steps. This matches the per-phase execution model, keeps progress meaningful to the user, and prevents "what phase am I on?" errors.
+Capture the failing operation, actual error, impact, task/phase, attempted recovery, and
+remaining prerequisite; then use the owner rather than inventing another retry loop:
 
-Update todos at milestones: when a phase starts (in_progress), when it completes (completed), and when a gate changes routing (e.g., QUESTIONS_NEEDED → keep the analysis todo pending until the user answers).
+| Failure | Route |
+|---------|-------|
+| In-task implementation/check failure | code-implementer modes |
+| Phase acceptance failure | [Phase 4 Failure Routing](../corvus-phase-4/SKILL.md#failure-routing) |
+| Empty, truncated, or malformed child output | [Transport recovery](../corvus-phase-4/reference/transport-retry.md) |
+| Final objective or subjective failure | [Phase 5](../corvus-phase-5/SKILL.md) |
+| Material divergence or wrong approach | [Planning and approval](../corvus-phase-2/SKILL.md) |
+| Follow-up remediation | [Phase 7](../corvus-phase-7/SKILL.md) |
 
-Example (Phase 4, phase-level):
-
-```javascript
-todowrite([
-  { id: "phase-1", content: "Phase 1: Foundation (Tasks 01-02)", status: "completed", priority: "high" },
-  { id: "phase-2", content: "Phase 2: Core Implementation (Tasks 03-07)", status: "in_progress", priority: "high" },
-  { id: "phase-3", content: "Phase 3: Integration (Tasks 08-10)", status: "pending", priority: "high" },
-])
-```
-
----
-
-## ERROR HANDLING
-
-### Recoverable Errors (implementation or validation failures)
-
-1. **Categorize** — test failure, build error, or acceptance-criteria miss
-2. **Dispatch the fix** — iteration 1: send a targeted fix request (`test_scope: targeted`) to code-implementer with the failure report; iteration ≥2: task-planner FAILURE_ANALYSIS first (rule: corvus-phase-4 skill)
-3. **Re-validate** with code-quality
-4. **Track iterations** — after 3 failed attempts, stop and escalate to the user with results so far and open questions
-
-### Fundamental Issues
-
-If the entire approach is wrong: stop implementation, report to the user, propose 2-3 alternatives, and wait for guidance.
-
-```markdown
-## Approach Issue Detected
-
-**Problem**: [Clear description of the fundamental issue]
-
-**Why This Matters**: [Impact if we continue]
-
-**Options**:
-1. [Alternative approach 1] - [tradeoffs]
-2. [Alternative approach 2] - [tradeoffs]
-3. [Abort and start fresh]
-
-**My Recommendation**: [Which option and why]
-
-**Awaiting your guidance.**
-```
+For a fundamental approach issue, supply evidence, viable alternatives with trade-offs,
+and a recommendation to the caller; it owns the next decision and any user interaction.
+Done when recovery reaches its owner or available results and gaps are reported while independent authorized work continues; approval, mutation, and integrity gates remain in force.

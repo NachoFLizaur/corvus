@@ -47,8 +47,9 @@ describe("loadCommands", () => {
     const commands = loadCommands(COMMAND_DIR)
     const summary = commands["summary"] as Record<string, unknown>
 
-    // summary.md has mode and temperature in frontmatter,
-    // but these are not part of CommandConfig and should not appear
+    // Guards the LOADER contract, not corpus state: whatever extra keys a
+    // command's frontmatter happens to carry, `mode`/`temperature` are not
+    // CommandConfig fields, so they must never be surfaced on a loaded command.
     expect(summary).not.toHaveProperty("mode")
     expect(summary).not.toHaveProperty("temperature")
   })
