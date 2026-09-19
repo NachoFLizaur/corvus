@@ -5,6 +5,10 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.10.0 — 2026-09-16
+
+Promotes `0.10.0-beta.12` to stable with no code changes. The 0.10 line covers the adaptive-plan redesign (ADR-0001/0002), the two-axis PR review pipeline with tool-owned state, transport and verdict (`corvus_review_*`), PR discovery and LOCAL review mode, delivery-by-default posting, committed review state and planning records, default-allow agent permissions, and staged checkpoint persistence. See the beta entries below for the incremental record.
+
 ## 0.10.0-beta.12 — 2026-09-16
 
 ### Changed
