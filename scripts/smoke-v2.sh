@@ -337,6 +337,15 @@ run_boot_mode() {
     die "'opencode2 plugin list' failed (exit $?)"
   smoke_rows <"$WORK/plugin-list.out"
 
+  # Initialize the location, but discard this early listing: registry installs
+  # may still be pending. All boot modes require active plugin-state below;
+  # failure aborts before either corpus consumer can use an incomplete snapshot.
+  run_capped "$CAP_SECS" "$CLI" debug agents >/dev/null 2>"$WORK/debug-agents.err" ||
+    die "'opencode2 debug agents' failed (exit $?)"
+  assert_plugin_state
+
+  # Snapshot only after the scoped state assertion and settled-log check pass.
+  # Derive ids from this same JSON so --full and --refs inspect the same read.
   section "opencode2 debug agents (ids)"
   run_capped "$CAP_SECS" "$CLI" debug agents >"$WORK/debug-agents.json" 2>"$WORK/debug-agents.err" ||
     die "'opencode2 debug agents' failed (exit $?)"
@@ -348,7 +357,6 @@ run_boot_mode() {
     die "could not parse 'opencode2 debug agents' output"
   smoke_rows <"$WORK/agent-ids.txt"
 
-  assert_plugin_state
   assert_load_evidence "$entry"
   if [[ "$MODE" == "registry" ]]; then assert_registry_entrypoint; fi
   if ((FULL)); then
@@ -647,6 +655,12 @@ loaded_install_root() {
     [[ -n "$entrypoints" && "$entrypoints" != *$'\n'* ]] || die "ambiguous installed root for probe"
     entrypoint="$entrypoints"
     [[ "$entrypoint" == */node_modules/"$PACKAGE_NAME"/dist/server.js ]] || die "unrecognized probe entrypoint"
+    # Host logs may use file: URLs; all consumers below need filesystem paths.
+    if [[ "$entrypoint" == file:* ]]; then
+      entrypoint="$(SMOKE_ENTRYPOINT="$entrypoint" bun -e \
+        'console.log(require("node:url").fileURLToPath(process.env.SMOKE_ENTRYPOINT))')" ||
+        die "could not decode probe entrypoint"
+    fi
     installed_root="${entrypoint%/dist/server.js}"
   fi
   printf '%s' "$installed_root"
