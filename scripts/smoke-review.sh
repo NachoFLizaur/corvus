@@ -5,13 +5,17 @@ set -euo pipefail
 umask 077
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+source "$ROOT/scripts/host.sh"
 HOST=""
+OPENCODE_BIN=""
 PR="https://github.com/NachoFLizaur/corvus/pull/8"
 INTAKE=url
 BRANCH=""
 MODEL="amazon-bedrock/global.openai.gpt-6-astra"
 KEEP=0
 PREFLIGHT_ONLY=0
+PREFLIGHT_HOST=0
+NEGATIVE_CONTROL=0
 CROSS_REPO=false
 WRITER=0
 TIMEOUT_MIN=40
@@ -66,21 +70,50 @@ preflight_branch_pr() {
   ' || die 4 "argument-free gh pr view did not resolve PR #$NUMBER on $BRANCH; model was not started"
 }
 
+# Agent listing oracle: stable v2 can return only built-ins on the first read,
+# before the scoped plugin request initializes this location. Re-read afterwards,
+# polling only absence for 60 reads with half-second sleeps (each CLI cap: 60s).
+# Malformed evidence/CLI errors fail immediately;
+# permissions are still validated separately before model launch. No bypass.
+preflight_v2_agents() {
+  local attempt result
+  for ((attempt=0; attempt<60; attempt++)); do
+    cap 60 "$CLI" debug agents >"$WORK/agents.json" 2>"$WORK/agents.stderr" || die 3 'host agent inspection failed'
+    result=0
+    bun -e '
+      const agents = await Bun.file(process.env.SMOKE_WORK + "/agents.json").json()
+      if (!Array.isArray(agents)) process.exit(1)
+      process.exit(agents.some(agent => agent?.id === "corvus-review-auto") ? 0 : 2)
+    ' || result=$?
+    case "$result" in
+      0) return 0 ;;
+      2) sleep 0.5 ;;
+      *) die 3 'malformed host agent listing; model was not started' ;;
+    esac
+  done
+  die 3 'corvus-review-auto absent from host agent listing after 60 reads; model was not started'
+}
+
 usage() {
   printf '%s\n' 'Usage: bash scripts/smoke-review.sh --host v1|v2 [--pr URL] [--intake url|branch|local] [--model ID] [--keep] [--preflight-only] [--timeout-min N=40] [--writer | --full]'
   printf '%s\n' '  --intake  url (default): explicit PR; branch: discover the fixture PR; local: dirty branch without a PR'
-  printf '%s\n' '  --preflight-only  print intake setup and preflight evidence, then exit before packaging or host/model launch'
+  printf '%s\n' '  --preflight-only  probe host version and print intake evidence; exit before packaging or service/model launch'
+  printf '%s\n' '  --preflight-host  v2 only: also pack/install, boot and check plugin state/agents/logs; stop before any model call'
+  printf '%s\n' '  --negative-control  with --preflight-host: strip skill.path in the sandbox package; EXPECT plugin-state FAIL'
   printf '%s\n' '  --writer  execute the real pr-comment-writer against the shim (POST blocked) instead of denying its dispatch'
   printf '%s\n' '  --full    every optional leg (currently --writer)'
+  smoke_host_help
 }
 while (($#)); do
   case "$1" in
-    --host|--pr|--model|--timeout-min|--intake)
+    --host|--opencode-bin|--pr|--model|--timeout-min|--intake)
       [[ $# -ge 2 && -n "$2" ]] || die 3 "missing value for $1"
-      case "$1" in --host) HOST="$2" ;; --pr) PR="$2" ;; --model) MODEL="$2" ;; --timeout-min) TIMEOUT_MIN="$2" ;; --intake) INTAKE="$2" ;; esac
+      case "$1" in --host) HOST="$2" ;; --opencode-bin) OPENCODE_BIN="$2" ;; --pr) PR="$2" ;; --model) MODEL="$2" ;; --timeout-min) TIMEOUT_MIN="$2" ;; --intake) INTAKE="$2" ;; esac
       shift 2 ;;
     --keep) KEEP=1; shift ;;
     --preflight-only) PREFLIGHT_ONLY=1; shift ;;
+    --preflight-host) PREFLIGHT_HOST=1; shift ;;
+    --negative-control) NEGATIVE_CONTROL=1; shift ;;
     --writer|--full) WRITER=1; shift ;;
     --help|-h) usage; exit 0 ;;
     *) usage; die 3 "unknown argument: $1" ;;
@@ -90,13 +123,13 @@ done
 [[ "$INTAKE" == url || "$INTAKE" == branch || "$INTAKE" == local ]] || die 3 '--intake must be url, branch or local'
 [[ "$INTAKE" != local || "$WRITER" == 0 ]] || die 3 '--writer/--full cannot be combined with LOCAL intake'
 [[ "$WRITER" == 0 || "$HOST" == v1 ]] || die 3 '--writer/--full is v1-only until the v2 gate lands'
+[[ "$PREFLIGHT_HOST" == 0 || ( "$HOST" == v2 && "$PREFLIGHT_ONLY" == 0 ) ]] || die 3 '--preflight-host requires v2 and cannot combine with --preflight-only'
+[[ "$NEGATIVE_CONTROL" == 0 || "$PREFLIGHT_HOST" == 1 ]] || die 3 '--negative-control requires --preflight-host (no model call)'
 [[ "$TIMEOUT_MIN" =~ ^[1-9][0-9]*$ && ${#TIMEOUT_MIN} -le 4 ]] || die 3 'timeout must be a positive integer (minutes, at most four digits)'
 [[ "$PR" =~ ^https://github.com/([a-zA-Z0-9_-]+)/([a-zA-Z0-9_.-]+)/pull/([1-9][0-9]*)/?$ ]] || die 4 'expected a canonical github.com PR URL'
 OWNER="${BASH_REMATCH[1]}" REPO="${BASH_REMATCH[2]}" NUMBER="${BASH_REMATCH[3]}"
 [[ "$REPO" != . && "$REPO" != .. ]] || die 4 'invalid repository name'
-CLI=opencode
-[[ "$HOST" != v2 ]] || CLI=opencode2
-for executable in "$CLI" bun npm gh perl lsof git; do
+for executable in bun npm gh perl lsof git; do
   command -v "$executable" >/dev/null || die 3 "missing executable: $executable"
 done
 export CORVUS_SMOKE_REAL_GH="$(command -v gh)"
@@ -136,6 +169,7 @@ cleanup() {
   trap - EXIT INT TERM
   stop_service || status=3
   collect_logs || status=3
+  smoke_live_assert || status=3
   printf 'Host: %s; exit: %s; total duration: %ss\n' "$HOST" "$status" "$((SECONDS - START))"
   if [[ -n "$WORK" ]]; then
     if ((status != 0 || KEEP)); then
@@ -148,15 +182,13 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-BASE="${TMPDIR:-/tmp}/opencode"
-mkdir -p "$BASE"
-WORK="$(mktemp -d "$BASE/smoke-review-$HOST.XXXXXX")"
-WORK="$(cd "$WORK" && pwd -P)"
+smoke_host_prepare "$HOST" "$OPENCODE_BIN" || die 3 'host selection/version probe failed'
 export SMOKE_WORK="$WORK" SMOKE_ROOT="$ROOT" SMOKE_HOST="$HOST" SMOKE_MODEL="$MODEL" SMOKE_WRITER="$WRITER"
 mkdir -p "$WORK"/xdg/{data/opencode,config/opencode,state,cache} "$WORK"/{bin,install,pack,dist}
 printf 'Sandbox: %s\nHost: %s; fixture PR: %s; intake: %s; model: %s; review cap: %sm; writer: %s\n' "$WORK" "$HOST" "$PR" "$INTAKE" "$MODEL" "$TIMEOUT_MIN" "$([[ "$WRITER" == 1 ]] && printf executed || printf denied)"
 
-# Isolate all host state, but preserve the machine's AWS environment and ~/.aws.
+# Isolate XDG state, retaining HOME and AWS environment for the verified provider
+# resolution. HOME-based external skills/config remain visible; ~/.aws is not copied.
 # Only the Bedrock entry is read/copied before the first host DB open; presence
 # and type are diagnostics, never credentials. No other provider entry is seeded.
 while IFS= read -r name; do unset "$name"; done < <(compgen -v OPENCODE_)
@@ -241,6 +273,8 @@ if ((PREFLIGHT_ONLY)); then
   exit 0
 fi
 
+bash "$ROOT/scripts/probe-gh-shim.sh" "$WORK/bin/gh" "$WORK/shim-probe" || die 6 'network-free shim sentinel probe failed; model was not started'
+
 [[ -f "$ROOT/dist/server.js" && -f "$ROOT/dist/index.js" ]] || die 3 'build artifacts missing; run bun run build before this gate'
 (
   cd "$ROOT"
@@ -253,6 +287,34 @@ printf '{"name":"corvus-review-smoke","private":true,"type":"module"}\n' >"$WORK
   cap 180 npm install "$WORK/pack/$TARBALL" --cache "$XDG_CACHE_HOME/npm-cache" --no-audit --no-fund --ignore-scripts --loglevel=error
 ) >"$WORK/install.stdout" 2>"$WORK/install.stderr" || die 3 'tarball installation failed'
 export SMOKE_INSTALL="$WORK/install/node_modules/corvus-ai"
+# Negative control reproduces the pre-repair missing skill.path at the editor
+# boundary, following smoke-v2's control. Only the freshly installed sandbox shim
+# changes, before boot; src/dist stay untouched. This mode cannot launch a model
+# and must fail the ordinary plugin-state guard, never turn that failure into PASS.
+if ((NEGATIVE_CONTROL)); then
+  bun -e '
+    await Bun.write(process.env.SMOKE_INSTALL + "/server.js", `import repaired from "./dist/server.js"
+export default {
+  ...repaired,
+  setup(ctx) {
+    const skill = Object.create(ctx.skill)
+    skill.transform = callback => ctx.skill.transform(draft => callback(new Proxy(draft, {
+      get(target, key) {
+        if (key === "add") return record => {
+          const { path, ...withoutPath } = record
+          return target.add(withoutPath)
+        }
+        const value = Reflect.get(target, key)
+        return typeof value === "function" ? value.bind(target) : value
+      },
+    })))
+    return repaired.setup(new Proxy(ctx, { get: (target, key) => key === "skill" ? skill : Reflect.get(target, key) }))
+  },
+}
+`)
+  ' || die 3 'negative-control injection failed'
+  printf 'Negative control (local simulation): strips skill.path only in %s/server.js\n' "$SMOKE_INSTALL"
+fi
 # The package bundles this module into its host entries, not a standalone JS
 # export. Build a sandbox-only verifier from the same tree, without repacking or
 # editing the installed plugin that the host will exercise.
@@ -275,11 +337,8 @@ export GIT_TRACE2_EVENT="$WORK/git-trace.jsonl"
 : >"$GIT_TRACE2_EVENT"
 
 if [[ "$HOST" == v2 ]]; then
-  for ((attempt=0; attempt<40; attempt++)); do
-    candidate=$((49500 + RANDOM % 400))
-    [[ "$candidate" != 49374 ]] || continue
-    if [[ -z "$(lsof -nP -iTCP:"$candidate" -sTCP:LISTEN -t 2>/dev/null || true)" ]]; then PORT="$candidate"; break; fi
-  done
+  PORT="$SMOKE_PORT"
+  SMOKE_CHECK_PORT="$PORT" smoke_free_port >/dev/null || die 3 'selected service port is no longer free'
   [[ -n "$PORT" && "$PORT" != 49374 ]] || die 3 'no safe service port available'
   cap 30 "$CLI" service set port "$PORT" >"$WORK/service-set.log" 2>&1 || die 3 'service port setup failed'
   SMOKE_PORT="$PORT" bun -e '
@@ -290,6 +349,8 @@ if [[ "$HOST" == v2 ]]; then
   SERVICE_STARTED=1
   cap 60 "$CLI" plugin list >"$WORK/warmup.stdout" 2>"$WORK/warmup.stderr" || die 3 'host warmup failed'
   cap 60 "$CLI" debug agents >"$WORK/agents.json" 2>"$WORK/agents.stderr" || die 3 'host agent inspection failed'
+  SMOKE_EVIDENCE_KIND='real-host assertion' smoke_v2_plugin_state "$WORK/fixture" "$WORK/plugin-state.json" || die 3 'plugin-state: scoped active corvus server required; model was not started'
+  preflight_v2_agents
 else
   cap 60 "$CLI" debug agent corvus-review-auto --print-logs --log-level INFO >"$WORK/agents.json" 2>"$WORK/agents.stderr" || die 3 'host agent inspection failed'
 fi
@@ -345,10 +406,18 @@ collect_logs
 bun -e '
   const { checkPluginLoaded } = await import(process.env.SMOKE_ROOT + "/scripts/check-review-artifacts.ts")
   const result = checkPluginLoaded({ host: process.env.SMOKE_HOST, hostlog: process.env.SMOKE_WORK + "/host.log",
+    fixture: process.env.SMOKE_WORK + "/fixture", pluginState: process.env.SMOKE_WORK + "/plugin-state.json",
     agents: process.env.SMOKE_WORK + "/agents.json", install: process.env.SMOKE_INSTALL, writer: process.env.SMOKE_WRITER === "1" })
   console.log("Plugin preflight: " + result.detail)
   if (!result.ok) process.exit(1)
 ' || die 3 'plugin load evidence missing or failed (see host.log)'
+
+((NEGATIVE_CONTROL == 0)) || die 3 'negative-control unexpectedly passed plugin-state'
+if ((PREFLIGHT_HOST)); then
+  stop_service || die 3 'sandbox service could not be stopped'
+  printf 'Host preflight: PASS; scoped plugin active, writer denied, shim sentinel rejected; no model started\n'
+  exit 0
+fi
 
 REVIEW_START=$SECONDS
 RUN_STATUS=0
@@ -384,10 +453,16 @@ if [[ "$SESSION_ID" =~ ^ses[a-zA-Z0-9_-]+$ && "$RUN_STATUS" != 142 ]]; then
 fi
 # Settle asynchronous host logging, then stop the service before artifact reads.
 sleep 3
+# Refresh scoped state after the run: a later transform failure must not be hidden
+# by the pre-model snapshot. Failed capture aborts, never reuses stale evidence.
+if [[ "$HOST" == v2 ]]; then
+  smoke_v2_api_read /api/plugin "$WORK/plugin-state.json" "$WORK/fixture" || die 3 'plugin-state: final API capture failed'
+fi
 stop_service || die 3 'sandbox service could not be stopped; artifacts not checked'
 collect_logs
 CHECK_STATUS=0
 CHECK_ARGS=(--host "$HOST" --agents "$WORK/agents.json" --install "$SMOKE_INSTALL" --db "$XDG_DATA_HOME/opencode/opencode.db" --intake "$INTAKE" --bare "$WORK/bare.git" --cross-repo "$CROSS_REPO")
+[[ "$HOST" != v2 ]] || CHECK_ARGS+=(--plugin-state "$WORK/plugin-state.json")
 [[ -z "$BRANCH" ]] || CHECK_ARGS+=(--branch "$BRANCH")
 [[ "$WRITER" == 0 ]] || CHECK_ARGS+=(--writer)
 bun run "$ROOT/scripts/check-review-artifacts.ts" "$WORK/fixture" "$OWNER" "$REPO" "$NUMBER" "$HEAD_SHA" "$WORK/run.jsonl" "$WORK/host.log" "$WORK/gh-audit.log" "${CHECK_ARGS[@]}" | tee "$WORK/result.txt" || CHECK_STATUS=$?

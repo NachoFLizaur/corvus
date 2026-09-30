@@ -3,11 +3,12 @@
 # smoke-v2.sh — hermetic smoke-load harness for the OpenCode v2 (`opencode2`) host.
 #
 # WHY THIS EXISTS
-# The v2 host SILENTLY drops a local-directory plugin whose entry it cannot
-# resolve: no error, no log line, exit 0. Absence of an error is therefore NOT
-# evidence of a successful load. The only positive oracles are (a) a
-# `msg="loading plugin"` line naming our entry in the host log and (b) the
-# plugin appearing in `opencode2 plugin list`. Every mode below fails closed:
+# Stable v2 reports "Plugin entrypoint not found" for an unresolved entry, and
+# can disable a loaded plugin after a transform fails. CLI exit 0 or a loading
+# log is NOT evidence of successful registration. Boot modes require the scoped
+# plugin API to report id=corvus, state.status=active, plus clean settled logs.
+# `plugin list` is human-readable diagnostics, not a state oracle. Every mode
+# labels real-host assertions separately from fake/local probes and fails closed:
 # any missing or mismatched evidence exits non-zero.
 #
 # MODES
@@ -25,8 +26,8 @@
 #                        maps with the local host matcher, AND probe all seven review
 #                        tools (including payload/preview and post rejection) on
 #                        both hosts via `scripts/probe-tools.ts` (included in
-#                        --full). The v2 protocol has no tool listing (`v2.command
-#                        .list`/`v2.skill.list`/`v2.mcp.list` exist; no tool group)
+#                        --full). The v2 protocol has no tool listing
+#                        (`command.list`/`skill.list`/`mcp.list` exist; no tool group)
 #                        and `opencode2 debug` covers only agents/config/paths, so
 #                        the probe drives the BUILT `dist/server.js` setup() and the
 #                        `dist/index.js` v1 hook function with the registration
@@ -48,6 +49,9 @@
 #                        by configuring `{"plugins": ["<spec>"]}`. It fetches
 #                        from the registry, so it must never gate pre-publish
 #                        work.
+#   --negative-control   local boot of a disposable package copy whose skill
+#                        editor strips `path`; EXPECT exit 1 at plugin-state.
+#                        Neither the repository sources nor dist are modified.
 #
 # HERMETICITY
 # All four XDG dirs (data/config/state/cache) are redirected under a per-run
@@ -73,8 +77,8 @@ readonly CAP_SECS=60
 readonly REGISTRY_WARMUP_CAP_SECS=300
 # The host writes server-side log lines asynchronously: empirically the
 # `loading plugin` line lands 1-2s AFTER the CLI invocation that triggered the
-# load has already exited. A single-shot grep therefore reports a false silent
-# drop, so load evidence is polled up to EVIDENCE_WAIT_SECS and only then
+# load has already exited. A single-shot grep therefore reports false missing
+# evidence, so load evidence is polled up to EVIDENCE_WAIT_SECS and only then
 # treated as absent. EVIDENCE_SETTLE_SECS is the converse: a load FAILURE line
 # lags the same way, so asserting its absence immediately would be vacuous.
 readonly EVIDENCE_WAIT_SECS=30
@@ -89,8 +93,14 @@ readonly LISTING_WAIT_SECS=30
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 readonly REPO_ROOT
+source "$REPO_ROOT/scripts/host.sh"
 
 MODE="local"
+HOST="v2"
+OPENCODE_BIN=""
+NEGATIVE_CONTROL=0
+PACKAGE_ROOT="$REPO_ROOT"
+LOCATION_HEADER=""
 FULL=0
 REFS=0
 REGISTRY_SPEC=""
@@ -98,10 +108,10 @@ WORK=""
 SERVICE_PORT=""
 SERVICE_STARTED=0
 
-log() { printf '%s\n' "$*"; }
-section() { printf '\n=== %s ===\n' "$*"; }
+log() { smoke_row "$*"; }
+section() { smoke_row "=== $* ==="; }
 die() {
-  printf 'FAIL: %s\n' "$*" >&2
+  smoke_row "FAIL: $*" >&2
   exit 1
 }
 
@@ -117,8 +127,11 @@ Usage: bash scripts/smoke-v2.sh [--full] [--refs] [--tarball | --registry <spec>
                       both hosts (also INERT with --tarball)
   --tarball           npm-specifier resolution emulation (no host boot)
   --registry <spec>   POST-PUBLISH ONLY real-host load of an npm specifier
+  --host v2           required host major (default v2; this gate is v2-only)
+  --negative-control  strip skill.path in a temporary copy; EXPECT plugin-state FAIL
   -h, --help          show this help
 EOF
+  smoke_host_help
 }
 
 # Wall-clock cap without timeout(1): a pending alarm survives exec, so SIGALRM
@@ -133,6 +146,15 @@ parse_args() {
   local tarball=0
   while [[ $# -gt 0 ]]; do
     case "$1" in
+      --negative-control)
+        NEGATIVE_CONTROL=1
+        shift
+        ;;
+      --host|--opencode-bin)
+        [[ $# -ge 2 && -n "$2" ]] || die "missing value for $1"
+        case "$1" in --host) HOST="$2" ;; --opencode-bin) OPENCODE_BIN="$2" ;; esac
+        shift 2
+        ;;
       --full)
         FULL=1
         REFS=1
@@ -161,6 +183,7 @@ parse_args() {
         ;;
     esac
   done
+  [[ "$HOST" == v2 ]] || die 'smoke-v2 requires --host v2'
 
   if ((tarball)) && [[ -n "$REGISTRY_SPEC" ]]; then
     die "--tarball and --registry are mutually exclusive: --tarball emulates resolution without a host, --registry boots the host against the registry"
@@ -171,6 +194,7 @@ parse_args() {
   elif [[ -n "$REGISTRY_SPEC" ]]; then
     MODE="registry"
   fi
+  [[ "$NEGATIVE_CONTROL" == 0 || "$MODE" == local ]] || die '--negative-control is local-only'
 }
 
 cleanup() {
@@ -179,10 +203,11 @@ cleanup() {
 
   if ((status != 0)) && [[ -n "$WORK" && -d "$WORK/xdg/data/opencode/log" ]]; then
     section "host log tail (failure diagnostics)"
-    tail -n 60 "$WORK/xdg/data/opencode/log/"*.log 2>/dev/null || true
+    tail -n 60 "$WORK/xdg/data/opencode/log/"*.log 2>/dev/null | smoke_rows || true
   fi
 
   stop_service
+  smoke_live_assert || status=1
   if [[ -n "$WORK" ]]; then rm -rf "$WORK"; fi
 
   exit "$status"
@@ -195,7 +220,7 @@ stop_service() {
   ((SERVICE_STARTED)) || return 0
   [[ -n "$SERVICE_PORT" && "$SERVICE_PORT" != "$USER_SERVICE_PORT" ]] || return 0
 
-  run_capped 30 opencode2 service stop >/dev/null 2>&1 || true
+  run_capped 30 "$CLI" service stop >/dev/null 2>&1 || true
 
   local pids
   pids="$(lsof -nP -iTCP:"$SERVICE_PORT" -sTCP:LISTEN -t 2>/dev/null || true)"
@@ -209,39 +234,9 @@ stop_service() {
   SERVICE_STARTED=0
 }
 
-port_is_free() {
-  local port="$1"
-  [[ -z "$(lsof -nP -iTCP:"$port" -sTCP:LISTEN -t 2>/dev/null || true)" ]]
-}
-
-pick_free_port() {
-  local attempt port
-  for attempt in $(seq 1 40); do
-    port=$((49500 + RANDOM % 400))
-    if [[ "$port" == "$USER_SERVICE_PORT" ]]; then continue; fi
-    if port_is_free "$port"; then
-      printf '%s' "$port"
-      return 0
-    fi
-  done
-  die "could not find a free service port after 40 attempts"
-}
-
 make_workspace() {
-  local base="${TMPDIR:-/tmp}"
-  base="${base%/}/opencode"
-  mkdir -p "$base"
-  WORK="$base/smoke-$$"
-  rm -rf "$WORK"
-  mkdir -p "$WORK"/xdg/{data,config/opencode,state,cache} "$WORK/project"
-
-  # Exported in EVERY mode: the host resolves data/config/state/cache from these
-  # and self-installs npm specifiers into $XDG_CACHE_HOME/opencode/npm/….
-  export XDG_DATA_HOME="$WORK/xdg/data"
-  export XDG_CONFIG_HOME="$WORK/xdg/config"
-  export XDG_STATE_HOME="$WORK/xdg/state"
-  export XDG_CACHE_HOME="$WORK/xdg/cache"
-
+  local SMOKE_EVIDENCE_KIND='local probe'
+  # Created by smoke_host_prepare before even the isolated version probe.
   log "workspace:      $WORK"
   log "XDG_DATA_HOME:  $XDG_DATA_HOME"
   log "XDG_CONFIG_HOME:$XDG_CONFIG_HOME"
@@ -262,6 +257,7 @@ require_built_dist() {
 }
 
 write_plugin_config() {
+  local SMOKE_EVIDENCE_KIND='local probe'
   local entry="$1"
   local config="$XDG_CONFIG_HOME/opencode/opencode.json"
   # bun writes the JSON so the entry is escaped correctly whatever it contains.
@@ -270,20 +266,21 @@ write_plugin_config() {
   SMOKE_CONFIG_PATH="$config" SMOKE_PLUGIN_ENTRY="$entry" bun -e \
     'await Bun.write(Bun.env.SMOKE_CONFIG_PATH, JSON.stringify({ plugins: [Bun.env.SMOKE_PLUGIN_ENTRY] }) + "\n")'
   section "plugin config ($config)"
-  cat "$config"
+  smoke_rows <"$config"
 }
 
 configure_service_port() {
-  SERVICE_PORT="$(pick_free_port)"
+  SERVICE_PORT="$SMOKE_PORT"
+  SMOKE_CHECK_PORT="$SERVICE_PORT" smoke_free_port >/dev/null || die 'selected service port is no longer free'
   [[ "$SERVICE_PORT" != "$USER_SERVICE_PORT" ]] ||
     die "refusing to use the user's service port $USER_SERVICE_PORT"
 
-  run_capped 30 opencode2 service set port "$SERVICE_PORT" >/dev/null
+  run_capped 30 "$CLI" service set port "$SERVICE_PORT" >/dev/null
 
   local settings
-  settings="$(run_capped 30 opencode2 service get 2>/dev/null || true)"
+  settings="$(run_capped 30 "$CLI" service get 2>/dev/null || true)"
   section "service settings"
-  printf '%s\n' "$settings"
+  printf '%s\n' "$settings" | smoke_rows
   # Fail closed if the setting did not land in the isolated config: a run that
   # silently kept the default port would target the user's live service.
   [[ "$settings" == *"$SERVICE_PORT"* ]] ||
@@ -308,16 +305,20 @@ collect_log_files() {
 run_boot_mode() {
   local entry="$1"
 
-  command -v opencode2 >/dev/null || die "opencode2 not found in PATH"
   command -v bun >/dev/null || die "bun not found in PATH"
   [[ "$MODE" == "registry" ]] || require_built_dist
 
   make_workspace
+  if ((NEGATIVE_CONTROL)); then
+    make_negative_control
+    entry="$PACKAGE_ROOT"
+  fi
   write_plugin_config "$entry"
-  configure_service_port
 
   # Run from an empty temp project so no repo/cwd `.opencode` config merges in.
   cd "$WORK/project"
+  configure_service_port
+  LOCATION_HEADER="$(SMOKE_LOCATION="$WORK/project" bun -e 'console.log(encodeURIComponent(process.env.SMOKE_LOCATION))')"
 
   local warmup_cap="$CAP_SECS"
   if [[ "$MODE" == "registry" ]]; then warmup_cap="$REGISTRY_WARMUP_CAP_SECS"; fi
@@ -327,17 +328,26 @@ run_boot_mode() {
   # call. Never a bare `opencode2` — that would launch the TUI.
   section "warmup boot (opencode2 plugin list)"
   SERVICE_STARTED=1
-  run_capped "$warmup_cap" opencode2 plugin list >"$WORK/warmup.out" 2>"$WORK/warmup.err" ||
+  run_capped "$warmup_cap" "$CLI" plugin list >"$WORK/warmup.out" 2>"$WORK/warmup.err" ||
     die "warmup 'opencode2 plugin list' failed (exit $?) — see $WORK/warmup.err"
-  cat "$WORK/warmup.out"
+  smoke_rows <"$WORK/warmup.out"
 
   section "opencode2 plugin list"
-  run_capped "$CAP_SECS" opencode2 plugin list >"$WORK/plugin-list.out" 2>"$WORK/plugin-list.err" ||
+  run_capped "$CAP_SECS" "$CLI" plugin list >"$WORK/plugin-list.out" 2>"$WORK/plugin-list.err" ||
     die "'opencode2 plugin list' failed (exit $?)"
-  cat "$WORK/plugin-list.out"
+  smoke_rows <"$WORK/plugin-list.out"
 
+  # Initialize the location, but discard this early listing: registry installs
+  # may still be pending. All boot modes require active plugin-state below;
+  # failure aborts before either corpus consumer can use an incomplete snapshot.
+  run_capped "$CAP_SECS" "$CLI" debug agents >/dev/null 2>"$WORK/debug-agents.err" ||
+    die "'opencode2 debug agents' failed (exit $?)"
+  assert_plugin_state
+
+  # Snapshot only after the scoped state assertion and settled-log check pass.
+  # Derive ids from this same JSON so --full and --refs inspect the same read.
   section "opencode2 debug agents (ids)"
-  run_capped "$CAP_SECS" opencode2 debug agents >"$WORK/debug-agents.json" 2>"$WORK/debug-agents.err" ||
+  run_capped "$CAP_SECS" "$CLI" debug agents >"$WORK/debug-agents.json" 2>"$WORK/debug-agents.err" ||
     die "'opencode2 debug agents' failed (exit $?)"
   SMOKE_AGENTS_JSON="$WORK/debug-agents.json" SMOKE_AGENT_IDS="$WORK/agent-ids.txt" bun -e '
     const agents = JSON.parse(await Bun.file(Bun.env.SMOKE_AGENTS_JSON).text())
@@ -345,10 +355,9 @@ run_boot_mode() {
     await Bun.write(Bun.env.SMOKE_AGENT_IDS, agents.map((a) => a.id).join("\n") + "\n")
   ' ||
     die "could not parse 'opencode2 debug agents' output"
-  cat "$WORK/agent-ids.txt"
+  smoke_rows <"$WORK/agent-ids.txt"
 
   assert_load_evidence "$entry"
-  assert_plugin_listed
   if [[ "$MODE" == "registry" ]]; then assert_registry_entrypoint; fi
   if ((FULL)); then
     assert_full_agent_corpus
@@ -360,6 +369,9 @@ run_boot_mode() {
     assert_reference_readability
     assert_review_tools
   fi
+  # Re-read after all lazy corpus reads, then settle logs before declaring success.
+  assert_plugin_state
+  ((NEGATIVE_CONTROL == 0)) || die 'negative-control unexpectedly passed plugin-state'
 
   section "result"
   log "PASS: plugin '$PLUGIN_ID' loaded from '$entry' under opencode2 (mode: $MODE, full: $FULL)"
@@ -387,24 +399,79 @@ assert_load_evidence() {
     sleep 0.5
   done
   [[ -n "$loading" ]] ||
-    die "no 'loading plugin' line for '$entry' within ${EVIDENCE_WAIT_SECS}s — the host silently dropped the plugin (no resolvable entry)"
-  printf '%s\n' "$loading"
-
-  sleep "$EVIDENCE_SETTLE_SECS"
-  local failed
-  failed="$(grep -hE 'failed to load plugin' "${LOG_FILES[@]}" 2>/dev/null |
-    grep -F -e "$entry" -e "$PACKAGE_NAME" -e "$PLUGIN_ID" || true)"
-  if [[ -n "$failed" ]]; then
-    printf '%s\n' "$failed" >&2
-    die "host logged a plugin load failure for corvus"
-  fi
-  log "OK: no 'failed to load plugin' line for corvus"
+    die "no 'loading plugin' line for '$entry' within ${EVIDENCE_WAIT_SECS}s — check for 'Plugin entrypoint not found'"
+  printf '%s\n' "$loading" | smoke_rows
 }
 
-assert_plugin_listed() {
-  grep -Eq "^${PLUGIN_ID}[[:space:]]" "$WORK/plugin-list.out" ||
-    die "'$PLUGIN_ID' not listed by 'opencode2 plugin list'"
-  log "OK: '$PLUGIN_ID' present in 'opencode2 plugin list'"
+# Log oracle: read AFTER a settle window and refresh the file list. A transform
+# failure can follow successful setup; either failure phrase fails plugin-state,
+# regardless of an earlier active snapshot. All boot modes enforce this control.
+assert_no_plugin_failures() {
+  sleep "$EVIDENCE_SETTLE_SECS"
+  collect_log_files
+  local failed
+  failed="$(grep -hE 'failed to load plugin|disabled plugin after transform failure' "${LOG_FILES[@]}" 2>/dev/null || true)"
+  if [[ -n "$failed" ]]; then
+    printf '%s\n' "$failed" | smoke_rows >&2
+    die 'plugin-state: host logged a plugin load/transform failure'
+  fi
+  log "OK: plugin-state: no 'failed to load plugin' or 'disabled plugin after transform failure' after settle"
+}
+
+# Shared scoped transport; see host.sh for the stable header/file-output contract.
+api_read() {
+  smoke_v2_api_read "$1" "$2" "$WORK/project" "$CAP_SECS"
+}
+
+# State oracle: scoped GET /api/plugin -> exactly one corvus with active state
+# and server feature. Read after debug agents initializes the location, poll only
+# absence (lazy activation), and fail immediately on failed/invalid state. The
+# response location must be this sandbox; no fallback to an unscoped listing or
+# to absence-of-errors is allowed. No boot flag disables it. Tarball never boots
+# a host and explicitly reports only local resolution/module-shape evidence.
+assert_plugin_state() {
+  smoke_v2_plugin_state "$WORK/project" "$WORK/plugin-state.json" "$LISTING_WAIT_SECS" "$CAP_SECS" || exit 1
+  assert_no_plugin_failures
+  log 'OK: plugin-state: corvus state.status=active'
+}
+
+# Negative control oracle: the same packaged bundle/setup, but the host's skill
+# editor receives each record without path. Injection occurs only in a fresh
+# package copy before boot; the repaired repository and dist remain untouched.
+# Setup is otherwise delegated unchanged. The normal plugin-state guard must fail;
+# reaching the success path is an error, never an expected-negative PASS shortcut.
+make_negative_control() {
+  local SMOKE_EVIDENCE_KIND='fake/local probe'
+  PACKAGE_ROOT="$WORK/negative/corvus-ai"
+  SMOKE_REPO="$REPO_ROOT" SMOKE_COPY="$PACKAGE_ROOT" bun -e '
+    const fs = await import("node:fs")
+    const { join } = await import("node:path")
+    const root = process.env.SMOKE_REPO, copy = process.env.SMOKE_COPY
+    const pkg = await Bun.file(join(root, "package.json")).json()
+    fs.mkdirSync(copy, { recursive: true })
+    for (const file of ["package.json", ...pkg.files]) fs.cpSync(join(root, file), join(copy, file), { recursive: true })
+  ' || die 'negative-control copy failed'
+  cat >"$PACKAGE_ROOT/server.js" <<'CONTROL'
+import repaired from "./dist/server.js"
+export default {
+  ...repaired,
+  setup(ctx) {
+    const skill = Object.create(ctx.skill)
+    skill.transform = callback => ctx.skill.transform(draft => callback(new Proxy(draft, {
+      get(target, key) {
+        if (key === "add") return record => {
+          const { path, ...withoutPath } = record
+          return target.add(withoutPath)
+        }
+        const value = Reflect.get(target, key)
+        return typeof value === "function" ? value.bind(target) : value
+      },
+    })))
+    return repaired.setup(new Proxy(ctx, { get: (target, key) => key === "skill" ? skill : Reflect.get(target, key) }))
+  },
+}
+CONTROL
+  log "negative-control: temporary package $PACKAGE_ROOT; strips skill.path at the host editor boundary"
 }
 
 # The host resolves an npm specifier against its own install; assert the
@@ -421,7 +488,7 @@ assert_registry_entrypoint() {
   [[ -n "$entrypoints" ]] || die "could not extract an entrypoint= value for '$REGISTRY_SPEC'"
 
   section "logged entrypoint(s)"
-  printf '%s\n' "$entrypoints"
+  printf '%s\n' "$entrypoints" | smoke_rows
 
   local entrypoint
   while IFS= read -r entrypoint; do
@@ -450,7 +517,7 @@ assert_full_agent_corpus() {
     grep -Fxq "$name" "$WORK/agent-ids.txt" || missing+=("$name")
   done
   if ((${#missing[@]} > 0)); then
-    printf 'missing agent(s): %s\n' "${missing[*]}" >&2
+    log "missing agent(s): ${missing[*]}" >&2
     die "'opencode2 debug agents' is missing ${#missing[@]} of ${#expected[@]} corpus agents"
   fi
   log "OK: all ${#expected[@]} corpus agents registered"
@@ -462,25 +529,24 @@ assert_full_agent_corpus() {
 # CLI has no `command list`/`skill list` subcommand, so agents are the only
 # dimension with a dedicated debug surface. The host's own HTTP API does list the
 # rest non-interactively against the sandboxed service — operation ids
-# `v2.command.list`, `v2.skill.list`, and `v2.mcp.list` in its `/openapi.json`
+# `command.list`, `skill.list`, and `mcp.list` in its `/openapi.json`
 # (`opencode2 mcp list` covers MCP too, but its human-formatted status output is
 # a weaker oracle than the JSON id list). Every expected name is derived from the
 # packaged corpus at runtime, never hardcoded, so adding a command or skill
 # tightens these assertions automatically.
 
-# Reads one `/api/*` listing and writes its ids one per line to $2. Accepts both
-# response shapes the host uses: a bare array and the `{location, data:[…]}`
-# envelope.
+# Reads one `/api/*` listing and writes its ids one per line to $2. Requires
+# the stable `{location, data:[…]}` envelope; rejects a different location.
 api_listing_ids() {
   local path="$1"
   local out="$2"
 
-  run_capped "$CAP_SECS" opencode2 api GET "$path" \
-    >"$WORK/api-listing.json" 2>"$WORK/api-listing.err" || return 1
+  api_read "$path" "$WORK/api-listing.json" || return 1
 
-  SMOKE_API_JSON="$WORK/api-listing.json" SMOKE_API_IDS="$out" bun -e '
+  SMOKE_API_JSON="$WORK/api-listing.json" SMOKE_API_IDS="$out" SMOKE_LOCATION="$WORK/project" bun -e '
     const body = JSON.parse(await Bun.file(Bun.env.SMOKE_API_JSON).text())
-    const data = Array.isArray(body) ? body : body?.data
+    if (body?.location?.directory !== process.env.SMOKE_LOCATION) throw new Error("wrong API response location")
+    const data = body?.data
     if (!Array.isArray(data)) throw new Error(`no array payload in ${Bun.env.SMOKE_API_JSON}`)
     const ids = data.map((entry) => entry?.id ?? entry?.name).filter((id) => typeof id === "string")
     await Bun.write(Bun.env.SMOKE_API_IDS, ids.join("\n") + "\n")
@@ -517,17 +583,17 @@ assert_api_corpus() {
   done
 
   if ((${#missing[@]} > 0)); then
-    [[ -z "$last_error" ]] || printf 'last api error: %s\n' "$last_error" >&2
+    [[ -z "$last_error" ]] || log "last api error: $last_error" >&2
     if [[ -f "$ids_file" ]]; then
       log "listing returned:"
-      cat "$ids_file"
+      smoke_rows <"$ids_file"
     fi
-    printf 'missing %s: %s\n' "$label" "${missing[*]}" >&2
+    log "missing $label: ${missing[*]}" >&2
     die "'opencode2 api GET $path' is missing ${#missing[@]} of ${#expected[@]} expected $label within ${LISTING_WAIT_SECS}s"
   fi
 
   log "listing returned:"
-  cat "$ids_file"
+  smoke_rows <"$ids_file"
   log "OK: all ${#expected[@]} $label registered"
 }
 
@@ -551,6 +617,26 @@ assert_full_skill_corpus() {
     expected+=("$(basename "$(dirname "$file")")")
   done
   assert_api_corpus "skills" /api/skill "${expected[@]}"
+  # Path oracle: enumerate the loaded package, not host-returned ids; compare
+  # AFTER the successful listing read and before any further API request can
+  # replace that file. Missing/duplicate/wrong paths fail; --full always checks.
+  local installed_root
+  installed_root="$(loaded_install_root)" || die 'could not resolve skill package root'
+  SMOKE_API_JSON="$WORK/api-listing.json" SMOKE_PACKAGE_ROOT="$installed_root" bun -e '
+    const { readdirSync, existsSync } = await import("node:fs")
+    const root = process.env.SMOKE_PACKAGE_ROOT
+    const { data } = await Bun.file(process.env.SMOKE_API_JSON).json()
+    for (const id of readdirSync(root + "/skill").sort()) {
+      const expected = `${root}/skill/${id}/SKILL.md`
+      if (!existsSync(expected)) continue
+      const records = data.filter(skill => skill.id === id)
+      if (records.length !== 1 || records[0].path !== expected) {
+        console.error(`skill-path: ${id}: expected ${expected}, got ${JSON.stringify(records.map(s => s.path))}`); process.exit(1)
+      }
+      console.log(`OK: skill-path: ${id} = ${expected}`)
+    }
+  ' >"$WORK/skill-paths.txt" 2>&1 || { smoke_rows <"$WORK/skill-paths.txt"; die 'skill-path assertion failed'; }
+  smoke_rows <"$WORK/skill-paths.txt"
 }
 
 assert_full_mcp_registration() {
@@ -561,7 +647,7 @@ assert_full_mcp_registration() {
 # local mode, the host's own npm install for --registry (derived from the logged
 # entrypoint, never assumed).
 loaded_install_root() {
-  local installed_root="$REPO_ROOT"
+  local installed_root="$PACKAGE_ROOT"
   if [[ "$MODE" == "registry" ]]; then
     local entrypoints entrypoint
     entrypoints="$(find_loading_lines "$REGISTRY_SPEC" |
@@ -569,16 +655,23 @@ loaded_install_root() {
     [[ -n "$entrypoints" && "$entrypoints" != *$'\n'* ]] || die "ambiguous installed root for probe"
     entrypoint="$entrypoints"
     [[ "$entrypoint" == */node_modules/"$PACKAGE_NAME"/dist/server.js ]] || die "unrecognized probe entrypoint"
+    # Host logs may use file: URLs; all consumers below need filesystem paths.
+    if [[ "$entrypoint" == file:* ]]; then
+      entrypoint="$(SMOKE_ENTRYPOINT="$entrypoint" bun -e \
+        'console.log(require("node:url").fileURLToPath(process.env.SMOKE_ENTRYPOINT))')" ||
+        die "could not decode probe entrypoint"
+    fi
     installed_root="${entrypoint%/dist/server.js}"
   fi
   printf '%s' "$installed_root"
 }
 
 assert_reference_readability() {
+  local SMOKE_EVIDENCE_KIND='fake/local probe'
   section "--refs: sibling reference readability (local matcher, host-registered maps)"
   local installed_root
   installed_root="$(loaded_install_root)" || die "could not determine the loaded install root"
-  run_capped "$CAP_SECS" bun run "$REPO_ROOT/scripts/probe-refs.ts" "$WORK/debug-agents.json" "$installed_root" ||
+  run_capped "$CAP_SECS" bun run "$REPO_ROOT/scripts/probe-refs.ts" "$WORK/debug-agents.json" "$installed_root" 2>&1 | smoke_rows ||
     die "reference-readability probe failed"
 }
 
@@ -588,12 +681,13 @@ assert_reference_readability() {
 # functional measure → fitted freeze → preview → wrong-digest post rejection in a
 # throwaway workspace; the post leg must report zero tool API calls.
 assert_review_tools() {
+  local SMOKE_EVIDENCE_KIND='fake/local probe'
   section "--refs: review tools on both hosts (dist/server.js setup + dist/index.js hooks)"
   local installed_root
   installed_root="$(loaded_install_root)" || die "could not determine the loaded install root"
   [[ -f "$installed_root/dist/server.js" && -f "$installed_root/dist/index.js" ]] ||
     die "loaded install root $installed_root lacks dist/server.js or dist/index.js"
-  run_capped "$CAP_SECS" bun run "$REPO_ROOT/scripts/probe-tools.ts" "$installed_root" ||
+  run_capped "$CAP_SECS" bun run "$REPO_ROOT/scripts/probe-tools.ts" "$installed_root" 2>&1 | smoke_rows ||
     die "review-tool probe failed"
 }
 
@@ -618,7 +712,11 @@ run_tarball_mode() {
 
   section "npm pack (working tree)"
   local tarball_name
-  tarball_name="$(cd "$REPO_ROOT" && npm pack --pack-destination "$pack_dir" --loglevel=error | tail -n 1)"
+  tarball_name="$(cd "$REPO_ROOT" && npm pack --pack-destination "$pack_dir" --loglevel=error 2>"$WORK/pack.err" | tail -n 1)" || {
+    smoke_rows <"$WORK/pack.err"
+    die 'npm pack of working tree failed'
+  }
+  smoke_rows <"$WORK/pack.err"
   local tarball="$pack_dir/$tarball_name"
   [[ -f "$tarball" ]] || die "npm pack did not produce $tarball"
   log "packed: $tarball"
@@ -628,7 +726,7 @@ run_tarball_mode() {
     >"$project/package.json"
   (cd "$project" && npm install "$tarball" \
     --cache "$XDG_CACHE_HOME/npm-cache" \
-    --no-audit --no-fund --ignore-scripts --loglevel=error) ||
+    --no-audit --no-fund --ignore-scripts --loglevel=error) 2>&1 | smoke_rows ||
     die "npm install of $tarball failed"
   log "installed into: $project"
 
@@ -716,7 +814,7 @@ if (failures > 0) {
   process.exit(1)
 }
 ASSERT
-  bun run "$WORK/tarball-assert.mjs" "$project_real" "$REPO_ROOT" "$PACKAGE_NAME" ||
+  bun run "$WORK/tarball-assert.mjs" "$project_real" "$REPO_ROOT" "$PACKAGE_NAME" 2>&1 | smoke_rows ||
     die "tarball-mode assertions failed"
 
   section "result"
@@ -725,11 +823,20 @@ ASSERT
 
 main() {
   parse_args "$@"
-  trap cleanup EXIT INT TERM
+  SMOKE_EVIDENCE_SOURCE="$MODE"
+  SMOKE_EVIDENCE_KIND='real-host assertion'
+  [[ "$MODE" != tarball ]] || SMOKE_EVIDENCE_KIND='fake/local probe'
+  [[ "$NEGATIVE_CONTROL" == 0 ]] || SMOKE_EVIDENCE_SOURCE='local negative-control'
+  trap cleanup EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  command -v lsof >/dev/null || die 'lsof not found in PATH'
+  smoke_host_prepare "$HOST" "$OPENCODE_BIN" || die 'host selection/version probe failed'
 
   section "smoke-v2 (mode: $MODE, full: $FULL)"
+  [[ "$MODE" != registry ]] || log 'WARNING: registry evidence NEVER counts toward the local repair'
   log "repo:       $REPO_ROOT"
-  log "opencode2:  $(command -v opencode2 || echo '<not found>')"
+  log "opencode2:  $CLI ($SMOKE_HOST_VERSION)"
   [[ "$MODE" == "tarball" ]] || log "host cap:   ${CAP_SECS}s per invocation (perl alarm; macOS has no timeout(1))"
 
   case "$MODE" in

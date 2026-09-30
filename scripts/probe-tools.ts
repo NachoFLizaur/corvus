@@ -10,7 +10,7 @@ import { createFakeContext } from "../src/__tests__/fake-context"
  * bundles of an install root (default: this repo).
  *
  * WHY NOT THE HOST API: the v2 protocol lists commands, skills, MCP servers and
- * plugins (`v2.command.list`, `v2.skill.list`, `v2.mcp.list`, `v2.plugin.list`)
+ * plugins (`command.list`, `skill.list`, `mcp.list`, `plugin.list`)
  * but has no tool group, and `opencode2 debug` exposes only agents/config/paths.
  * There is no non-interactive host oracle for "which tools did a plugin add", so
  * this probe instantiates `dist/server.js`'s `setup()` with the same host double

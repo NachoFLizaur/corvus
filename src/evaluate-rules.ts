@@ -6,13 +6,14 @@ import type { Rule } from "./v2/types"
  *
  * INVARIANT — this module is a MIRROR, not a policy.
  *
- * Oracle: the OpenCode v2 host at `@opencode-ai/plugin@0.0.0-beta-19086` —
- * wildcard compilation `core/src/util/wildcard.ts:3-13` and rule evaluation
- * `core/src/permission.ts:87-97` (`rulesets.flat().findLast(...)`). It exists
- * because the v2 permission hook has to re-evaluate corvus's OWN protected-agent
- * policy at hook time: the host hands the hook a decision, not the ruleset that
- * produced it, so the boundary can only be enforced by re-running the same
- * matcher over corvus's rules.
+ * Stable hook contract: `@opencode/plugin@2.0.20`,
+ * `dist/promise/permission.d.ts:6-17`, supplies a decision, not its ruleset.
+ * The matcher oracle is separate host source: wildcard compilation
+ * `core/src/util/wildcard.ts:3-13` and rule evaluation
+ * `core/src/permission.ts:87-97` (`rulesets.flat().findLast(...)`). Those are
+ * historical source references, not files shipped in the stable SDK; its type
+ * declarations do not verify matcher semantics. The hook re-evaluates corvus's
+ * OWN protected-agent policy at hook time by running this matcher over its rules.
  *
  * Read timing relative to mutations: none of the inputs are owned by this module.
  * `rules` is a snapshot the caller passes in, and evaluation happens strictly

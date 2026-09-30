@@ -1,6 +1,6 @@
 {
   "name": "corvus-ai",
-  "version": "0.10.0",
+  "version": "0.10.1",
   "description": "Corvus AI agent suite for OpenCode — multi-agent orchestration with specialized agents, commands, and skills",
   "type": "module",
   "main": "dist/index.js",
@@ -65,7 +65,7 @@
   },
   "devDependencies": {
     "@opencode-ai/plugin": "1.18.3",
-    "@opencode-ai/plugin-v2": "npm:@opencode-ai/plugin@0.0.0-beta-19086",
+    "@opencode/plugin": "2.0.20",
     "@types/bun": "latest",
     "@types/js-yaml": "^4.0.9",
     "typescript": "^5.0.0"

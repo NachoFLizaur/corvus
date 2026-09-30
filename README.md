@@ -112,29 +112,31 @@ cp -r skill/ ~/.config/opencode/skill/
 
 Manual installs expose agent frontmatter directly to OpenCode, so the native singular `permission` field is required. Corvus's plugin loader still accepts legacy `permissions` metadata when `permission` is absent, but that read-compatibility path is not the canonical format and should not be used for new or manually installed agents.
 
-These instructions target OpenCode v1's config layout. On OpenCode v2, install the plugin instead — `npx corvus-ai@beta --v2`, or a `plugins` array entry (see [OpenCode v2](#opencode-v2)) — so the same agents, commands, and skills are registered from the package. The `@beta` tag is required while v2 support ships on the `beta` dist-tag, because `latest` has no `--v2` flag; drop it once v2 reaches `latest`.
+These instructions target OpenCode v1's config layout. On OpenCode v2, use the plugin procedure and compatibility notes under [OpenCode v2](#opencode-v2).
 
 ### OpenCode v2
 
 Corvus ships one package with two entry points: `dist/index.js` remains the legacy OpenCode v1 function entry, while `dist/server.js` serves both OpenCode 1.18.30+ and OpenCode v2 through the `corvus-ai/server` subpath. The shared entry exports `{ id, server, setup }`: v1 invokes the legacy hook function through `server`, and v2 invokes `setup`. Both register the same 16 agents, 4 commands, 18 skills, and the default `web-research` MCP server.
 
-Install with the CLI, which writes the plural `plugins` key into `$XDG_CONFIG_HOME/opencode/opencode.json` (default `~/.config/opencode`):
+**Release availability:** Corvus 0.10.0 loads on OpenCode v2 ≤2.0.3, but its missing skill `path` causes the host to disable it on v2 ≥2.0.4 (boundary per [PR #12](https://github.com/NachoFLizaur/corvus/pull/12)'s schema decode across published `@opencode/schema` 2.0.x). Use **0.10.1 or later** on those hosts; see the [0.10.1 changelog](CHANGELOG.md#0101--2026-09-30). 0.10.1 has been verified on OpenCode **2.0.20** and **1.18.33**; see [Release Gates](#release-gates) for the checks and remaining limitations.
+
+Install with the CLI. Pass `--v2` explicitly: installer autodetection checks binary names, not versions, so a stable v2 executable named `opencode` is not recognized as v2. The CLI writes the plural `plugins` key into the existing `opencode.jsonc` or `opencode.json` under `$XDG_CONFIG_HOME/opencode` (default `~/.config/opencode`), creating `opencode.json` if neither exists:
 
 ```bash
-npx corvus-ai@beta --v2
+npx corvus-ai@latest --v2
 ```
 
-The `@beta` tag is required while v2 support ships on the `beta` dist-tag: `latest` is the v1-only release and rejects `--v2` with `Unknown option: --v2`. Drop `@beta` once v2 reaches `latest`.
+No beta tag is needed. The CLI pins the config entry to its own package version, so check that the written entry is 0.10.1 or later before using a v2 host ≥2.0.4.
 
 Or add the entry by hand:
 
 ```json
 {
-  "plugins": ["corvus-ai@beta"]
+  "plugins": ["corvus-ai"]
 }
 ```
 
-An existing v1 `plugin` entry is never rewritten for you: keep the singular key for a v1 host and the plural key for v2.
+An existing v1 `plugin` entry is never rewritten for you: keep the singular key for a v1 host and the plural key for v2. Quit and restart OpenCode after changing the config.
 
 #### Config Key Renames
 
@@ -195,7 +197,7 @@ Your configuration wins on both hosts, by different mechanisms.
 
 These rules apply to the OpenCode configuration Corvus is given by the host. A repository-local `.opencode/opencode.jsonc` is user-local state, not a Corvus package input or a source of plugin defaults.
 
-For Corvus agents only, the plugin preserves any hook-visible output budget (normally already seeded on v1), otherwise sets the smaller of the model output limit and 32,000 tokens; v2 exposes the agent ID but only a model reference, so it falls back to 32,000 without a model-limit clamp and can replace a larger unobservable route/model generation default.
+For Corvus agents only, the plugin preserves any hook-visible output budget (normally already seeded on v1), otherwise sets the smaller of the model output limit and 32,000 tokens. On v2 it reads and writes `options.maxTokens`; the hook exposes the agent ID but only a model reference, so it falls back to 32,000 without a model-limit clamp and can replace a larger unobservable route/model generation default.
 
 ### Customizing Models
 
@@ -224,7 +226,7 @@ The same overrides on OpenCode v2, with the plural keys:
 
 ```json
 {
-  "plugins": ["corvus-ai@beta"],
+  "plugins": ["corvus-ai"],
   "agents": {
     "corvus": {
       "model": "anthropic/claude-opus-4"
@@ -536,7 +538,7 @@ See [AGENTS.md](./AGENTS.md) for delegation instructions and [docs/CORVUS-STATE-
 
 ## Development
 
-The published package keeps `@opencode-ai/plugin` peer compatibility broad (`*`). Contributor installs pin the development SDK baseline to `@opencode-ai/plugin@1.18.3` so local build and type behavior is reproducible without narrowing consumer compatibility.
+The published package keeps optional `@opencode-ai/plugin` peer compatibility broad (`*`). Contributor installs pin two development SDKs: `@opencode-ai/plugin@1.18.3` for v1 and stable `@opencode/plugin@2.0.20` for v2. The v2 SDK is a dev-only, type-only dependency, not a runtime import. These type baselines are distinct from the verified host versions listed under [OpenCode v2](#opencode-v2).
 
 ```bash
 # Install dependencies
@@ -545,8 +547,9 @@ bun install
 # Build
 bun run build
 
-# Type check
-bun x tsc --noEmit
+# Type check production and tests
+bun run typecheck
+bun x tsc --noEmit -p tsconfig.test.json
 
 # Run tests (build first; build.test.ts consumes dist/)
 bun test
@@ -554,9 +557,50 @@ bun test
 
 ### Release Gates
 
-After building, run `bun run smoke:review --host v2`, then `bun run smoke:review --host v1 --full`. This paid, real-model gate packs the working tree, clones PR #8 by default and isolates host state. Posting follows measure → freeze → `preview` → authorization; the gate audits artifact provenance/digests and retains the offline `built verify()` check. By default the writer dispatch is denied by a host permission override; with `--writer` (included in `--full`, v1 only) the real `pr-comment-writer` executes and the gate checks writer dispatch after freeze and post after the writer's head read/marker lookup, with artifact verification internal to `corvus_review_post`. Its exact `POST` must reach the read-only `gh` shim and be blocked, with no shell measurement commands and a non-`posted` result. Bookkeeping uses the evidence-precedence audit, not checkpoint success as a delivery gate; fitted artifacts add the conditional `size fit` row. A valid frozen artifact may remain inert on the writer-not-exposed route without authorizing dispatch or POST.
+#### Host Selection And Isolation
 
-It uses Bedrock/GitHub authentication without logging credentials; the shim blocks posting through that route, not arbitrary network clients. Options: `--pr <url>`, `--model <id>` (default `amazon-bedrock/global.openai.gpt-6-astra`), `--timeout-min <minutes>` (default 40), `--writer`/`--full`, and `--keep`. `bash scripts/smoke-writer.sh` runs only the writer against canned PR reads (no network) for a fast tool-path check with a review body longer than the host read tool's 2,000-character line limit; `--head-moved` moves the canned head after the writer's own check so the gate asserts the post tool's `head-moved` rejection with no POST issued. Failures always retain logs/artifacts and private sandbox auth; do not upload the whole sandbox. Exit codes: 0 pass, 3 host/plugin/auth, 4 fixture/GitHub read, 5 incomplete review/unexpected denial, 6 posting barrier breach, 124 timeout.
+Select each installed host by absolute path, using `--opencode-bin` or `CORVUS_SMOKE_OPENCODE_V1` / `CORVUS_SMOKE_OPENCODE_V2`; the flag wins. Without either selector, the harness warns and falls back to PATH lookup. Each harness prints the resolved realpath and reported version and rejects a major-version mismatch before packaging or model execution. `@opencode/cli@2.0.20` installs both `opencode` and `opencode2` bin names: keep that install off PATH beside v1 so it cannot shadow the v1 executable.
+
+Set `CORVUS_SMOKE_TMP_ROOT` to choose the temporary parent. Harnesses isolate XDG directories and service ports, then compare live-config/global-install digests from before host use to after cleanup; unreadable or changed snapshots fail. The measured paths include `~/.config/opencode`, `~/.opencode/opencode.json(c)`, inherited XDG config, the configured global CLI roots and selected executable (see `scripts/host.sh`). Equality is evidence for that run's measured interval, not complete machine isolation: HOME is not redirected, so the host still sees `~/.agents/skills` and inherited AWS resolution.
+
+#### Deterministic V2 Gates
+
+After building, run the modes used for stable-host verification below. Replace the example absolute paths with your installed binaries; keep the same selectors for the review gates.
+
+```bash
+export CORVUS_SMOKE_TMP_ROOT=/abs/corvus-smoke
+export CORVUS_SMOKE_OPENCODE_V2=/abs/oc2-2.0.20/node_modules/.bin/opencode2
+export CORVUS_SMOKE_OPENCODE_V1=/abs/v1/opencode
+
+bash scripts/smoke-v2.sh --full --host v2 --opencode-bin "$CORVUS_SMOKE_OPENCODE_V2"
+bash scripts/smoke-v2.sh --refs --host v2 --opencode-bin "$CORVUS_SMOKE_OPENCODE_V2"
+bash scripts/smoke-v2.sh --tarball --host v2 --opencode-bin "$CORVUS_SMOKE_OPENCODE_V2"
+bash scripts/smoke-v2.sh --negative-control --host v2 --opencode-bin "$CORVUS_SMOKE_OPENCODE_V2"
+```
+
+- Default mode boots the real v2 host with the local-directory plugin. `--full` also asserts all 16 agents, 4 commands, 18 skills with absolute `path`s, and the default MCP server. Skill records retain both `location` and `path`; see [0.10.1](CHANGELOG.md#0101--2026-09-30) for contributor credit.
+- `--refs` checks host-registered permission maps through the local matcher and probes all seven review tools through built bundles and fake host contexts; `--full` includes these probes. Their `fake/local probe` labels distinguish them from real-host registration assertions and model execution.
+- `--tarball` packs and installs the working tree for npm-specifier resolution emulation; it does not boot a host, and `--full` / `--refs` are inert in that mode. `--registry <spec>` is a post-publish real-host check only, never evidence for unpublished local changes.
+- `--negative-control` strips skill `path` in a temporary copy. Expect exit 1 at the named plugin-state assertion, not a passing gate; the repaired source remains untouched.
+
+The v2 load oracle requires exactly one Corvus server with `state.status == "active"` and `features.server == true` from `GET /api/plugin`, scoped with `x-opencode-directory`. It also requires the log veto: reject `failed to load plugin` or `disabled plugin after transform failure`. An API snapshot can read `active` before a lazy transform fails, so the log check is mandatory, not redundant. The deterministic gate checks state around registration/probes and settles logs afterwards; review preflight checks before model dispatch and audits again after the run. Missing/failed state fails the gate. See `scripts/host.sh`, `scripts/smoke-v2.sh` and `scripts/check-review-artifacts.ts` for the owning guards.
+
+#### Review Gates
+
+Run the non-posting paid review on v2, then v1, using the host selection above:
+
+```bash
+bun run smoke:review --host v2 --opencode-bin "$CORVUS_SMOKE_OPENCODE_V2" --keep
+bun run smoke:review --host v1 --opencode-bin "$CORVUS_SMOKE_OPENCODE_V1" --keep
+```
+
+This packs the working tree, clones PR #8 by default, uses Bedrock/GitHub authentication and denies writer dispatch through a host permission override. A separate owned, network-free `scripts/probe-gh-shim.sh` sentinel proves the POST barrier with a recording-only forward target and zero forwarded bytes; a live writer POST is not required on the denied route. The shim protects that PATH route, not arbitrary network clients. The checker reads both v1 (`session`/`message`/`part`, consuming `session`/`part`) and v2 (`session_v2`/`session_message`) stores. It audits artifact provenance/digests, measure → freeze → `preview` → authorization, and the offline `built verify()` result. Bookkeeping follows the [evidence-precedence audit](#corvus-pr-review), not checkpoint success as a delivery gate; fitted artifacts add the conditional `size fit` row. An inert frozen artifact does not authorize writer dispatch or POST.
+
+For model-free v2 diagnosis, use `--preflight-host` (pack/install, boot, plugin state/agents/logs); add `--negative-control` to expect exit 3 for the missing-path copy. `--preflight-only` instead checks host version and intake setup without packaging or booting. Other options include `--intake url|branch|local`, `--pr <url>`, `--model <id>` (default `amazon-bedrock/global.openai.gpt-6-astra`), `--timeout-min <minutes>` (default 40) and `--keep`. Consult `bash scripts/smoke-review.sh --help` and `bash scripts/smoke-v2.sh --help` for the flag inventory.
+
+`--writer` / `--full` remains v1-only and was not part of the stable-compatibility live runs. It executes the real writer and requires dispatch after freeze, post after the writer's head read/marker lookup, internal artifact verification by `corvus_review_post`, and the exact POST blocked by the shim with a non-`posted` result and no shell measurement commands. `bash scripts/smoke-writer.sh --opencode-bin "$CORVUS_SMOKE_OPENCODE_V1"` exercises only the writer with canned GitHub reads (still a paid model run) and a review body longer than the host read tool's 2,000-character line limit; `--head-moved` moves the canned head after the writer's check to require the post tool's rejection without a POST.
+
+Full-corpus, refs and tarball checks passed on 2.0.20; the missing-path negative control failed as intended, and the 1.18.33 registration baseline passed. Both live reviews completed model/delegation paths with no writer dispatch and zero forwarded mutations. They are not fully green review gates: see [Known Issues](CHANGELOG.md#known-issues) for the offline recheck results and remaining model-contract failures. The CLOSED fork fixture did not exercise live posting, successful state pushes, or branch/LOCAL intake. Failures and `--keep` retain logs/artifacts and private sandbox auth; do not upload the whole sandbox. Exit codes: 0 pass, 3 host/plugin/auth, 4 fixture/GitHub read, 5 incomplete review/unexpected denial, 6 posting barrier breach, 124 timeout.
 
 ### Safe Local Development
 
@@ -568,7 +612,7 @@ It uses Bedrock/GitHub authentication without logging credentials; the shim bloc
 
 ## Troubleshooting
 
-**Plugin not loading** — Check the plugin entry in your OpenCode config (`~/.config/opencode/opencode.json`, or a project-local `.opencode/opencode.json`). Both hosts expect an ARRAY of package specifiers rather than a boolean map: v1 reads `"plugin": ["corvus-ai"]` and v2 reads `"plugins": ["corvus-ai@beta"]`.
+**Plugin not loading** — Check the config entry: v1 reads `"plugin": ["corvus-ai"]`; for v2's plural key, config path and release compatibility, see [OpenCode v2](#opencode-v2). Both expect an array of package specifiers, not a boolean map. Stable v2 logs `Plugin entrypoint not found` for an unresolved entrypoint; use the [load oracle](#deterministic-v2-gates) to distinguish resolution from a later transform failure.
 
 **Agents not appearing** — Make sure `bun install` or `npm install` completed successfully. The package must be present in `node_modules` with its `agent/`, `command/`, and `skill/` directories.
 

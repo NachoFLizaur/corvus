@@ -113,11 +113,12 @@ describe("shared v1/v2 entry (dist/server.js)", () => {
     expect(shim.default).toBe(dist.default)
   })
 
-  test("carries no runtime @opencode-ai import (v1 hosts lack the v2 SDK)", () => {
-    // The v2 SDK must stay a type-only dependency: a value import would make
-    // the beta SDK a runtime requirement and break v1 hosts that never ship it.
-    const source = readFileSync(resolve(DIST, "server.js"), "utf-8")
-    expect(source).not.toContain("@opencode-ai")
+  test.each(["index.js", "server.js"])("%s carries no runtime OpenCode SDK dependency", (entry) => {
+    // Unconditionally inspect emitted bytes before any host loads them. Reject
+    // either SDK scope, including bundled package markers, so an accidental
+    // value import fails this gate rather than becoming a host requirement.
+    const source = readFileSync(resolve(DIST, entry), "utf-8")
+    expect(source).not.toMatch(/@opencode(?:-ai)?\//)
   })
 })
 
@@ -145,11 +146,12 @@ describe("package.json", () => {
     expect(subpath.default).toBe("./dist/server.js")
   })
 
-  test("v2 SDK devDependency alias is pinned to the exact beta version", () => {
-    // Exact-string pin: beta SDK types churn between prereleases, and the
-    // target host is opencode2 v0.0.0-beta-19086 specifically.
-    expect(pkg.devDependencies["@opencode-ai/plugin-v2"]).toBe(
-      "npm:@opencode-ai/plugin@0.0.0-beta-19086",
-    )
+  test("stable v2 SDK is pinned as a dev-only dependency alongside the unchanged v1 SDK", () => {
+    expect(pkg.devDependencies["@opencode/plugin"]).toBe("2.0.20")
+    expect(pkg.devDependencies["@opencode-ai/plugin"]).toBe("1.18.3")
+    for (const field of ["dependencies", "devDependencies", "peerDependencies", "optionalDependencies"]) {
+      expect(pkg[field] ?? {}).not.toHaveProperty("@opencode-ai/plugin-v2")
+      if (field !== "devDependencies") expect(pkg[field] ?? {}).not.toHaveProperty("@opencode/plugin")
+    }
   })
 })

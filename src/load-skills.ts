@@ -28,7 +28,10 @@ interface SkillFrontmatter {
  * OpenCode 2 release: <= 2.0.3 keeps `location` and drops `path`, >= 2.0.4 the
  * reverse. Emitting both is therefore the ONLY shape that needs no host-version
  * probe (the plugin API exposes none for the schema) and cannot regress either
- * side. Drop `location` only once <= 2.0.3 is out of support.
+ * side. Drop `location` only once <= 2.0.3 is out of support. (Dual-key design:
+ * PR #12 by @clopca / issue #10; the registrar types the record against the
+ * stable 2.0.20 `Skill.Info`, and schema regression coverage rejects the old
+ * location-only shape.)
  *
  * `slash` and `autoinvoke` are deliberately absent. The host derives them from a
  * `slash` key or an `opencode/slash` / `opencode/autoinvoke` metadata entry

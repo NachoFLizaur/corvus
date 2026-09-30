@@ -5,6 +5,26 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.10.1 — 2026-09-30
+
+Restores OpenCode v2 support on hosts ≥2.0.4, where 0.10.0 is disabled at startup, and fixes the v2 output-budget hook. OpenCode v1 behaviour, prompts and the state machine are unchanged.
+
+### Fixed
+
+- OpenCode v2 skill records carry both `location` and absolute `path`, with stable SDK typing instead of a whole-record cast. Adopts the design from [PR #12](https://github.com/NachoFLizaur/corvus/pull/12) by [@clopca](https://github.com/clopca), addressing [issue #10](https://github.com/NachoFLizaur/corvus/issues/10).
+- The v2 output-budget hook uses `options.maxTokens`, avoiding the obsolete context-field dereference on the first model request.
+- Review evidence reads both host storage formats, including v1 stores that also contain `session_message`; recovered staging attempts and severity-count summaries no longer produce false audit failures. Integrity, disclosure, lock and mutation checks remain in force.
+
+### Changed
+
+- Align v2 type imports with dev-only `@opencode/plugin@2.0.20`; retain the v1 `@opencode-ai/plugin@1.18.3` development baseline and keep SDK imports out of runtime bundles. Prompts, state machine and v1 runtime are unchanged by this repair.
+- Smoke harnesses select explicit host binaries, probe versions, reject major mismatches and compare live-config/global-install digests. V2 loading requires scoped active plugin state plus a log veto for load/transform failures. Add missing-skill-path negative controls, model-free review host preflight and a separate network-free POST-barrier probe. See [Release Gates](README.md#release-gates) for commands, evidence labels and isolation limits.
+- Correct install guidance: no beta tag is required to obtain `--v2`. Published 0.10.0 is not the repaired package; see [release availability](README.md#opencode-v2) before installing on stable v2.
+
+### Known Issues
+
+- Verification used OpenCode 2.0.20 and 1.18.33. Deterministic registration/refs/tarball gates passed; both non-posting live reviews completed model and delegation paths with zero forwarded mutations. Offline rechecks of those captured runs after checker fix iteration 1 passed **43/45 rows on v2** and **44/45 on v1**, not complete review-gate passes. Remaining FAILs are model-contract deviations, not host incompatibilities: v2 sent a 6,446-character append against the 6,000 ceiling and inconsistent checkpoint-failed metadata; v1 emitted a `delivery:`-prefixed writer rail. No additional paid run is implied by the recheck totals. Live posting and successful state pushes were not exercised; review `--writer` / `--full` remains v1-only.
+
 ## 0.10.0 — 2026-09-16
 
 Promotes `0.10.0-beta.12` to stable with no code changes. The 0.10 line covers the adaptive-plan redesign (ADR-0001/0002), the two-axis PR review pipeline with tool-owned state, transport and verdict (`corvus_review_*`), PR discovery and LOCAL review mode, delivery-by-default posting, committed review state and planning records, default-allow agent permissions, and staged checkpoint persistence. See the beta entries below for the incremental record.

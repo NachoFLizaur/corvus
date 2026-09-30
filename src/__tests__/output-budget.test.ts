@@ -45,21 +45,45 @@ describe("v1 chat.params output budget", () => {
 
 describe("v2 session context output budget", () => {
   test.each([
-    ["defaults an empty Corvus generation", "corvus-review-auto", undefined, { maxTokens: 32_000 }],
-    ["preserves a seeded Corvus generation", "corvus-review-auto", 64_000, { maxTokens: 64_000 }],
+    ["defaults unset Corvus options.maxTokens", "corvus-review-auto", undefined, { maxTokens: 32_000 }],
+    ["preserves a higher seeded Corvus budget", "corvus-review-auto", 64_000, { maxTokens: 64_000 }],
+    ["preserves a lower seeded Corvus budget", "corvus-review-auto", 1_000, { maxTokens: 1_000 }],
+    ["preserves a defined zero Corvus budget", "corvus-review-auto", 0, { maxTokens: 0 }],
     ["leaves a non-Corvus agent untouched", "custom-agent", undefined, {}],
   ] as const)("%s", async (_name, agent, current, expected) => {
     const fake = createFakeContext()
-    await fake.ctx.session.hook("context", (context) => {
-      if (current !== undefined) context.generation.maxTokens = current
-    })
-    const before = await fake.context({ agent })
+    const options = {
+      temperature: 0.5,
+      customProviderOption: { enabled: true },
+      ...(current === undefined ? {} : { maxTokens: current }),
+    }
+    const before = await fake.context({ agent, options })
     const cleanup = await registerHooks(fake.ctx)
 
     try {
-      const context = await fake.context({ agent })
+      const context = await fake.context({ agent, options })
 
-      expect(context).toEqual({ ...before, generation: expected })
+      expect(context).toEqual({ ...before, options: { ...options, ...expected } })
+    } finally {
+      await cleanup?.()
+    }
+  })
+
+  test("a stable first-request context with empty options does not throw", async () => {
+    const fake = createFakeContext()
+    await fake.ctx.session.hook("title", () => {
+      throw new Error("context requests must not invoke the title hook")
+    })
+    const agent = "corvus-review-auto"
+    const before = await fake.context({ agent })
+    expect(before.options).toEqual({})
+    expect(Object.keys(before).sort()).toEqual([
+      "agent", "messages", "model", "options", "sessionID", "system", "tools",
+    ])
+    const cleanup = await registerHooks(fake.ctx)
+    try {
+      const context = await fake.context({ agent })
+      expect(context).toEqual({ ...before, options: { maxTokens: 32_000 } })
     } finally {
       await cleanup?.()
     }
@@ -69,12 +93,12 @@ describe("v2 session context output budget", () => {
     const fake = createFakeContext()
     const cleanup = await registerHooks(fake.ctx)
     expect(fake.registrations).toEqual([{ kind: "session.hook", disposed: false }])
-    expect((await fake.context({ agent: "corvus-review-auto" })).generation).toEqual({ maxTokens: 32_000 })
+    expect((await fake.context({ agent: "corvus-review-auto" })).options).toEqual({ maxTokens: 32_000 })
     if (!cleanup) throw new Error("Expected an output-budget hook disposer")
 
     await cleanup()
 
     expect(fake.registrations).toEqual([{ kind: "session.hook", disposed: true }])
-    expect((await fake.context({ agent: "corvus-review-auto" })).generation).toEqual({})
+    expect((await fake.context({ agent: "corvus-review-auto" })).options).toEqual({})
   })
 })

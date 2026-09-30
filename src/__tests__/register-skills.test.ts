@@ -1,7 +1,8 @@
+import { Skill } from "@opencode/schema/skill"
 import { describe, expect, test } from "bun:test"
 import { existsSync, readdirSync, readFileSync } from "node:fs"
 import { isAbsolute, resolve } from "node:path"
-import { loadSkills, type SkillRecord } from "../load-skills"
+import { loadSkills } from "../load-skills"
 import { skillDir } from "../paths"
 import type { Cleanup } from "../v2/types"
 import { registerSkills } from "../v2/register-skills"
@@ -51,10 +52,8 @@ describe("registerSkills", () => {
     expect([...fake.skills.keys()]).toEqual(ids)
     expect(fake.registrations.map((registration) => registration.kind)).toEqual(["skill.transform"])
 
-    // The registrar only adds a nominal type brand, so the draft must be the
-    // loader's records field for field. The brands exist only in the type system,
-    // hence the cast to compare the runtime values.
-    const stored = [...fake.skills.values()].map((skill) => ({ ...skill }) as unknown as SkillRecord)
+    // Field branding changes no runtime values, including the legacy location.
+    const stored: unknown = [...fake.skills.values()]
     expect(stored).toEqual(loadSkills(skillDir))
   })
 
@@ -66,10 +65,12 @@ describe("registerSkills", () => {
     for (const [id, skill] of fake.skills) {
       const location = resolve(skillDir, id, "SKILL.md")
 
-      // `id` is the containing directory's basename and `location` the absolute
-      // path to its `SKILL.md`.
-      expect({ id, location: String(skill.location) }).toEqual({ id, location })
-      expect(isAbsolute(String(skill.location))).toBe(true)
+      // Stable types declare path, but the runtime record must retain location
+      // too. Compare both against an independently resolved corpus file.
+      expect(skill).toHaveProperty("location", location)
+      expect(String(skill.path)).toBe(location)
+      expect(isAbsolute(String(skill.path))).toBe(true)
+      expect(String(skill.path).endsWith(`/${id}/SKILL.md`)).toBe(true)
 
       // `path` is the SAME absolute path under the key OpenCode >= 2.0.4 requires
       // (`@opencode/schema` renamed `location` -> `path` in `Skill.Info`). Both
@@ -90,6 +91,27 @@ describe("registerSkills", () => {
       // make every record differ from the host's own derivation.
       expect({ id, content: skill.content }).toEqual({ id, content: rawBody(location) })
       expect({ id, untrimmed: skill.content !== skill.content.trim() }).toEqual({ id, untrimmed: true })
+    }
+  })
+
+  test("stable Skill.Info rejects every legacy location-only record", () => {
+    const skills = loadSkills(skillDir)
+    expect(skills).toHaveLength(18)
+    for (const skill of skills) {
+      // Use the schema's own validating constructor, avoiding a separately
+      // resolved Effect version when v1 and v2 SDKs coexist in node_modules.
+      const input = {
+        ...skill,
+        id: skill.id as Skill.Info["id"],
+        name: skill.name as Skill.Info["name"],
+        path: skill.path as Skill.Info["path"],
+      } satisfies Skill.Info
+      expect(String(Skill.Info.make(input).path)).toBe(skill.path)
+      const { path: _path, ...legacy } = input
+      expect(() => {
+        // @ts-expect-error Stable Skill.Info requires path even when location is present.
+        Skill.Info.make(legacy)
+      }).toThrow("Schema validation failed")
     }
   })
 

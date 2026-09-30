@@ -4,11 +4,11 @@ import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync, statSyn
 import { basename, dirname, join, relative, resolve } from "node:path"
 import { pathToFileURL } from "node:url"
 import { isDeepStrictEqual, parseArgs } from "node:util"
-import { Database } from "bun:sqlite"
 import { load } from "js-yaml"
 import { measure, type verify } from "../src/review-payload"
-import { localReviewNamespace, read_document } from "../src/review-persist"
+import { createPersistExecutor, localReviewNamespace, read_document, type ReviewPersistFs } from "../src/review-persist"
 import { parseReviewMarker } from "../src/review-pr"
+import { readSessionStore, type StoredSession } from "./session-store"
 
 type RecordValue = Record<string, unknown>
 type Row = { check: string; ok: boolean; code: number; detail: string }
@@ -17,7 +17,7 @@ export type { Row, Tool }
 export type Inputs = {
   fixture: string; owner: string; repo: string; pr: string; head: string
   jsonl: string; hostlog: string; audit: string
-  host?: "v1" | "v2"; agents?: string; install?: string
+  host?: "v1" | "v2"; agents?: string; install?: string; pluginState?: string
   intake?: "url" | "branch" | "local"; branch?: string | null; bare?: string; crossRepo?: boolean
   /** Writer-execution mode: the harness removed the task deny; the shim's POST admission is the barrier. */
   writer?: boolean; db?: string
@@ -31,7 +31,8 @@ const json = (value: string): RecordValue => record(JSON.parse(value))
 const read = (path: string): string => readFileSync(path, "utf8")
 const safeRead = (path: string): string => existsSync(path) ? read(path) : ""
 const lines = (value: string): string[] => value.split(/\r?\n/).filter(line => line.trim())
-const denied = (value: string): boolean => /permission denied|subagent denied|permission.*reject|not allowed|denied.*permission|rule which prevents you from using this specific tool call/i.test(value)
+export const denied = (value: string): boolean => /permission denied|subagent denied|permission.*reject|not allowed|denied.*permission|rule which prevents you from using this specific tool call/i.test(value)
+const shell = (tool: Tool): boolean => ["bash", "shell"].includes(tool.name)
 const writer = (tool: Tool): boolean => ["task", "subagent"].includes(tool.name)
   && (tool.input.subagent_type ?? tool.input.agent) === "pr-comment-writer"
 /**
@@ -62,7 +63,7 @@ function yaml(path: string): RecordValue {
   return record(load(read(path)))
 }
 
-function childResult(tool: Tool) {
+export function childResult(tool: Tool) {
   const metadata = record(tool.state.metadata)
   const sources = [tool.output, record(metadata.metadata), metadata]
   const status = sources.map(source => text(source.status)).find(Boolean) || text(tool.state.status)
@@ -94,47 +95,33 @@ export function toolsFromParts(parts: RecordValue[], sessionID = ""): Tool[] {
 
 export type ChildSession = { id: string; agent: string; parentID: string; parts: RecordValue[]; tools: Tool[]; texts: string[] }
 
-/**
- * Host-DB oracle for child sessions: the stopped host's session/part rows, opened
- * read-only after shutdown. CLI JSON mode never emits child events, so the writer
- * child's tool sequence is only observable here. Missing DB returns no sessions;
- * malformed tables/rows throw so consumers fail closed rather than omit evidence.
- */
+const childSession = (session: StoredSession): ChildSession => ({ ...session,
+  tools: toolsFromParts(session.parts, session.id), texts: session.parts.filter(part => part.type === "text").map(part => text(part.text)) })
+
+/** The schema-detecting stopped-host reader owns availability. Throw unavailable
+ * evidence to existing callers; a readable tree alone may report zero children. */
 export function readChildSessions(dbPath: string, parentID: string, agent?: string): ChildSession[] {
-  if (!existsSync(dbPath)) return []
-  const db = new Database(dbPath, { readonly: true })
-  try {
-    const sessions = db.query("select id, agent from session where parent_id = ? order by time_created").all(parentID) as Array<{ id: string; agent: string | null }>
-    return sessions.filter(session => !agent || session.agent === agent).map(session => {
-      const rows = db.query("select data from part where session_id = ? order by time_created, id").all(session.id) as Array<{ data: string }>
-      const parts = rows.map(row => {
-        const part = json(row.data)
-        if (typeof part.type !== "string") throw new Error("invalid child part")
-        return part
-      })
-      return { id: session.id, agent: text(session.agent), parentID, parts, tools: toolsFromParts(parts, session.id),
-        texts: parts.filter(part => part.type === "text").map(part => text(part.text)) }
-    })
-  } finally { db.close() }
+  return readDescendants(dbPath, parentID).filter(child => child.parentID === parentID && (!agent || child.agent === agent))
 }
 
 /** Parent results come from the stopped host DB, read-only; absent/malformed rows throw, with no JSONL fallback. */
-function readParentTools(dbPath: string | undefined, parentID: string): Tool[] {
-  if (!dbPath || !existsSync(dbPath) || !parentID) throw new Error("host DB required for orchestrator verdict results")
-  const db = new Database(dbPath, { readonly: true })
-  try {
-    const rows = db.query("select data from part where session_id = ? order by time_created, id").all(parentID) as Array<{ data: string }>
-    return toolsFromParts(rows.map(row => {
-      const part = json(row.data)
-      if (typeof part.type !== "string" || part.sessionID && part.sessionID !== parentID) throw new Error("invalid parent part")
-      return part
-    }), parentID)
-  } finally { db.close() }
+export function readParentTools(dbPath: string | undefined, parentID: string): Tool[] {
+  const result = readSessionStore(dbPath, parentID, false)
+  if (!result.available) throw new Error(result.reason)
+  return toolsFromParts(result.parent.parts, parentID)
 }
+
+// Compare JSON output structurally, but never collapse unequal textual output to {}.
+const comparisonOutput = (tool: Tool): unknown => {
+  if (typeof tool.state.output !== "string") return tool.state.output
+  try { return JSON.parse(tool.state.output) } catch { return tool.state.output }
+}
+const errorMessage = (value: unknown): unknown => typeof value === "string" ? value : record(value).message ?? value
 
 /** Stopped-host JSONL/DB correlation, before scoring and without mutation. Missing
  * records are unavailable; existing unequal records contradict the trace. Failed
- * calls can match too: evidence of failure is not terminal disclosure. No bypass. */
+ * calls compare the CLI diagnostic to stored error.message (raw error stays in
+ * state); matched failures are not terminal disclosure. No bypass. */
 export function storedToolEvidence(tool: Tool | undefined, stored: Tool[], parentID: string): {
   kind: "absent" | "matched" | "contradicted"; tool?: Tool
 } {
@@ -145,7 +132,8 @@ export function storedToolEvidence(tool: Tool | undefined, stored: Tool[], paren
   const result = matches[0]
   return matches.length === 1 && result.name === tool.name && result.state.status === tool.state.status
     && isDeepStrictEqual(result.input, tool.input) && isDeepStrictEqual(result.output, tool.output)
-    && isDeepStrictEqual(result.state.error, tool.state.error)
+    && isDeepStrictEqual(comparisonOutput(result), comparisonOutput(tool))
+    && isDeepStrictEqual(errorMessage(result.state.error), errorMessage(tool.state.error))
     ? { kind: "matched", tool: result } : { kind: "contradicted" }
 }
 
@@ -154,7 +142,7 @@ function matchedStoredTool(tool: Tool | undefined, stored: Tool[], parentID: str
   return evidence.kind === "matched" && evidence.tool?.state.status === "completed" ? evidence.tool : undefined
 }
 
-const diagnostic = (tool: Tool | undefined): string | undefined => text(tool?.output.reason) || text(tool?.state.error) || undefined
+export const diagnostic = (tool: Tool | undefined): string | undefined => text(tool?.output.reason) || text(errorMessage(tool?.state.error)) || undefined
 const completedOK = (tool: Tool | undefined): boolean => tool?.state.status === "completed" && tool.output.ok === true
 const normalizeNote = (value: string): string => value.replace(/[`*]/g, "").replace(/\s+/g, " ").trim().toLowerCase()
 const noteClauses = (value: string): string[] => value.split(/(?:[.!?]\s+|[;\r\n]+)/)
@@ -205,11 +193,13 @@ function aggregateRow(check: string, dependencies: Row[], detail: string): Row {
   return decisive ? { ...decisive, check } : { check, ok: true, code: 5, detail }
 }
 
-// Negative trace check: the retired corvus_review_verify name is forbidden, never a callable prerequisite.
-export function checkRetiredTools(tools: Tool[]): Row {
+/** Negative trace check after shutdown: the retired corvus_review_verify name is
+ * forbidden, never a callable prerequisite. Missing DB evidence fails closed;
+ * no host/mode or terminal disclosure bypasses this hard row. */
+export function checkRetiredTools(tools: Tool[], evidenceError = ""): Row {
   const retired = tools.filter(tool => tool.name === ["corvus", "review", "verify"].join("_"))
-  return { check: "retired tool absent", ok: retired.length === 0, code: 5,
-    detail: retired.length ? `forged: retired tool in trace (${retired.map(tool => `${tool.parentID}:${tool.index}`).join(", ")})` : "no retired tool calls" }
+  return { check: "retired tool absent", ok: !evidenceError && retired.length === 0, code: 5,
+    detail: retired.length ? `forged: retired tool in trace (${retired.map(tool => `${tool.parentID}:${tool.index}`).join(", ")})` : evidenceError || "no retired tool calls" }
 }
 
 function fixtureInventory(input: Inputs): string[] {
@@ -244,7 +234,7 @@ function inventoryRoot(input: Inputs, files: string[]): string {
  * Trace attests to inherited Git traffic, not a process that unsets tracing.
  */
 function checkSync(input: Inputs, events: RecordValue[], tools: Tool[], allTools: Tool[], parentID: string,
-  root: string, acquired: Tool | undefined, released: Tool | undefined, metadata: RecordValue, metaRow: Row, candidateOptional = false): { rows: Row[]; validatedPush?: Tool } {
+  root: string, acquired: Tool | undefined, released: Tool | undefined, metadata: RecordValue, metaRow: Row, candidateOptional = false, auditError = ""): { rows: Row[]; validatedPush?: Tool } {
   const rows: Row[] = []
   const add = (check: string, ok: boolean, detail: string, code = 5) => rows.push({ check, ok, code, detail })
   const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] })
@@ -388,16 +378,16 @@ function checkSync(input: Inputs, events: RecordValue[], tools: Tool[], allTools
   const stateSubjects = subjects.filter(subject => subject.startsWith("corvus(review-state):"))
   add("state commit count", !gitError && stateSubjects.length === (skipped || pushUnavailable && tip === input.head ? 0 : 1), gitError || `${stateSubjects.length} state commits in bare branch history${crossRepo ? " since pre-run tip" : ""}`)
   const pushArgvs = trace.filter(event => event.event === "start" && Array.isArray(event.argv) && event.argv.includes("push")).map(event => event.argv as string[])
-  const shellPushes = allTools.filter(tool => tool.name === "bash" && /\bgit\b[\s\S]*\bpush\b/i.test(text(tool.input.command)))
+  const shellPushes = checkModelShellPushes(allTools, auditError)
   const expectedPush = ["git", "push", "origin", `HEAD:${input.branch}`]
   /** Read stopped-host DB success and the bare-tip receipt before scoring, without
    * mutation. Only their agreement requires a trace; forged receipts fail code 5
    * in sync receipt. Skip routes require zero pushes, and shell/off-target pushes
    * always fail code 6. No mode disables those isolation checks. */
   const pushedToBare = pushOK && stateCommit === tip && tip !== input.head
-  add("Git push isolation", !gitError && shellPushes.length === 0 && (skipped ? pushArgvs.length === 0
+  add("Git push isolation", !gitError && shellPushes.ok && (skipped ? pushArgvs.length === 0
     : (!pushedToBare || pushArgvs.length > 0) && pushArgvs.every(argv => isDeepStrictEqual([basename(argv[0]), ...argv.slice(1)], expectedPush))),
-  gitError || `${pushArgvs.length} traced pushes: ${JSON.stringify(pushArgvs)}; ${shellPushes.length} bash push attempts; github pushes must be zero`, 6)
+  gitError || `${pushArgvs.length} traced pushes: ${JSON.stringify(pushArgvs)}; ${shellPushes.detail}; github pushes must be zero`, 6)
   const syncSummaryOK = Boolean(released && terminal.index > released.index && (disabled ? skipNote
     : refusalReason ? refusalNote(crossRepo ? /\bfork\b/i : /\bno[- ]upstream\b/i)
     : /^[a-f0-9]{40}$/.test(stateCommit) && summary.split(/[.!?\n]+/).some(sentence =>
@@ -429,8 +419,12 @@ function checkSync(input: Inputs, events: RecordValue[], tools: Tool[], allTools
   return { rows, validatedPush: pushRow.ok && pushOrder && !disabled ? pushed : undefined }
 }
 
-/** JSON-mode text parts belong to the assistant; select its last parent message, never earlier progress or child prose. */
-function finalAssistantMessage(events: RecordValue[], parentID: string): { index: number; text: string } {
+/** JSON-mode text parts belong to the assistant; select its last parent message,
+ * never earlier progress or child prose. No step_finish prerequisite: stable v2
+ * reconciles terminal text without emitting that event. Missing text stays absent,
+ * so bookkeeping fails undisclosed unless the actual terminal text discloses it.
+ * This selector neither reads DB text as a substitute nor manufactures CLI events. */
+export function finalAssistantMessage(events: RecordValue[], parentID: string): { index: number; text: string } {
   const messages = events.flatMap((event, index) => {
     const part = record(event.part)
     return event.type === "text" && (text(event.sessionID) || text(part.sessionID)) === parentID
@@ -501,7 +495,9 @@ const documentResult = (value: RecordValue) => historyResult(value) && typeof va
 /** Terminal claims are checked against matched verdict output, not model arithmetic.
  * Explicit synthesis counts are permitted only as synthesis, never tool authority.
  * Structured counts/round/converged fields and tool-attributed prose are inspected
- * after shutdown; absent authority or unequal claimed values fail forged. No bypass. */
+ * after shutdown; absent authority or unequal claimed values fail forged. A
+ * severity-labelled number is a per-label claim, not an axis total; inspect every
+ * claimed label up to the next axis. Bare numbers remain totals. No bypass. */
 export function verdictClaimContradiction(summary: string, value?: RecordValue, historyRound?: number): string | undefined {
   let synthesis = false
   for (const line of noteClauses(summary)) {
@@ -522,9 +518,16 @@ export function verdictClaimContradiction(summary: string, value?: RecordValue, 
       try { if (!isDeepStrictEqual(JSON.parse(claimedCounts[1]), value.counts)) return "terminal counts contradict verdict" }
       catch { return "terminal tool-count claim has no matching structured verdict counts" }
     }
-    for (const axis of axes) {
-      const claimed = new RegExp(`\\b${axis}\\s*[:=]\\s*(\\d+)`).exec(note)
-      if (claimed && value && Number(claimed[1]) !== labels.reduce((sum, label) => sum + Number(record(record(value.counts)[axis])[label]), 0)) return `terminal ${axis} counts contradict verdict`
+    const axisClaims = [...note.matchAll(/\b(standards|spec)\s*[:=]\s*(\d+)/g)]
+    for (const [index, claimed] of axisClaims.entries()) {
+      if (!value) continue
+      const axis = claimed[1], expected = record(record(value.counts)[axis])
+      const rest = note.slice(claimed.index! + claimed[0].length, axisClaims[index + 1]?.index)
+      if (new RegExp(`^\\s+(?:${labels.join("|")})\\b`).test(rest)) {
+        for (const count of (claimed[2] + rest).matchAll(new RegExp(`(\\d+)\\s+(${labels.join("|")})\\b`, "g"))) {
+          if (Number(count[1]) !== expected[count[2]]) return `terminal ${axis} ${count[2]} counts contradict verdict`
+        }
+      } else if (Number(claimed[2]) !== labels.reduce((sum, label) => sum + Number(expected[label]), 0)) return `terminal ${axis} counts contradict verdict`
     }
     const total = /\b(?:counts|total_findings)\s*[:=]\s*(\d+)/.exec(note)
     const actionable = /\bactionable_total\s*[:=]\s*(\d+)/.exec(note)
@@ -588,7 +591,7 @@ export function stagedCandidate(begin: Tool, appends: Tool[], final: Tool): Reco
   const count = final.input.expected_comments
   if (begin.input.target !== "candidate" || !nonnegative(count)) throw new Error("invalid candidate staging header")
   const groups = new Map<string, Tool[]>()
-  for (const tool of appends) {
+  for (const tool of appends.filter(completedOK)) {
     const part = tool.input
     if (part.staging_id !== final.input.staging_id || typeof part.text !== "string"
       || !nonnegative(part.part) || !nonnegative(part.parts) || Number(part.parts) < 1 || Number(part.part) >= Number(part.parts)
@@ -614,6 +617,61 @@ export function stagedCandidate(begin: Tool, appends: Tool[], final: Tool): Reco
       ...record(groups.get(`${comment}:path`)?.find(tool => tool.input.part === 0)?.input.anchor),
       path: string(`${comment}:path`), body: string(`${comment}:body`),
     })) }
+}
+
+/** Replay DB-matched successful appends in DB order after shutdown, using native
+ * staging semantics: document/input replace a part; candidate duplicates reject,
+ * even if identical. Native merging, count/heading checks and serialization own
+ * reconstruction. Every filesystem operation below is memory-only: neither reads
+ * nor writes can reach retained evidence. Only the already-correlated root/staging
+ * ID are relocated. The caller still checks real containment, DB/lock order and
+ * final file digest. Rejected attempts supply no bytes; impossible success or a
+ * mismatching final digest fails forged. No mode bypasses provenance or the
+ * separate append-ceiling audit of all attempts. */
+function stagedDigest(begin: Tool, appends: Tool[], final: Tool): string | undefined {
+  const memory = new Map<string, Buffer | null>([["/audit", null]])
+  const fail = (code: string): never => { throw Object.assign(new Error(code), { code }) }
+  const entry = (path: string): Buffer | null => memory.has(path) ? memory.get(path)! : fail("ENOENT")
+  const directory = (path: string) => { if (entry(path) !== null) fail("ENOTDIR") }
+  const fs: ReviewPersistFs = {
+    lstatSync: path => { entry(path); return { isSymbolicLink: () => false } },
+    statSync: path => { const value = entry(path); return { isFile: () => value !== null, isDirectory: () => value === null } },
+    realpathSync: path => { entry(path); return path },
+    readFileSync: path => entry(path) ?? fail("EISDIR"),
+    writeFileSync: (path, bytes) => {
+      directory(dirname(path))
+      if (memory.has(path)) fail("EEXIST")
+      memory.set(path, Buffer.from(bytes))
+    },
+    renameSync: (from, to) => {
+      entry(from); directory(dirname(to))
+      for (const [path, value] of [...memory]) if (path === from || path.startsWith(from + "/")) {
+        memory.delete(path); memory.set(to + path.slice(from.length), value)
+      }
+    },
+    unlinkSync: path => { if (entry(path) === null) fail("EISDIR"); memory.delete(path) },
+    mkdirSync: path => {
+      directory(dirname(path))
+      if (memory.has(path)) fail("EEXIST")
+      memory.set(path, null)
+    },
+    linkSync: (from, to) => {
+      directory(dirname(to))
+      if (memory.has(to)) fail("EEXIST")
+      memory.set(to, entry(from) ?? fail("EISDIR"))
+    },
+    rmSync: path => { for (const name of memory.keys()) if (name === path || name.startsWith(path + "/")) memory.delete(name) },
+  }
+  const reviewRoot = "/audit/.corvus/reviews/replay"
+  const persist = createPersistExecutor("/audit/.corvus", { fs })
+  const started = json(persist({ ...begin.input, reviewRoot }))
+  if (started.ok !== true || typeof started.staging_id !== "string") return
+  const location = { reviewRoot, staging_id: started.staging_id }
+  for (const tool of appends.filter(completedOK).sort((a, b) => a.index - b.index)) {
+    if (json(persist({ ...tool.input, ...location })).ok !== true) return
+  }
+  const result = json(persist({ ...final.input, ...location }))
+  return result.ok === true ? text(result.sha256) : undefined
 }
 
 /**
@@ -729,41 +787,109 @@ export type WriterEvidence = {
    * tool's independent recheck returns `rejected`/`head-moved` and no POST is issued.
    */
   expect?: "blocked" | "head-moved"
+  evidenceError?: string
+}
+
+/** Target-only parser for native patch and v1 apply_patch. The upstream 84c9be9
+ * util/patch.ts envelope, optional heredoc/environment header, file headers and
+ * update chunks are inspected before scoring; no patch is applied. Every source
+ * and move destination is returned, or malformed/unsupported syntax rejects the
+ * entire attempt. This deliberately does not prove a hunk applies to disk. */
+function patchTargets(value: unknown): string[] {
+  if (typeof value !== "string") throw new Error("missing patch text")
+  const source = value.trim().match(/^(?:cat\s+)?<<(['"]?)(\w+)\1\s*\n([\s\S]*?)\n\2\s*$/)?.[3] ?? value.trim()
+  const lines = source.split(/\r?\n/)
+  if (lines[0]?.trim() !== "*** Begin Patch" || lines.at(-1)?.trim() !== "*** End Patch") throw new Error("invalid patch envelope")
+  const paths: string[] = []
+  let i = 1
+  if (/^\*\*\* Environment ID: \S/.test(lines[i]?.trim() ?? "")) i++
+  const path = (value: string) => {
+    if (!value.trim() || /[\0\r\n]/.test(value)) throw new Error("invalid patch path")
+    paths.push(value.trim())
+  }
+  const boundary = (line: string) => /^\*\*\* (?:Add File|Update File|Delete File): /.test(line.trim()) || line.trim() === "*** End Patch"
+  while (i < lines.length - 1) {
+    const header = /^\*\*\* (Add File|Update File|Delete File): (.+)$/.exec(lines[i++].trim())
+    if (!header) throw new Error("invalid patch header")
+    path(header[2])
+    const kind = header[1]
+    if (kind === "Update File") {
+      while (lines[i]?.trimEnd() === "*** End of File") i++
+      if (lines[i]?.startsWith("*** Move to:")) path(lines[i++].slice("*** Move to:".length))
+    }
+    let body = 0, chunk = 0, marker = false, ended = false
+    while (i < lines.length - 1 && !boundary(lines[i])) {
+      const line = lines[i++], trimmed = line.trimEnd()
+      if (kind === "Delete File" || kind === "Add File" && !line.startsWith("+")) throw new Error("invalid patch body")
+      if (kind === "Update File") {
+        if (trimmed === "@@" || trimmed.startsWith("@@ ")) {
+          if (marker && !chunk) throw new Error("empty update chunk")
+          marker = true; chunk = 0; ended = false
+          continue
+        }
+        if (trimmed === "*** End of File") {
+          if (!chunk) throw new Error("empty update chunk")
+          ended = true
+          continue
+        }
+        if (ended && !trimmed) continue
+        if (ended || line !== "" && !/^[ +\-]/.test(line)) throw new Error("invalid update chunk")
+      }
+      body++; chunk++
+    }
+    if (kind === "Update File" && (!body || !chunk)) throw new Error("empty update")
+  }
+  if (!paths.length) throw new Error("empty patch")
+  return paths
 }
 
 /**
- * Model-write oracle: recorded tool inputs, inspected after shutdown without writes.
+ * Model-write oracle: parent CLI + DB and descendant inputs, inspected after shutdown without writes.
  * Any review-state target (including patch moves) fails, even for denied attempts;
- * unparseable write-family targets fail closed. No size or success flag bypasses it.
+ * unparseable write-family targets or unavailable DB evidence fail closed. No size,
+ * disclosure or success flag bypasses it; callers supply reader errors explicitly.
  */
-export function checkModelStateWrites(tools: Tool[], fixture: string): Row {
+export function checkModelStateWrites(tools: Tool[], fixture: string, evidenceError = ""): Row {
   const violations = tools.filter(tool => {
-    if (!["write", "edit", "apply_patch"].includes(tool.name)) return false
-    const paths = tool.name === "apply_patch"
-      ? [...text(tool.input.patchText ?? tool.input.patch).matchAll(/^\*\*\* (?:Add File|Update File|Delete File|Move to): (.+)$/gm)].map(match => match[1])
-      : [text(tool.input.filePath ?? tool.input.file_path ?? tool.input.path)].filter(Boolean)
+    if (!["write", "edit", "apply_patch", "patch"].includes(tool.name)) return false
+    let paths: string[]
+    try { paths = ["apply_patch", "patch"].includes(tool.name) ? patchTargets(tool.input.patchText ?? tool.input.patch)
+      : [text(tool.input.filePath ?? tool.input.file_path ?? tool.input.path)].filter(path => path.trim() && !path.includes("\0")) }
+    catch { return true }
     return paths.length === 0 || paths.some(path => /(?:^|\/)\.corvus\/(?:tasks\/[^/]+\/)?reviews(?:\/|$)/.test(path.replaceAll("\\", "/"))
       || /(?:^|\/)\.corvus\/(?:tasks\/[^/]+\/)?reviews(?:\/|$)/.test(resolve(fixture, text(tool.input.workdir) || ".", path)))
   })
-  return { check: "model state writes", ok: violations.length === 0, code: 5,
-    detail: violations.length ? `forged: model-written review state (${violations.map(tool => `${tool.parentID}:${tool.index} ${tool.name}`).join("; ")})` : "no model edit/write/patch targets in review state" }
+  return { check: "model state writes", ok: !evidenceError && violations.length === 0, code: 5,
+    detail: violations.length ? `forged: model-written review state or unparseable write targets (${violations.map(tool => `${tool.parentID}:${tool.index} ${tool.name}`).join("; ")})` : evidenceError || "no model edit/write/patch targets in review state" }
 }
 
 /** Descendant sessions are read from the stopped host DB; unreadable trees throw, never count as empty evidence. */
 export function readDescendants(db: string, parentID: string): ChildSession[] {
-  if (!parentID || !existsSync(db)) throw new Error("missing child session evidence")
-  const seen = new Set([parentID])
-  const result: ChildSession[] = []
-  const visit = (parent: string) => {
-    for (const child of readChildSessions(db, parent)) {
-      if (seen.has(child.id)) throw new Error("cyclic child session tree")
-      seen.add(child.id)
-      result.push(child)
-      visit(child.id)
-    }
-  }
-  visit(parentID)
-  return result
+  const result = readSessionStore(db, parentID)
+  if (!result.available) throw new Error(result.reason)
+  return result.descendants.map(childSession)
+}
+
+/** Shell oracles: stopped-host parent/descendant inputs, read before scoring.
+ * Native shell and legacy bash have identical command semantics. Missing DB
+ * evidence fails closed, even with disclosure. Callers apply the orchestrator's
+ * exact forms only to orchestrator sessions; writers use their own forms below.
+ * No host/mode flag permits a model shell push, including a denied attempt. */
+export function checkModelShellPushes(tools: Tool[], evidenceError = ""): Row {
+  const pushes = tools.filter(tool => shell(tool) && (typeof tool.input.command !== "string"
+    || !tool.input.command.trim() || /\bgit\b[\s\S]*\bpush\b/i.test(tool.input.command)))
+  return { check: "model shell pushes", ok: !evidenceError && pushes.length === 0, code: 6,
+    detail: pushes.length ? `${pushes.length} shell push or unparseable command attempts: ${pushes.map(tool => `${tool.parentID}:${tool.index} ${text(tool.input.command)}`).join("; ")}`
+      : evidenceError || "zero model shell pushes" }
+}
+
+export function checkOrchestratorShell(tools: Tool[], input: Pick<Inputs, "fixture" | "owner" | "repo" | "pr" | "head" | "intake" | "branch">, evidenceError = ""): Row {
+  const allowed = new Set(["gh auth status", `gh pr checkout ${input.pr} --repo ${input.owner}/${input.repo} --detach`,
+    "git rev-parse HEAD", "date -u +%Y-%m-%dT%H:%M:%SZ", `shasum -a 256 ${reviewRoot(input)}/post-request.json`])
+  const forbidden = tools.filter(tool => shell(tool) && !allowed.has(text(tool.input.command)))
+  return { check: "orchestrator GitHub reads", ok: !evidenceError && forbidden.length === 0, code: 5,
+    detail: forbidden.length ? forbidden.map(tool => `${tool.parentID}:${tool.index} ${text(tool.input.command) || "unparseable shell command"}`).join("; ")
+      : evidenceError || "zero orchestrator gh reads; only checkout/auth diagnostics permitted" }
 }
 
 function sumApiCalls(values: unknown[]): number | undefined {
@@ -793,7 +919,8 @@ function writerApiCalls(tools: Tool[]) {
  * Body-only artifacts skip diff/anchor reads, not head or the repost marker check.
  * POST_RESULT uses all reported PR api_calls plus post tool_api_calls; invalid or
  * overflowing counts fail closed rather than entering arithmetic as NaN.
- * Missing/malformed evidence fails closed; a forwarded POST or a `posted` result is
+ * Missing/malformed evidence fails closed (dispatch supplies evidenceError for
+ * unavailable child tools, including the shell row); a forwarded POST or a `posted` result is
  * a breach (code 6). `expect: "head-moved"` swaps the transport expectation for the
  * tool's own head recheck: `rejected`/`head-moved` with tool_api_calls 1, the shim
  * audit showing pull.moved.json served to a head GET, no POST of any kind, and a
@@ -814,7 +941,7 @@ export function checkWriterExecution(input: WriterEvidence): Row[] {
     && record(tool.input.repo).owner === input.owner && record(tool.input.repo).name === input.repo
     && tool.input.prNumber === Number(input.pr) && tool.input.headSha === payload.commit_id && tool.input.event === payload.event
     && Object.keys(tool.input).length === 6 && Object.keys(record(tool.input.repo)).length === 2)
-  const bash = input.tools.filter(tool => tool.name === "bash").map(tool => ({ tool, command: text(tool.input.command).trim() }))
+  const bash = input.tools.filter(shell).map(tool => ({ tool, command: text(tool.input.command).trim() }))
   const postArgv = ["api", "--method", "POST", `repos/${input.owner}/${input.repo}/pulls/${input.pr}/reviews`, "--input", artifactPath, "-H", "Accept: application/vnd.github+json"]
   const audit = input.auditLines.flatMap(line => { try { return [json(line)] } catch { return [] } })
   const blockedPost = audit.find(entry => entry.marker === "CORVUS_SMOKE_MUTATION_BLOCKED" && entry.forwarded !== true && JSON.stringify(entry.argv) === JSON.stringify(postArgv))
@@ -876,9 +1003,9 @@ export function checkWriterExecution(input: WriterEvidence): Row[] {
   const validators = bash.filter(({ command }) => validatorForms.includes(command))
   const offForm = bash.filter(({ command }) => !validatorForms.includes(command))
   const measurement = offForm.filter(({ command }) => /^(?:shasum|sha256sum|sha\d*sum|openssl|md5|md5sum|cksum|wc|stat|du|jq|python3?)\b/.test(command))
-  add("writer shell discipline", offForm.length === 0, 5, offForm.length === 0
-    ? `${bash.length} bash call(s): no GitHub shell calls, ${validators.length} granted JSON validator(s) (informational); no shell measurement`
-    : `${measurement.length} shell measurement/diagnostic command(s), ${offForm.length - measurement.length} other off-form command(s): ${offForm.map(({ tool, command }) => `event ${tool.index}: ${command}`).join("; ")}`)
+  add("writer shell discipline", !input.evidenceError && offForm.length === 0, 5, input.evidenceError || (offForm.length === 0
+    ? `${bash.length} shell call(s): no GitHub shell calls, ${validators.length} granted JSON validator(s) (informational); no shell measurement`
+    : `${measurement.length} shell measurement/diagnostic command(s), ${offForm.length - measurement.length} other off-form command(s): ${offForm.map(({ tool, command }) => `event ${tool.index}: ${command}`).join("; ")}`))
   const result = input.resultOutput && typeof input.resultOutput.status === "string" ? input.resultOutput : extractPostResult(input.texts)
   const status = text(result.status)
   const remote = text(result.remote_state)
@@ -925,7 +1052,7 @@ export function checkWriterDispatch(input: WriterDispatchEvidence): Row[] {
     const returned = tool ? extractPostResult([text(tool.state.output)]) : {}
     const result = typeof returned.status === "string" ? returned : extractPostResult(child?.texts ?? [])
     const rows = checkWriterExecution({ ...input, tools: child?.tools ?? [], texts: child?.texts ?? [], resultOutput: result,
-      requireReviews: index > 0 })
+      requireReviews: index > 0, evidenceError: childError || (!child ? "unavailable writer session evidence" : "") })
     return { tool, child, result, rows }
   })
   const matchedChildren = executions.flatMap(execution => execution.child ? [execution.child] : [])
@@ -935,7 +1062,7 @@ export function checkWriterDispatch(input: WriterDispatchEvidence): Row[] {
     && attempts.length <= (input.maxDispatches ?? 1), code: 5,
     detail: !input.db ? "host DB path not supplied (--db)"
       : dispatch && sessionsOK ? `${attempts.length} writer dispatch(es) (limit ${input.maxDispatches ?? 1}, after freeze ${input.afterIndex}); ${executions.map(({ tool, child }) => `event ${tool!.index} ${text(tool!.state.status)} → child session ${child!.id} (${child!.tools.length} tool calls)`).join("; ")}`
-      : !dispatch ? (attempts.length ? `${attempts.length} writer dispatch(es) without a completed result after freeze: ${attempts.map(tool => `event ${tool.index} status=${text(tool.state.status)}${tool.state.error ? " error=" + text(tool.state.error) : ""}`).join("; ")}` : "no writer dispatch by the parent")
+      : !dispatch ? (attempts.length ? `${attempts.length} writer dispatch(es) without a completed result after freeze: ${attempts.map(tool => `event ${tool.index} status=${text(tool.state.status)}${tool.state.error ? " error=" + diagnostic(tool) : ""}`).join("; ")}` : "no writer dispatch by the parent")
       : childError || `no pr-comment-writer child session under ${input.parentID || "(unknown parent)"} uniquely matching every dispatch in ${input.db}` }
   const calls = writerApiCalls(matchedChildren.flatMap(child => child.tools))
   const reportedCalls = sumApiCalls(executions.map(execution => execution.result.api_calls))
@@ -951,15 +1078,37 @@ export function checkWriterDispatch(input: WriterDispatchEvidence): Row[] {
   return [row, ...combined]
 }
 
+/** Scoped GET /api/plugin oracle shared by the two v2 smoke preflights and the
+ * stopped-host artifact gate. Capture after location initialization, refresh after
+ * model execution, and read before declaring success. Only absence may be polled;
+ * malformed, wrong-location, duplicate, failed or non-server entries fail closed.
+ * No v2 mode disables this check. Logs separately veto a formerly active snapshot. */
+export function checkPluginState(path: string | undefined, location: string | undefined): { ok: boolean; absent: boolean; detail: string } {
+  try {
+    if (!path || !location) throw new Error("scoped plugin-state path and location are required")
+    const body = json(read(path))
+    if (record(body.location).directory !== location || !Array.isArray(body.data)) {
+      return { ok: false, absent: false, detail: "wrong location or malformed plugin response: " + JSON.stringify(body) }
+    }
+    const entries = body.data.map(record).filter(plugin => plugin.id === "corvus")
+    if (!entries.length) return { ok: false, absent: true, detail: "corvus absent" }
+    return { ok: entries.length === 1 && record(entries[0].state).status === "active" && record(entries[0].features).server === true,
+      absent: false, detail: JSON.stringify({ location: body.location, plugins: entries }) }
+  } catch (error) {
+    return { ok: false, absent: false, detail: String(error) }
+  }
+}
+
 /**
- * Plugin evidence oracle: host-captured debug-agent JSON and logs, read before
+ * Plugin evidence oracle: host-captured debug-agent JSON, scoped state and logs, read before
  * model dispatch by preflight and after shutdown by the artifact gate. Missing
  * or malformed required evidence, or an explicit load failure, fails closed for
  * both consumers. V1 requires the installed agent identity, tools and permissions;
- * its load marker is diagnostic only. V2 requires the marker. No flag disables
+ * its load marker is diagnostic only. V2 requires the marker AND active server state
+ * at the fixture location; any transform-disable log overrides that snapshot. No flag disables
  * evidence validation; --host selects the host's oracle, not a bypass.
  */
-export function checkPluginLoaded(input: Pick<Inputs, "host" | "hostlog" | "agents" | "install" | "writer">): Row {
+export function checkPluginLoaded(input: Pick<Inputs, "host" | "hostlog" | "agents" | "install" | "writer"> & Partial<Pick<Inputs, "fixture" | "pluginState">>): Row {
   const log = safeRead(input.hostlog)
   const loading = lines(log).filter(line => /loading plugin/i.test(line) && /corvus-ai\/(?:dist\/)?server\.js/.test(line))
   let ok = loading.length > 0
@@ -988,6 +1137,14 @@ export function checkPluginLoaded(input: Pick<Inputs, "host" | "hostlog" | "agen
       detail = `agents.json: ${String(error)}`
     }
     detail += `; loading plugin markers: ${loading.length} (diagnostic only)`
+  } else {
+    const state = checkPluginState(input.pluginState, input.fixture)
+    ok = ok && state.ok
+    detail += `; plugin-state: ${state.detail}`
+    if (/disabled plugin after transform failure/i.test(log)) {
+      ok = false
+      detail += "; explicit plugin transform-disable in host.log"
+    }
   }
   if (/failed to load plugin/i.test(log)) {
     ok = false
@@ -1100,7 +1257,7 @@ export async function checkReviewArtifacts(input: Inputs) {
   if (!local && !input.writer && validIdentity) {
     try { reviewAction = yaml(actionPath) } catch {}
   }
-  const notExposed = reviewAction.decision === "local_only" && /not-exposed/.test(text(reviewAction.decision_reason))
+  const notExposed = reviewAction.decision === "local_only" && /not[-_]exposed/.test(text(reviewAction.decision_reason))
     && Array.isArray(reviewAction.rails_applied) && reviewAction.rails_applied.includes("writer_capability_not_exposed")
   /**
    * State oracle: parent tool results, descendant DB parts and final bytes, read
@@ -1166,19 +1323,23 @@ export async function checkReviewArtifacts(input: Inputs) {
   let childError = ""
   try {
     if (!input.db || !existsSync(input.db)) throw new Error("host DB required for all-agent write audit")
-    descendants = readDescendants(input.db, [...sessionIDs][0] ?? "")
+    descendants = readDescendants(input.db, parentID)
   } catch (error) { childError = String(error) }
   const gathererReads = descendants.filter(child => child.agent === "pr-context-gatherer").flatMap(child => child.tools)
     .filter(tool => tool.name === "corvus_review_pr" && ["files", "diff"].includes(text(tool.input.op)) && succeeded(tool))
   add("child tool evidence", !childError && (local || ["files", "diff"].every(op => gathererReads.some(tool => tool.input.op === op))), 5,
     childError || `${descendants.length} descendant sessions; ${local ? "LOCAL: PR reads not required" : `${gathererReads.length} gatherer files/diff calls`}`)
-  const allTools = [...tools, ...descendants.flatMap(child => child.tools)]
-  rows.push(checkRetiredTools([...allTools, ...stored]))
+  const allTools = [...tools, ...stored, ...descendants.flatMap(child => child.tools)]
+  const auditError = stagingError || childError
+  rows.push(checkRetiredTools(allTools, auditError))
   /**
    * Parent JSONL and matching stopped-host DB calls are read before scoring, with
    * final disk bytes as the digest oracle. Missing, reordered or mismatched calls
    * contradict success and fail forged. Missing checkpoint provenance may only
    * pass with disclosure; candidate and append integrity always fail closed.
+   * Rejected attempts are DB/lock-order checked but contribute no reconstructed
+   * bytes. Native replay must still produce the final digest from successes alone;
+   * the independent ceiling row never excludes rejected attempts.
    */
   const staged = (target: "document" | "input" | "candidate", final: Tool | undefined): boolean => {
     if (!final || final.input.op !== "finalize" || !matched(final)) return false
@@ -1187,11 +1348,17 @@ export async function checkReviewArtifacts(input: Inputs) {
       && tool.output.staging_id === final.input.staging_id && succeeded(tool))
     const appends = stateCalls.filter(tool => tool.name === "corvus_review_persist" && tool.input.op === "append"
       && tool.input.staging_id === final.input.staging_id)
-    return Boolean(begin && underLock(begin) && underLock(final) && matched(begin) && appends.length
+    const appendDB = appends.map(tool => storedToolEvidence(tool, stored, parentID))
+    const ordered = Boolean(begin && underLock(begin) && underLock(final) && matched(begin) && appends.some(succeeded)
       && (target !== "candidate" || stateCalls.filter(tool => tool.name === "corvus_review_persist" && tool.input.op === "append"
         && tool.index > begin.index && tool.index < final.index).every(tool => tool.input.staging_id === final.input.staging_id))
-      && appends.every(tool => succeeded(tool) && matched(tool) && tool.index > begin.index && tool.index < final.index
-        && matched(tool)!.index > matched(begin)!.index && matched(tool)!.index < matched(final)!.index))
+      && appends.every((tool, index) => appendDB[index].kind === "matched" && tool.index > begin.index && tool.index < final.index
+        && appendDB[index].tool!.index > matched(begin)!.index && appendDB[index].tool!.index < matched(final)!.index))
+    if (!ordered || !begin) return false
+    try {
+      // Use DB indexes, not CLI completion-event order, for replacement precedence.
+      return stagedDigest(matched(begin)!, appendDB.map(evidence => evidence.tool!), matched(final)!) === final.output.sha256
+    } catch { return false }
   }
   let documentDigest = ""
   try { documentDigest = createHash("sha256").update(readFileSync(join(root, input.head, "REVIEW_DOCUMENT.md"))).digest("hex") } catch {}
@@ -1224,12 +1391,12 @@ export async function checkReviewArtifacts(input: Inputs) {
     const key = JSON.stringify([tool.parentID, tool.input.staging_id, tool.input.index ?? tool.input.key ?? tool.input.comment, tool.input.field ?? tool.input.path, tool.input.part ?? 0])
     oversized.set(key, (oversized.get(key) ?? 0) + 1)
   }
-  add("append ceiling", !stagingError && lengths.every(length => length <= 6_000) && [...oversized.values()].every(count => count < 2)
+  add("append ceiling", !auditError && lengths.every(length => length <= 6_000) && [...oversized.values()].every(count => count < 2)
     && allTools.filter(tool => tool.parentID === parentID && tool.name === "corvus_review_persist" && tool.input.op === "append")
       .every(tool => storedToolEvidence(tool, stored, parentID).kind === "matched"),
-  5, stagingError || `${appends.length} appends; maximum ${Math.max(0, ...lengths)} chars; no repeated chunk-too-large for one part`)
+  5, auditError || `${appends.length} appends; maximum ${Math.max(0, ...lengths)} chars; no repeated chunk-too-large for one part`)
   rows.push(inputRow)
-  rows.push(checkModelStateWrites(allTools, input.fixture))
+  rows.push(checkModelStateWrites(allTools, input.fixture, auditError))
   /** Inventories are read from persisted input and child DB results after shutdown;
    * any .corvus file/patch or unfiltered child call fails closed. Missing input
    * inherits its disclosure row; LOCAL skips PR reads, not scope filtering. */
@@ -1247,12 +1414,7 @@ export async function checkReviewArtifacts(input: Inputs) {
   rows.push(!childError && childInventoryOK && !inputWrite ? { ...inputRow, check: "review inventories" }
     : { check: "review inventories", ok: !childError && inventoryOK, code: 5,
       detail: "gatherer/detector inventories and diffs exclude .corvus/**; only R0 uses the unfiltered layout inventory" })
-  const parentShell = tools.filter(tool => tool.name === "bash")
-  const allowedShell = new Set(["gh auth status", `gh pr checkout ${input.pr} --repo ${input.owner}/${input.repo} --detach`,
-    "git rev-parse HEAD", "date -u +%Y-%m-%dT%H:%M:%SZ", `shasum -a 256 ${reviewRoot(input)}/post-request.json`])
-  const forbiddenGh = parentShell.filter(tool => !allowedShell.has(text(tool.input.command)))
-  add("orchestrator GitHub reads", forbiddenGh.length === 0, 5,
-    forbiddenGh.length ? forbiddenGh.map(tool => text(tool.input.command)).join("; ") : "zero orchestrator gh reads; only checkout/auth diagnostics permitted")
+  rows.push(checkOrchestratorShell([...tools, ...stored, ...descendants.filter(child => ["corvus-review", "corvus-review-auto"].includes(child.agent)).flatMap(child => child.tools)], input, auditError))
   rows.push(documentRow)
   let metadata: RecordValue = {}
   try { if (validIdentity) metadata = yaml(join(root, input.head, "meta.yaml")) } catch { /* Scored by metadata provenance below. */ }
@@ -1278,7 +1440,7 @@ export async function checkReviewArtifacts(input: Inputs) {
     consistent: !checkpointFailed, diagnostic: diagnostic(failureAttempt ?? failedCheckpointCalls.at(-1)), contradiction: failureContradiction,
     detail: "not applicable; checkpoint failure never forbids delivery" })
   rows.push(checkpointFailed ? aggregateRow("checkpoint-failed route", [failureRoute, documentRow, inputRow, metaRow], "checkpoint failure disclosed; posting permitted") : failureRoute)
-  const sync = checkSync(input, events, tools, allTools, parentID, root, acquired, released, metadata, metaRow, notExposed)
+  const sync = checkSync(input, events, tools, allTools, parentID, root, acquired, released, metadata, metaRow, notExposed, auditError)
   rows.push(...sync.rows)
   rows.push(metaRow)
   let persistedVerdict: RecordValue = {}, verdictError = ""
@@ -1298,14 +1460,14 @@ export async function checkReviewArtifacts(input: Inputs) {
    * Terminal cleanup oracle: the owned release result and subsequent parent tool
    * events, read after shutdown alongside both lock files. Posted, non-post and
    * rail exits all require successful release after state/transport/dispatch work;
-   * absent files alone do not prove cleanup. Only the exact push validated by
+   * acquire/release must also match the DB; absent files alone do not prove cleanup. Only the exact push validated by
    * sync.push may follow release; other review tools/dispatches or failed cleanup
    * fail closed. No branch or host flag disables the release requirement.
    */
   const afterRelease = tools.filter(tool => released && tool.index > released.index
     && (tool.name.startsWith("corvus_review_") || ["task", "subagent"].includes(tool.name))
     && tool !== sync.validatedPush)
-  add("lock released", lockOK && Boolean(released) && afterRelease.length === 0, 5,
+  add("lock released", lockOK && Boolean(matched(acquired) && matched(released)) && afterRelease.length === 0, 5,
     `${lockDetail}; release=${released?.index ?? "missing"}; later review work=${afterRelease.map(tool => `${tool.index}:${tool.name}`).join(", ") || "none"}`)
   /**
    * Line-length oracle: the persisted review-input.json bytes, read after shutdown.
@@ -1344,7 +1506,8 @@ export async function checkReviewArtifacts(input: Inputs) {
         const begin = stateCalls.findLast(tool => tool.input.op === "begin" && tool.input.target === "candidate"
           && tool.output.staging_id === candidateWrite!.input.staging_id && tool.index < candidateWrite!.index)!
         candidateValue = stagedCandidate(begin, stateCalls.filter(tool => tool.input.op === "append"
-          && tool.input.staging_id === candidateWrite!.input.staging_id && tool.index > begin.index && tool.index < candidateWrite!.index), candidateWrite)
+          && tool.input.staging_id === candidateWrite!.input.staging_id && tool.index > begin.index && tool.index < candidateWrite!.index)
+          .filter(succeeded).map(tool => matched(tool)!).sort((a, b) => a.index - b.index), candidateWrite)
       }
       candidateMeasurement = measure(candidateValue)
       if ("reason" in candidateMeasurement || candidateValue.commit_id !== input.head) throw new Error("invalid candidate schema/identity")
@@ -1399,7 +1562,10 @@ export async function checkReviewArtifacts(input: Inputs) {
       const measuredDB = matchedStoredTool(measured, stored, parentID), releasedDB = matchedStoredTool(released, stored, parentID)
       const forbidden = [...allTools, ...stored].filter(tool => writer(tool) || tool.name === "corvus_review_post")
       const terminal = finalAssistantMessage(events, parentID), summary = terminal.text.replace(/[`*]/g, "")
-      const writerNote = summary.split(/[.!?\n]+/).some(sentence => /\b(?:pr-comment-writer|writer)\b/i.test(sentence) && /\bnot[- ]exposed\b/i.test(sentence))
+      // R4/R5 mandate the classification, not passive-voice prose. Keep absence
+      // distinct from denial; an active-voice claim must name the writer object.
+      const writerNote = summary.split(/[.!?\n]+/).some(sentence => /\b(?:pr-comment-writer|writer)\b/i.test(sentence)
+        && (/\bnot[- ]exposed\b/i.test(sentence) || /\bdoes not expose (?:the (?:required |authorized )?)?(?:pr-comment-writer|writer)\b/i.test(sentence)))
       const checks: Array<[string, boolean]> = [
         ["DB-matched R4 decision", Boolean(actionDB?.output.ok === true && reportedPathMatches(input.fixture, actionDB.output.path, root, join(input.head, "review-action.yaml"))
           && isDeepStrictEqual(actionDB.input.meta, reviewAction))],
@@ -1510,14 +1676,14 @@ export async function checkReviewArtifacts(input: Inputs) {
   if (local) {
     const writerCalls = allTools.filter(writer)
     const writerChildren = descendants.filter(child => child.agent === "pr-comment-writer")
-    add("LOCAL no writer", writerCalls.length === 0 && writerChildren.length === 0, 6,
-      `${writerCalls.length} writer dispatch attempts; ${writerChildren.length} writer child sessions`)
+    add("LOCAL no writer", !auditError && writerCalls.length === 0 && writerChildren.length === 0, 6,
+      auditError || `${writerCalls.length} writer dispatch attempts; ${writerChildren.length} writer child sessions`)
     const forbidden = allTools.filter(tool => tool.name === "corvus_review_post"
       || tool.name === "corvus_review_persist" && tool.input.op === "write_candidate"
       || tool.name === "corvus_review_persist" && (tool.input.target === "candidate" || /^candidate:/.test(text(tool.input.staging_id)))
       || tool.name === "corvus_review_payload" && ["measure", "freeze", "preview"].includes(text(tool.input.op)))
-    add("LOCAL no posting tools", forbidden.length === 0, 6,
-      forbidden.length ? forbidden.map(tool => `${tool.parentID}:${tool.index} ${tool.name}:${text(tool.input.op)}`).join("; ") : "zero post, write_candidate, measure or freeze attempts")
+    add("LOCAL no posting tools", !auditError && forbidden.length === 0, 6,
+      forbidden.length ? forbidden.map(tool => `${tool.parentID}:${tool.index} ${tool.name}:${text(tool.input.op)}`).join("; ") : auditError || "zero post, write_candidate, measure or freeze attempts")
     const terminal = finalAssistantMessage(events, parentID)
     const summary = terminal.text.replace(/[`*]/g, "")
     const counts = record(persistedVerdict.counts)
@@ -1574,9 +1740,9 @@ export async function checkReviewArtifacts(input: Inputs) {
       `metadata=${revalidated?.index ?? "missing"}, baseline=${baseline?.index ?? "missing"}, reconciliation=${reconciled.map(tool => tool?.index ?? "unused/missing").join(",")}, writer dispatches=${attempts.length}`)
   } else {
   const rejectedWriter = attempts.find(tool => frozen && tool.index > frozen.index && tool.state.status === "error"
-    && denied(text(tool.state.error)))
+    && denied(diagnostic(tool) ?? ""))
   add("writer denied", (notExposed ? notExposedOK : Boolean(rejectedWriter)) && !successfulWriter, successfulWriter ? 6 : 5,
-    successfulWriter ? "posting barrier breach: writer executed" : notExposed ? notExposedDetail : rejectedWriter ? text(rejectedWriter.state.error)
+    successfulWriter ? "posting barrier breach: writer executed" : notExposed ? notExposedDetail : rejectedWriter ? diagnostic(rejectedWriter) ?? ""
       : attempts.length ? "writer dispatch lacks ordered denial evidence" : "stopped before writer dispatch")
   }
 
@@ -1585,22 +1751,22 @@ export async function checkReviewArtifacts(input: Inputs) {
   /** Denials remain hard except for the exact bookkeeping failure whose diagnostic
    * the terminal assistant discloses. Read trace+log after shutdown; no trace-only
    * exemption, and candidate/lock/mutation denials never gain a bypass. */
-  const disclosedDenials = tools.filter(tool => denied(text(tool.state.error))
+  const disclosedDenials = allTools.filter(tool => denied(diagnostic(tool) ?? "") && tool.parentID === parentID
     && (tool.name === "corvus_review_verdict" || tool.name === "corvus_review_sync"
       || tool.name === "corvus_review_persist" && (tool.input.op === "write_meta"
         || ["document", "input"].includes(text(targetOf(tool))) || ["write_document", "write_input", "write_facts"].includes(text(tool.input.op))))
     && [tool.name, text(tool.input.op), tool.input.op === "write_meta" ? text(tool.input.name) || "meta.yaml"
       : tool.name === "corvus_review_verdict" ? "verdict" : text(targetOf(tool))].some(op => disclosure(summary, op, diagnostic(tool))))
   const denialLines = lines(log).filter(line => {
-    if (disclosedDenials.some(tool => normalizeNote(line).includes(normalizeNote(text(tool.state.error))))) return false
+    if (disclosedDenials.some(tool => normalizeNote(line).includes(normalizeNote(diagnostic(tool) ?? "")))) return false
     if (denied(line)) return !/pr-comment-writer/.test(line)
     return /action\.action=["']?deny|effect["':= ]+deny/.test(line)
-      && /\b(edit|write|read|external_directory|bash)\b/.test(line)
+      && /\b(edit|write|patch|apply_patch|read|external_directory|bash|shell)\b/.test(line)
       && /\.corvus\/(?:tasks\/[^/]+\/)?reviews|node_modules\/corvus-ai\/skill\//.test(line)
   })
-  const toolDenials = tools.filter(tool => denied(text(tool.state.error)) && !writer(tool) && !disclosedDenials.includes(tool)).map(tool => `${tool.name}: ${text(tool.state.error)}`)
-  add("unexpected denials", denialLines.length + toolDenials.length === 0, 5,
-    [...denialLines, ...toolDenials].join("\n") || "none")
+  const toolDenials = allTools.filter(tool => denied(diagnostic(tool) ?? "") && !writer(tool) && !disclosedDenials.includes(tool)).map(tool => `${tool.name}: ${diagnostic(tool)}`)
+  add("unexpected denials", !auditError && denialLines.length + toolDenials.length === 0, 5,
+    [...denialLines, ...toolDenials].join("\n") || auditError || "none")
   const steps = events.filter(event => event.type === "step_finish").map(event => record(event.part))
   const tokens: Record<string, number> = {}
   const accumulate = (value: RecordValue, prefix = "") => {
@@ -1637,13 +1803,14 @@ export function printSmokeResult(rows: Row[], exitCode: number) {
 if (import.meta.main) {
   const [fixture, owner, repo, pr, head, jsonl, hostlog, audit] = process.argv.slice(2)
   if (!audit) {
-    console.error("Usage: check-review-artifacts.ts <fixture> <owner> <repo> <pr> <code_head> <jsonl> <hostlog> <gh-audit> --db PATH --bare PATH --branch NAME [--host v1|v2] [--agents PATH] [--install PATH] [--writer] [--intake url|branch|local] [--cross-repo true|false]")
+    console.error("Usage: check-review-artifacts.ts <fixture> <owner> <repo> <pr> <code_head> <jsonl> <hostlog> <gh-audit> --db PATH --bare PATH --branch NAME [--host v1|v2] [--agents PATH] [--install PATH] [--plugin-state PATH (required for v2)] [--writer] [--intake url|branch|local] [--cross-repo true|false]")
     printSmokeResult([{ check: "arguments", ok: false, code: 3, detail: "missing required arguments" }], 3)
     process.exit(3)
   }
   try {
     const { values } = parseArgs({ args: process.argv.slice(10), options: {
       host: { type: "string", default: "v2" }, agents: { type: "string" }, install: { type: "string" },
+      "plugin-state": { type: "string" },
       writer: { type: "boolean", default: false }, db: { type: "string" },
       intake: { type: "string", default: "url" }, branch: { type: "string" }, bare: { type: "string" },
       "cross-repo": { type: "string", default: "false" },
@@ -1654,7 +1821,7 @@ if (import.meta.main) {
     if (!["true", "false"].includes(values["cross-repo"])) throw new Error("--cross-repo must be true or false")
     if (values.intake === "local" && values["cross-repo"] === "true") throw new Error("LOCAL intake cannot be cross-repository")
     const result = await checkReviewArtifacts({ fixture, owner, repo, pr, head, jsonl, hostlog, audit,
-      host: values.host, agents: values.agents, install: values.install, writer: values.writer, db: values.db,
+      host: values.host, agents: values.agents, install: values.install, pluginState: values["plugin-state"], writer: values.writer, db: values.db,
       intake: values.intake as Inputs["intake"], branch: values.branch, bare: values.bare, crossRepo: values["cross-repo"] === "true" })
     console.log("| Check | Result | Evidence |\n|---|---|---|")
     for (const row of result.rows) console.log(`| ${row.check} | ${row.ok ? "PASS" : "FAIL"} | ${row.detail.replaceAll("|", "\\|").replaceAll("\n", " <br> ")} |`)

@@ -11,6 +11,9 @@ set -euo pipefail
 umask 077
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+source "$ROOT/scripts/host.sh"
+HOST="v1"
+OPENCODE_BIN=""
 MODEL="amazon-bedrock/global.openai.gpt-6-astra"
 KEEP=0
 HEAD_MOVED=0
@@ -22,12 +25,16 @@ HEAD_SHA="$(printf 'a%.0s' $(seq 1 40))"
 
 die() { printf '| preflight | FAIL | %s |\n' "$2" >&2; exit "$1"; }
 cap() { local seconds="$1"; shift; perl -e 'alarm shift; exec @ARGV' "$seconds" "$@"; }
-usage() { printf '%s\n' 'Usage: bash scripts/smoke-writer.sh [--model ID] [--keep] [--head-moved] [--timeout-min N=10]'; }
+usage() {
+  printf '%s\n' 'Usage: bash scripts/smoke-writer.sh [--host v1] [--model ID] [--keep] [--head-moved] [--timeout-min N=10]'
+  printf '%s\n' '  --host  defaults to v1; v2 is version-probed, then refused (writer remains v1-only)'
+  smoke_host_help
+}
 while (($#)); do
   case "$1" in
-    --model|--timeout-min)
+    --host|--opencode-bin|--model|--timeout-min)
       [[ $# -ge 2 && -n "$2" ]] || die 3 "missing value for $1"
-      case "$1" in --model) MODEL="$2" ;; --timeout-min) TIMEOUT_MIN="$2" ;; esac
+      case "$1" in --host) HOST="$2" ;; --opencode-bin) OPENCODE_BIN="$2" ;; --model) MODEL="$2" ;; --timeout-min) TIMEOUT_MIN="$2" ;; esac
       shift 2 ;;
     --keep) KEEP=1; shift ;;
     --head-moved) HEAD_MOVED=1; shift ;;
@@ -36,7 +43,7 @@ while (($#)); do
   esac
 done
 [[ "$TIMEOUT_MIN" =~ ^[1-9][0-9]*$ && ${#TIMEOUT_MIN} -le 4 ]] || die 3 'timeout must be a positive integer (minutes, at most four digits)'
-for executable in opencode bun npm perl; do
+for executable in bun npm perl; do
   command -v "$executable" >/dev/null || die 3 "missing executable: $executable"
 done
 # The shim never forwards in canned mode; a real gh is still required by its contract.
@@ -45,6 +52,7 @@ export CORVUS_SMOKE_REAL_GH="$(command -v gh || printf '%s' /usr/bin/false)"
 cleanup() {
   local status=$?
   trap - EXIT INT TERM
+  smoke_live_assert || status=3
   printf 'Writer smoke exit: %s; total duration: %ss\n' "$status" "$((SECONDS - START))"
   if [[ -n "$WORK" ]]; then
     if ((status != 0 || KEEP)); then
@@ -57,10 +65,8 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-BASE="${TMPDIR:-/tmp}/opencode"
-mkdir -p "$BASE"
-WORK="$(mktemp -d "$BASE/smoke-writer.XXXXXX")"
-WORK="$(cd "$WORK" && pwd -P)"
+smoke_host_prepare "$HOST" "$OPENCODE_BIN" || die 3 'host selection/version probe failed'
+[[ "$HOST" == v1 ]] || die 3 'smoke-writer supports only v1; no service/model started'
 export SMOKE_WORK="$WORK" SMOKE_ROOT="$ROOT" SMOKE_MODEL="$MODEL"
 mkdir -p "$WORK"/xdg/{data/opencode,config/opencode,state,cache} "$WORK"/{bin,install,pack,dist,home,canned,fixture}
 printf 'Sandbox: %s\nModel: %s; fixture PR: %s/%s#%s @ %s; cap: %sm; mode: %s\n' "$WORK" "$MODEL" "$OWNER" "$REPO" "$NUMBER" "$HEAD_SHA" "$TIMEOUT_MIN" "$([[ $HEAD_MOVED == 1 ]] && printf head-moved || printf blocked-post)"
@@ -161,7 +167,7 @@ export PATH="$WORK/bin:$PATH"
 cd "$WORK/fixture"
 export PWD="$WORK/fixture"
 
-cap 60 opencode debug agent pr-comment-writer >"$WORK/agents.json" 2>"$WORK/agents.stderr" || die 3 'host agent inspection failed'
+cap 60 "$CLI" debug agent pr-comment-writer >"$WORK/agents.json" 2>"$WORK/agents.stderr" || die 3 'host agent inspection failed'
 # Exposure invariant: the host-resolved writer must expose corvus_review_pr and
 # corvus_review_post before model launch. Missing tools abort; no flag relaxes this.
 bun -e '
@@ -176,7 +182,7 @@ bun -e '
 
 RUN_START=$SECONDS
 RUN_STATUS=0
-cap "$((TIMEOUT_MIN * 60))" opencode run --dir "$WORK/fixture" --agent writer-relay --model "$MODEL" --format json "$(cat "$WORK/descriptor.json")" >"$WORK/run.jsonl" 2>"$WORK/run.stderr" || RUN_STATUS=$?
+cap "$((TIMEOUT_MIN * 60))" "$CLI" run --dir "$WORK/fixture" --agent writer-relay --model "$MODEL" --format json "$(cat "$WORK/descriptor.json")" >"$WORK/run.jsonl" 2>"$WORK/run.stderr" || RUN_STATUS=$?
 printf 'Writer host exit: %s; duration: %ss\n' "$RUN_STATUS" "$((SECONDS - RUN_START))"
 sleep 2
 CHECK_STATUS=0
