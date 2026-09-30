@@ -72,6 +72,13 @@ describe("registerSkills", () => {
       expect(isAbsolute(String(skill.path))).toBe(true)
       expect(String(skill.path).endsWith(`/${id}/SKILL.md`)).toBe(true)
 
+      // `path` is the SAME absolute path under the key OpenCode >= 2.0.4 requires
+      // (`@opencode/schema` renamed `location` -> `path` in `Skill.Info`). Both
+      // keys must be present: the host's `Schema.Struct` ignores the one it does
+      // not declare, and dropping either disables the plugin on that side.
+      const record = skill as unknown as Record<string, unknown>
+      expect({ id, path: record.path }).toEqual({ id, path: location })
+
       // `name` comes from frontmatter, which equals the directory name in all 18.
       expect({ id, name: String(skill.name) }).toEqual({ id, name: id })
       expect({ id, described: typeof skill.description === "string" && skill.description !== "" }).toEqual({

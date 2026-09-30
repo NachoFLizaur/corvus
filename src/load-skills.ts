@@ -10,17 +10,28 @@ interface SkillFrontmatter {
 /**
  * One packaged skill, shaped for the OpenCode v2 `SkillEditor.add` contract.
  *
- * `id` is the containing directory's basename, `name` falls back to `id`,
- * `description` is OMITTED rather than set to `undefined` when the frontmatter
- * has none, `location` and `path` are the same absolute path to `SKILL.md`, and
- * `content` is the body verbatim.
+ * Field-for-field the host's own derivation for a `<dir>/SKILL.md` file
+ * (`core/src/config/plugin/skill-file.ts:41-57`): `id` is the containing
+ * directory's basename, `name` falls back to `id`, `description` is OMITTED
+ * rather than set to `undefined` when the frontmatter has none, `location` and
+ * `path` are both the absolute path to `SKILL.md`, and `content` is the body
+ * verbatim.
  *
- * Dual-key compatibility design: PR #12 by @clopca / issue #10. Retain the
- * legacy `location` alongside stable `path` without probing the host version.
- * Stable 2.0.20 `@opencode/schema/dist/skill.js` requires `path`; its Struct
- * decoder ignores the extra `location`. Emitting both also retains the file key
- * consumed by older hosts. The registrar checks the stable record structure;
- * schema regression coverage rejects the old location-only shape.
+ * WHY TWO KEYS FOR ONE VALUE. `@opencode/schema` renamed the file key of
+ * `Skill.Info` from `location` to `path` in OpenCode 2.0.4 (compare
+ * `@opencode/schema@2.0.3` and `@2.0.4` `dist/skill.js`). The host decodes what
+ * `draft.add` receives with that schema, and a missing required key is a
+ * `SchemaError` that DISABLES the whole plugin at startup ("Missing key at
+ * [\"path\"]" on >= 2.0.4; "Missing key at [\"location\"]" on <= 2.0.3), taking
+ * every agent, command, and the `subagent` tool with it. `Schema.Struct`
+ * ignores keys it does not declare, so a record carrying both decodes on every
+ * OpenCode 2 release: <= 2.0.3 keeps `location` and drops `path`, >= 2.0.4 the
+ * reverse. Emitting both is therefore the ONLY shape that needs no host-version
+ * probe (the plugin API exposes none for the schema) and cannot regress either
+ * side. Drop `location` only once <= 2.0.3 is out of support. (Dual-key design:
+ * PR #12 by @clopca / issue #10; the registrar types the record against the
+ * stable 2.0.20 `Skill.Info`, and schema regression coverage rejects the old
+ * location-only shape.)
  *
  * `slash` and `autoinvoke` are deliberately absent. The host derives them from a
  * `slash` key or an `opencode/slash` / `opencode/autoinvoke` metadata entry
@@ -31,7 +42,9 @@ export interface SkillRecord {
   readonly id: string
   readonly name: string
   readonly description?: string
+  /** Absolute path to `SKILL.md`; the key OpenCode <= 2.0.3 requires. */
   readonly location: string
+  /** The same absolute path; the key OpenCode >= 2.0.4 requires. */
   readonly path: string
   readonly content: string
 }
