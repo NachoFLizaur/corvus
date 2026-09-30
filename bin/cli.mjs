@@ -144,9 +144,9 @@ ${BOLD}Options:${RESET}
                  $XDG_CONFIG_HOME/opencode/opencode.json (default ~/.config/opencode).
                  Offered automatically when only an "opencode2" binary is on your PATH.
                  Pass --v2 explicitly: binary names do not establish host versions.
-                 Hosts >=2.0.4 need the next release's fix, not published 0.10.0
+                 Hosts >=2.0.4 need corvus-ai 0.10.1 or later
                  (boundary per PR #12's decode across published @opencode/schema 2.0.x).
-                 This branch is locally verified on OpenCode 2.0.20;
+                 Verified on OpenCode 2.0.20;
                  see README "OpenCode v2" for release availability.
   ${BOLD}--global${RESET}       Target ~/.config/opencode/opencode.json instead of local
                  (implied by --v2, which always targets the global v2 config)

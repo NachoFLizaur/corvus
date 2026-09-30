@@ -118,15 +118,15 @@ These instructions target OpenCode v1's config layout. On OpenCode v2, use the p
 
 Corvus ships one package with two entry points: `dist/index.js` remains the legacy OpenCode v1 function entry, while `dist/server.js` serves both OpenCode 1.18.30+ and OpenCode v2 through the `corvus-ai/server` subpath. The shared entry exports `{ id, server, setup }`: v1 invokes the legacy hook function through `server`, and v2 invokes `setup`. Both register the same 16 agents, 4 commands, 18 skills, and the default `web-research` MCP server.
 
-**Release availability:** published Corvus 0.10.0 loads on OpenCode v2 ≤2.0.3, but its missing skill `path` causes the host to disable it on v2 ≥2.0.4 (boundary per [PR #12](https://github.com/NachoFLizaur/corvus/pull/12)'s schema decode across published `@opencode/schema` 2.0.x). Those newer hosts require the next release containing the [Unreleased fixes](CHANGELOG.md#unreleased). The repaired working tree has been verified on OpenCode **2.0.20** and **1.18.33**; see [Release Gates](#release-gates) for the checks and remaining limitations. Until that release is published, use the local-development gates below to verify the repair rather than treating an npm install as evidence for it.
+**Release availability:** Corvus 0.10.0 loads on OpenCode v2 ≤2.0.3, but its missing skill `path` causes the host to disable it on v2 ≥2.0.4 (boundary per [PR #12](https://github.com/NachoFLizaur/corvus/pull/12)'s schema decode across published `@opencode/schema` 2.0.x). Use **0.10.1 or later** on those hosts; see the [0.10.1 changelog](CHANGELOG.md#0101--2026-09-30). 0.10.1 has been verified on OpenCode **2.0.20** and **1.18.33**; see [Release Gates](#release-gates) for the checks and remaining limitations.
 
-Install with the CLI once a compatible release is available. Pass `--v2` explicitly: installer autodetection checks binary names, not versions, so a stable v2 executable named `opencode` is not recognized as v2. The CLI writes the plural `plugins` key into the existing `opencode.jsonc` or `opencode.json` under `$XDG_CONFIG_HOME/opencode` (default `~/.config/opencode`), creating `opencode.json` if neither exists:
+Install with the CLI. Pass `--v2` explicitly: installer autodetection checks binary names, not versions, so a stable v2 executable named `opencode` is not recognized as v2. The CLI writes the plural `plugins` key into the existing `opencode.jsonc` or `opencode.json` under `$XDG_CONFIG_HOME/opencode` (default `~/.config/opencode`), creating `opencode.json` if neither exists:
 
 ```bash
-npx corvus-ai --v2
+npx corvus-ai@latest --v2
 ```
 
-No beta tag is needed: as of 2026-09-30, `latest` and `beta` both point to 0.10.0, whose installer already accepts `--v2`. The CLI pins the config entry to its own package version; the command above does not bypass the release-availability caveat.
+No beta tag is needed. The CLI pins the config entry to its own package version, so check that the written entry is 0.10.1 or later before using a v2 host ≥2.0.4.
 
 Or add the entry by hand:
 
@@ -578,7 +578,7 @@ bash scripts/smoke-v2.sh --tarball --host v2 --opencode-bin "$CORVUS_SMOKE_OPENC
 bash scripts/smoke-v2.sh --negative-control --host v2 --opencode-bin "$CORVUS_SMOKE_OPENCODE_V2"
 ```
 
-- Default mode boots the real v2 host with the local-directory plugin. `--full` also asserts all 16 agents, 4 commands, 18 skills with absolute `path`s, and the default MCP server. Skill records retain both `location` and `path`; see [Unreleased](CHANGELOG.md#unreleased) for contributor credit.
+- Default mode boots the real v2 host with the local-directory plugin. `--full` also asserts all 16 agents, 4 commands, 18 skills with absolute `path`s, and the default MCP server. Skill records retain both `location` and `path`; see [0.10.1](CHANGELOG.md#0101--2026-09-30) for contributor credit.
 - `--refs` checks host-registered permission maps through the local matcher and probes all seven review tools through built bundles and fake host contexts; `--full` includes these probes. Their `fake/local probe` labels distinguish them from real-host registration assertions and model execution.
 - `--tarball` packs and installs the working tree for npm-specifier resolution emulation; it does not boot a host, and `--full` / `--refs` are inert in that mode. `--registry <spec>` is a post-publish real-host check only, never evidence for unpublished local changes.
 - `--negative-control` strips skill `path` in a temporary copy. Expect exit 1 at the named plugin-state assertion, not a passing gate; the repaired source remains untouched.
