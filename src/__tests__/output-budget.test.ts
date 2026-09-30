@@ -1,11 +1,26 @@
 import type { Hooks, PluginInput } from "@opencode-ai/plugin"
 import { describe, expect, test } from "bun:test"
 import plugin from "../index"
-import { resolveOutputBudget } from "../output-budget"
+import { hostOmitsOutputLimit, resolveOutputBudget } from "../output-budget"
 import { registerHooks } from "../v2/register-hooks"
 import { createFakeContext, FAKE_DIRECTORY } from "./fake-context"
 
 type ChatParamsHook = NonNullable<Hooks["chat.params"]>
+
+describe("hostOmitsOutputLimit", () => {
+  test.each([
+    ["openai", "gpt-5", true],
+    ["openai", "o3", true],
+    ["github-copilot", "gpt-5", true],
+    ["github-copilot-enterprise", "gpt-5", true],
+    ["github-copilot", "claude-sonnet-4", false],
+    ["amazon-bedrock", "claude-sonnet-4", false],
+    ["anthropic", "claude-sonnet-4", false],
+    ["custom-openai", "gpt-5", false],
+  ] as const)("%s / %s → %s", (providerID, modelID, expected) => {
+    expect(hostOmitsOutputLimit({ providerID, modelID })).toBe(expected)
+  })
+})
 
 describe("resolveOutputBudget", () => {
   test.each([
@@ -21,13 +36,19 @@ describe("resolveOutputBudget", () => {
 
 describe("v1 chat.params output budget", () => {
   test.each([
-    ["preserves a seeded Corvus budget", "corvus-review-auto", 64_000, 64_000],
-    ["defaults an unset Corvus budget", "corvus-review-auto", undefined, 32_000],
-    ["leaves a non-Corvus agent untouched", "custom-agent", undefined, undefined],
-  ] as const)("%s", async (_name, agent, current, expected) => {
+    ["preserves a seeded Corvus budget", "corvus-review-auto", "fake", "fake-model", 64_000, 64_000],
+    ["defaults an unset Corvus budget", "corvus-review-auto", "fake", "fake-model", undefined, 32_000],
+    ["leaves a non-Corvus agent untouched", "custom-agent", "fake", "fake-model", undefined, undefined],
+    ["preserves OpenAI's omitted budget", "corvus-review-auto", "openai", "gpt-5", undefined, undefined],
+    ["preserves Copilot GPT's omitted budget", "corvus-review-auto", "github-copilot", "gpt-5", undefined, undefined],
+    ["defaults an unset Copilot Claude budget", "corvus-review-auto", "github-copilot", "claude-sonnet-4", undefined, 32_000],
+  ] as const)("%s", async (_name, agent, providerID, modelID, current, expected) => {
     const hooks = await plugin({ directory: FAKE_DIRECTORY } as PluginInput)
     const hook = hooks["chat.params"]!
-    const input = { agent, model: { limit: { output: 128_000 } } } as Parameters<ChatParamsHook>[0]
+    const input = {
+      agent,
+      model: { providerID, api: { id: modelID }, limit: { output: 128_000 } },
+    } as Parameters<ChatParamsHook>[0]
     const output: Parameters<ChatParamsHook>[1] = {
       temperature: 0.5,
       topP: 0.9,
@@ -44,6 +65,24 @@ describe("v1 chat.params output budget", () => {
 })
 
 describe("v2 session context output budget", () => {
+  test.each([
+    ["openai", "gpt-5", {}],
+    ["github-copilot", "gpt-5", {}],
+    ["github-copilot", "claude-sonnet-4", { maxTokens: 32_000 }],
+  ] as const)("respects host output-limit policy for %s / %s", async (providerID, id, expected) => {
+    const fake = createFakeContext()
+    const input = { agent: "corvus-review-auto", model: { providerID, id }, options: {} }
+    const before = await fake.context(input)
+    const cleanup = await registerHooks(fake.ctx)
+
+    try {
+      const context = await fake.context(input)
+      expect(context).toEqual({ ...before, options: expected })
+    } finally {
+      await cleanup?.()
+    }
+  })
+
   test.each([
     ["defaults unset Corvus options.maxTokens", "corvus-review-auto", undefined, { maxTokens: 32_000 }],
     ["preserves a higher seeded Corvus budget", "corvus-review-auto", 64_000, { maxTokens: 64_000 }],

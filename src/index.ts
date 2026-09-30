@@ -5,7 +5,7 @@ import { z } from "zod"
 import { agentDir, commandDir, skillDir } from "./paths"
 import { loadAgents } from "./load-agents"
 import { loadCommands } from "./load-commands"
-import { resolveOutputBudget } from "./output-budget"
+import { hostOmitsOutputLimit, resolveOutputBudget } from "./output-budget"
 import { createReviewToolExecutors } from "./review-payload"
 import { createPostExecutor } from "./review-post"
 import { createPersistExecutor } from "./review-persist"
@@ -115,9 +115,11 @@ const plugin: Plugin = async (input) => {
      * Read the hook-visible budget before mutation; non-Corvus agents and defined
      * values bypass this default. v1 normally seeds the value, so this is a no-op;
      * only an unset value uses resolveOutputBudget's limit/fallback rule.
+     * Check host model IDs before mutation so host-omitted limits stay unset.
      */
     "chat.params": async (input, output) => {
       if (!corvusAgents.has(input.agent) || output.maxOutputTokens !== undefined) return
+      if (hostOmitsOutputLimit({ providerID: input.model.providerID, modelID: input.model.api.id })) return
       const budget = resolveOutputBudget({ current: output.maxOutputTokens, modelLimit: input.model.limit.output })
       if (budget !== undefined) output.maxOutputTokens = budget
     },

@@ -203,6 +203,7 @@ export interface EvaluationInput {
 /** Input for driving `session.hook("context")`. Strings become text parts. */
 export interface ContextInput {
   readonly agent: string
+  readonly model?: { readonly providerID: string; readonly id: string }
   readonly system?: readonly string[]
   readonly options?: SessionContextInput["options"]
 }
@@ -430,8 +431,8 @@ export function createFakeContext(directory = FAKE_DIRECTORY): FakeContext {
         sessionID: "ses_fake" as SessionContextInput["sessionID"],
         agent: input.agent as SessionContextInput["agent"],
         model: {
-          providerID: "fake" as SessionContextInput["model"]["providerID"],
-          id: "fake-model" as SessionContextInput["model"]["id"],
+          providerID: (input.model?.providerID ?? "fake") as SessionContextInput["model"]["providerID"],
+          id: (input.model?.id ?? "fake-model") as SessionContextInput["model"]["id"],
         },
         system: (input.system ?? []).map((text) => ({ type: "text", text })),
         messages: [],

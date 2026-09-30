@@ -1,5 +1,5 @@
 import { loadAgents } from "../load-agents"
-import { resolveOutputBudget } from "../output-budget"
+import { hostOmitsOutputLimit, resolveOutputBudget } from "../output-budget"
 import { agentDir } from "../paths"
 import type { Registrar } from "./types"
 
@@ -14,11 +14,13 @@ import type { Registrar } from "./types"
  * replaced and a smaller model ceiling cannot be enforced here. Corpus-read or
  * hook-registration failure aborts setup; disposal removes the hook. Repeated
  * invocation preserves the first assigned value; there is no runtime toggle.
+ * Check host model IDs before mutation so host-omitted limits stay unset.
  */
 export const registerHooks: Registrar = async (ctx) => {
   const corvusAgents = new Set(Object.keys(loadAgents(agentDir)))
   const registration = await ctx.session.hook("context", (context) => {
     if (!corvusAgents.has(context.agent)) return
+    if (hostOmitsOutputLimit({ providerID: context.model.providerID, modelID: context.model.id })) return
     const budget = resolveOutputBudget({ current: context.options.maxTokens })
     if (budget !== undefined) context.options.maxTokens = budget
   })
