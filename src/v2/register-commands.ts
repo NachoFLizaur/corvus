@@ -63,8 +63,8 @@ import type { Registrar, SetupContext } from "./types"
  * the plan specified backing `runShell` with `ctx.shell`. It cannot be done.
  * `ShellDomain` is `{ hook: Hooks<ShellHooks> }` — a `create.before` INTERCEPTOR
  * for shells the host is already spawning, with no command runner
- * (`plugin-v2/dist/promise/shell.d.ts:9-14`); the same is true in the reference
- * checkout, and no other domain on `Plugin.Context` exposes one. The host's own
+ * (`@opencode/plugin@2.0.20`, `dist/promise/shell.d.ts:9-14`); the same is true
+ * in the reference checkout, and no other domain on `Plugin.Context` exposes one. The host's own
  * adapter reaches for `AppProcess`/`ShellSelect`, which are core-internal
  * services a plugin cannot obtain. So corvus spawns the shell itself through
  * `node:child_process`, which also keeps `dist/server.js` free of runtime

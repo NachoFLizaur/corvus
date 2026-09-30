@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test"
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { checkPluginLoaded } from "../../scripts/check-review-artifacts"
@@ -8,6 +8,66 @@ import { push, resolve as resolveSync } from "../review-sync"
 
 const directories: string[] = []
 afterEach(() => { for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true }) })
+
+test("v2 preflight re-reads lazy agent registration after scoped plugin initialization", () => {
+  const directory = mkdtempSync(join(tmpdir(), "corvus-lazy-agents-"))
+  directories.push(directory)
+  const harness = readFileSync(resolve(import.meta.dirname, "../../scripts/smoke-review.sh"), "utf8")
+  const helpers = harness.slice(harness.indexOf("die()"), harness.indexOf("usage()"))
+  expect(harness.indexOf('smoke_v2_plugin_state "$WORK/fixture"')).toBeLessThan(harness.indexOf("\n  preflight_v2_agents\n"))
+  const cli = join(directory, "host")
+  writeFileSync(cli, '#!/bin/bash\nif [[ -e "$WORK/read-once" ]]; then printf \'[{"id":"corvus-review-auto"}]\\n\'; else touch "$WORK/read-once"; printf \'[{"id":"build"}]\\n\'; fi\n')
+  chmodSync(cli, 0o700)
+  const result = Bun.spawnSync(["bash", "-c", `set -euo pipefail\n${helpers}\npreflight_v2_agents`], {
+    env: { ...process.env, WORK: directory, SMOKE_WORK: directory, CLI: cli },
+  })
+  expect(result.exitCode, result.stderr.toString()).toBe(0)
+  expect(JSON.parse(readFileSync(join(directory, "agents.json"), "utf8"))).toEqual([{ id: "corvus-review-auto" }])
+})
+
+test.each(["opencode.json", "opencode.jsonc"])("live config digest detects creation of formerly absent ~/.opencode/%s", name => {
+  const directory = mkdtempSync(join(tmpdir(), "corvus-live-digest-"))
+  directories.push(directory)
+  mkdirSync(join(directory, ".opencode"))
+  const script = resolve(import.meta.dirname, "../../scripts/host.sh")
+  const digest = () => {
+    const result = Bun.spawnSync(["bash", "-c", 'source "$1"; smoke_live_digest', "bash", script], {
+      env: { ...process.env, HOME: directory, SMOKE_ORIGINAL_CONFIG: join(directory, ".config"), CLI: process.execPath },
+    })
+    expect(result.exitCode, result.stderr.toString()).toBe(0)
+    return result.stdout.toString()
+  }
+  const before = digest()
+  writeFileSync(join(directory, ".opencode", name), "{}\n")
+  expect(digest()).not.toBe(before)
+  rmSync(join(directory, ".opencode", name))
+  expect(digest()).toBe(before)
+})
+
+test.each(["installed shim", "forwarding regression", "rejection without audit"])("owned POST sentinel probe: %s", kind => {
+  const directory = mkdtempSync(join(tmpdir(), "corvus-shim-probe-"))
+  directories.push(directory)
+  const shim = join(directory, "gh"), output = join(directory, "probe"), liveAudit = join(directory, "live-audit")
+  writeFileSync(liveAudit, "live audit must stay unchanged\n")
+  writeFileSync(shim, kind === "installed shim" ? readFileSync(resolve(import.meta.dirname, "../../scripts/gh-readonly-shim.sh"))
+    : kind === "forwarding regression" ? '#!/bin/bash\nexec "$CORVUS_SMOKE_REAL_GH" "$@"\n'
+    : '#!/bin/bash\nprintf "CORVUS_SMOKE_MUTATION_BLOCKED no audit\\n" >&2\nexit 1\n')
+  const result = Bun.spawnSync(["bash", resolve(import.meta.dirname, "../../scripts/probe-gh-shim.sh"), shim, output], {
+    env: { ...process.env, CORVUS_SMOKE_GH_AUDIT: liveAudit, CORVUS_SMOKE_REAL_GH: "/must/not/execute",
+      CORVUS_SMOKE_GH_CANNED: "/must/not/use/canned" },
+  })
+  expect(result.exitCode, result.stderr.toString()).toBe(kind === "installed shim" ? 0 : 6)
+  const evidence = JSON.parse(readFileSync(join(output, "result.json"), "utf8"))
+  expect(evidence.ok).toBe(kind === "installed shim")
+  expect(evidence.forwardedBytes).toBe(kind === "forwarding regression" ? "forwarded\n".length : 0)
+  expect(readFileSync(liveAudit, "utf8")).toBe("live audit must stay unchanged\n")
+  if (kind === "installed shim") {
+    expect(evidence).toMatchObject({ exitCode: 1, rejected: true, forwardedBytes: 0 })
+    const audit = readFileSync(join(output, "audit.jsonl"), "utf8").trim().split("\n").map(line => JSON.parse(line))
+    expect(audit).toEqual([{ marker: "CORVUS_SMOKE_MUTATION_BLOCKED", argv: ["api", "--method", "POST",
+      "repos/corvus-sentinel/network-free/pulls/1/reviews", "--input", join(realpathSync(output), "sentinel.json"), "-H", "Accept: application/vnd.github+json"] }])
+  }
+})
 
 test.each([
   { intake: "url", crossRepo: false }, { intake: "branch", crossRepo: false }, { intake: "local", crossRepo: false },

@@ -33,8 +33,8 @@ const PLUGIN_ENTRY = 'corvus-ai@latest';
 
 // OpenCode v2 resolves each entry of the plural "plugins" array as its own npm
 // specifier, so the v2 entry is pinned to the version of the package running this
-// installer (`npx corvus-ai@beta --v2` pins the beta). A floating tag could resolve
-// to a release without v2 support.
+// installer (`npx corvus-ai --v2` pins that package's version). This keeps the
+// installed plugin aligned with the installer, rather than a moving dist-tag.
 const OWN_VERSION = readOwnVersion();
 const V2_PLUGIN_ENTRY = OWN_VERSION ? `corvus-ai@${OWN_VERSION}` : PLUGIN_ENTRY;
 
@@ -143,8 +143,11 @@ ${BOLD}Options:${RESET}
   ${BOLD}--v2${RESET}           Install for OpenCode v2: add corvus-ai to the "plugins" array in
                  $XDG_CONFIG_HOME/opencode/opencode.json (default ~/.config/opencode).
                  Offered automatically when only an "opencode2" binary is on your PATH.
-                 Run it as "npx corvus-ai@beta --v2" while v2 ships on the "beta"
-                 dist-tag; "latest" has no --v2 flag. Drop "@beta" once v2 is latest.
+                 Pass --v2 explicitly: binary names do not establish host versions.
+                 Hosts >=2.0.4 need the next release's fix, not published 0.10.0
+                 (boundary per PR #12's decode across published @opencode/schema 2.0.x).
+                 This branch is locally verified on OpenCode 2.0.20;
+                 see README "OpenCode v2" for release availability.
   ${BOLD}--global${RESET}       Target ~/.config/opencode/opencode.json instead of local
                  (implied by --v2, which always targets the global v2 config)
   ${BOLD}--uninstall${RESET}    Remove corvus-ai from all discovered config files and clean up cached packages
@@ -156,8 +159,8 @@ ${BOLD}Options:${RESET}
 ${BOLD}Examples:${RESET}
   npx corvus-ai                       Install plugin locally
   npx corvus-ai --global              Install plugin globally
-  npx corvus-ai@beta --v2             Install plugin for OpenCode v2
-  npx corvus-ai@beta --v2 --uninstall Remove plugin from the v2 config
+  npx corvus-ai --v2                  Install plugin for OpenCode v2
+  npx corvus-ai --v2 --uninstall      Remove plugin from the v2 config
   npx corvus-ai --migrate             Migrate from manual files to plugin
   npx corvus-ai --uninstall           Remove plugin entry
   npx corvus-ai --dry-run             Preview what would change
@@ -275,9 +278,9 @@ async function confirmDefaultYes(message) {
 
 /**
  * Decide whether to use the v2 config layout.
- * `--v2` is explicit. Without it, only an unambiguous host (opencode2 present and no
- * v1 opencode) offers v2 — when both hosts exist the v1 path stays the default so a
- * bare `npx corvus-ai` never writes to a config the user did not ask for.
+ * `--v2` is explicit. Without it, only opencode2 present and no opencode offers
+ * v2 — when both names exist the v1 layout stays the default. This is name-only
+ * detection: a stable v2 install can expose BOTH names, so use the explicit flag.
  */
 async function resolveV2Mode() {
   if (v2Flag) return true;
@@ -285,14 +288,14 @@ async function resolveV2Mode() {
 
   process.stdout.write('\n');
   if (isOnPath('opencode')) {
-    info('Detected both "opencode" (v1) and "opencode2" (v2) on your PATH.');
+    info('Detected both "opencode" and "opencode2" on your PATH (versions not probed).');
     info('Using the v1 config layout (singular "plugin" key).');
-    info('For OpenCode v2 instead, re-run with: npx corvus-ai@beta --v2');
-    info('"@beta" is required while v2 ships on the beta dist-tag ("latest" has no --v2).');
+    info('For OpenCode v2 instead, re-run with: npx corvus-ai --v2');
+    info('See README "OpenCode v2" for release availability and host compatibility.');
     return false;
   }
 
-  info('Detected "opencode2" (v2) on your PATH and no v1 "opencode" binary.');
+  info('Detected "opencode2" on your PATH and no "opencode" binary (versions not probed).');
   info(`v2 config: ${getV2TargetPath()}`);
   if (await confirmDefaultYes('Install for OpenCode v2?')) return true;
 
@@ -807,7 +810,7 @@ function printV2XdgTip() {
     `\n${DIM}  Launching v2 with a custom config dir (e.g. an "oc2" alias)? Target it with:${RESET}\n`
   );
   process.stdout.write(
-    `    ${BOLD}XDG_CONFIG_HOME="$HOME/.config/opencode2" npx corvus-ai@beta --v2${RESET}\n`
+    `    ${BOLD}XDG_CONFIG_HOME="$HOME/.config/opencode2" npx corvus-ai --v2${RESET}\n`
   );
 }
 

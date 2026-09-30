@@ -1,5 +1,5 @@
 import type { PluginModule } from "@opencode-ai/plugin"
-import type { Plugin } from "@opencode-ai/plugin-v2"
+import type { Plugin } from "@opencode/plugin"
 import { enforceProtected } from "./v2/enforce-protected"
 import { registerAgents } from "./v2/register-agents"
 import { registerCommands } from "./v2/register-commands"
@@ -40,9 +40,9 @@ const REGISTRARS: readonly Registrar[] = [
  * legacy hook function through a runtime import of the sibling `index.js`;
  * v2 `setup` does not load it. `dist/index.js` remains the root function entry.
  * SDK imports here are TYPE-ONLY. A value import (for
- * example `Plugin.define`, which is an identity function) would turn the beta
+ * example `Plugin.define`, which is an identity function) would turn the v2
  * SDK into a runtime dependency and break v1 hosts that do not ship it, so
- * `dist/server.js` must contain zero runtime `@opencode-ai` imports.
+ * `dist/server.js` must contain zero runtime `@opencode/` or `@opencode-ai/` imports.
  *
  * INVARIANT — all-or-nothing registration.
  * `setup` runs `REGISTRARS` in the fixed order declared above and collects the

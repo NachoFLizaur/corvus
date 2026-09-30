@@ -5,11 +5,13 @@ import type { Rule } from "./v2/types"
  * Pure v1 → v2 agent translation. No I/O, no draft access, no console: warnings
  * are RETURNED so the registrar (task 07) owns every side effect.
  *
- * The mapping oracle is the host's own v1 migration, `migrateAgent`
- * (`core/src/v1/config/migrate.ts:134-156`) at
- * `@opencode-ai/plugin@0.0.0-beta-19086`: `prompt → system`,
- * `temperature → request.body.temperature`, `permission → permissions[]`, with
- * `description`, `mode`, and `color` carried across unchanged.
+ * Stable target: `@opencode/plugin@2.0.20`, `dist/promise/agent.d.ts:5-13`,
+ * edits `Agent.Info` (re-exported by `dist/promise/index.d.ts:4`). Corvus maps
+ * `prompt → system`, `temperature → request.body.temperature`, and
+ * `permission → permissions[]`, carrying `description`, `mode`, and `color`.
+ * Mapping origin: the host's `migrateAgent`,
+ * `core/src/v1/config/migrate.ts:134-156` — a historical source reference, not
+ * shipped in the stable SDK or re-verified by its editor declaration.
  */
 
 /** The `mode` values `Agent.Info` accepts (`schema/src/agent.ts:23-54`). */

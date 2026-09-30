@@ -6,16 +6,176 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { dump } from "js-yaml"
-import { REVIEW_INPUT_LINE_LIMIT, artifactTree, checkReviewArtifacts, reviewNamespace, reviewRoot, type Inputs } from "../../scripts/check-review-artifacts"
+import { REVIEW_INPUT_LINE_LIMIT, artifactTree, checkPluginLoaded, checkPluginState, checkReviewArtifacts, reviewNamespace, reviewRoot, type Inputs } from "../../scripts/check-review-artifacts"
 import { checkWriterRun } from "../../scripts/check-writer-run"
 import { canonicalize, freeze, measureFile, preview, type CandidateRequest } from "../review-payload"
 import { append, begin, finalize } from "../review-persist"
 import { post as postReview } from "../review-post"
 import type { DocumentVerdict, LabelCounts } from "../review-verdict"
 import { pull, push, resolve as resolveSync, type PushInput, type SyncExec } from "../review-sync"
+import { bookkeepingRow, checkModelShellPushes, checkModelStateWrites, checkOrchestratorShell, checkRetiredTools,
+  checkWriterExecution, childResult, denied, diagnostic, finalAssistantMessage, readChildSessions, readDescendants,
+  readParentTools, storedToolEvidence, toolsFromEvents, verdictClaimContradiction, type Row } from "../../scripts/check-review-artifacts"
+import { readSessionStore } from "../../scripts/session-store"
+import { bookkeepingCases as storedBookkeepingCases, bookkeepingOps, captureEvents, captureIDs, corruptStore, hosts, materialize, shellCases,
+  projectionCases, syntheticIDs, unavailableCases, writeCases } from "./fixtures/session-store/synthetic-fixtures"
 
 const directories: string[] = []
 afterEach(() => { for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true }) })
+
+function sessionFixture() {
+  const directory = mkdtempSync(join(tmpdir(), "corvus-session-store-"))
+  directories.push(directory)
+  return { directory, db: join(directory, "opencode.db") }
+}
+const rowOutcome = (row: Row) => row.detail.match(/^(forged:|undisclosed:|N\/A-PASS:)/)?.[0] ?? (row.ok ? "PASS" : "FAIL")
+const auditInput = (directory: string): Inputs => ({ fixture: directory, owner: "owner", repo: "repo", pr: "8", head: "a".repeat(40), jsonl: "", hostlog: "", audit: "" })
+
+test("v1 session_message is not a v2 discriminator; both parent and descendants remain readable", () => {
+  const { db } = sessionFixture()
+  materialize(db, "v1")
+  const connection = new Database(db, { readonly: true })
+  expect(connection.query("select sql from sqlite_master where name = 'session_message'").get()).toMatchObject({ sql: expect.stringContaining("REFERENCES `session`(`id`)") })
+  connection.close()
+  expect(readSessionStore(db, captureIDs.v1.parent)).toMatchObject({ available: true, schema: "v1", descendants: [{ id: captureIDs.v1.child }] })
+})
+
+test.each(["complete", "incomplete"])("v2 %s pair with legacy tables uses explicit precedence", kind => {
+  const { db } = sessionFixture()
+  materialize(db, "v2")
+  const connection = new Database(db)
+  connection.exec("create table session (id text); create table part (id text)")
+  if (kind === "incomplete") connection.exec("drop table session_message")
+  connection.close()
+  const result = readSessionStore(db, captureIDs.v2.parent)
+  expect(result).toMatchObject(kind === "complete" ? { available: true, schema: "v2" } : { available: false, reason: expect.stringContaining("schema") })
+})
+
+for (const scenario of projectionCases) test(`v2 CLI projection: ${scenario.name}`, () => {
+  const { db } = sessionFixture()
+  const events = materialize(db, "v2", scenario.tool)
+  const result = readSessionStore(db, syntheticIDs.parent)
+  expect(result.available).toBe(scenario.available)
+  if (!result.available) return
+  const stored = readParentTools(db, syntheticIDs.parent)
+  expect(storedToolEvidence(toolsFromEvents(events)[0], stored, syntheticIDs.parent).kind).toBe("matched")
+  expect(stored[0].state.content).toEqual(scenario.tool.storedContent)
+})
+
+for (const host of hosts) {
+  test(`${host} real store correlates all four parent calls and reads child linkage without inventing events`, () => {
+    const { db } = sessionFixture()
+    materialize(db, host)
+    const events = captureEvents(host), before = JSON.stringify(events), ids = captureIDs[host]
+    const tools = toolsFromEvents(events), stored = readParentTools(db, ids.parent)
+    expect(readSessionStore(db, ids.parent)).toMatchObject({ available: true, schema: host })
+    expect(stored).toHaveLength(4)
+    expect(stored.map(tool => tool.name)).toEqual(host === "v1" ? ["read", "read", "bash", "task"] : ["read", "read", "shell", "subagent"])
+    for (const tool of tools) {
+      const evidence = storedToolEvidence(tool, stored, ids.parent)
+      expect(evidence.kind).toBe("matched")
+      expect(evidence.tool?.parentID).toBe(ids.parent)
+      expect(evidence.tool?.state.output).toEqual(tool.state.output)
+    }
+    const failed = stored[1]
+    expect(failed.state.error).toEqual(host === "v2" ? { type: "tool.execution", message: "File not found: missing-t7.txt" }
+      : "File not found: /fixture/v1/project/missing-t7.txt")
+    expect(diagnostic(failed)).toBe(diagnostic(tools[1]))
+    expect(storedToolEvidence({ ...tools[1], state: { ...tools[1].state, error: "changed diagnostic" } }, stored, ids.parent).kind).toBe("contradicted")
+    expect(storedToolEvidence({ ...tools[0], state: { ...tools[0].state, output: "different textual result" } }, stored, ids.parent).kind).toBe("contradicted")
+    const children = readChildSessions(db, ids.parent, "explore")
+    expect(children).toHaveLength(1)
+    expect(children[0]).toMatchObject({ id: ids.child, parentID: ids.parent, agent: "explore" })
+    expect(children[0].tools[0]).toMatchObject({ parentID: ids.child, name: "read" })
+    expect(childResult(stored[3]).sessionID).toBe(ids.child)
+    expect(childResult(tools[3]).sessionID).toBe(ids.child)
+    expect(readDescendants(db, ids.parent)).toEqual(children)
+    expect(readChildSessions(db, ids.child)).toEqual([])
+    const terminal = finalAssistantMessage(events, ids.parent)
+    expect(terminal.text).toContain("DONE")
+    expect(finalAssistantMessage(events.filter(event => event.type !== "text"), ids.parent)).toEqual({ index: -1, text: "" })
+    if (host === "v2") expect(events.slice(terminal.index).some(event => event.type === "step_finish")).toBe(false)
+    expect(JSON.stringify(events)).toBe(before)
+  })
+
+  for (const scenario of storedBookkeepingCases) test(`${host} ${scenario.name}: ADR-0006 applies to every bookkeeping row`, () => {
+    const { db } = sessionFixture()
+    const events = materialize(db, host, scenario.tool), tool = toolsFromEvents(events)[0]
+    const stored = readParentTools(db, syntheticIDs.parent), evidence = storedToolEvidence(tool, stored, syntheticIDs.parent)
+    expect(evidence.kind).toBe(scenario.correlation)
+    if (tool.state.status === "error") {
+      expect(denied(diagnostic(stored[0]) ?? "")).toBe(true)
+      expect(diagnostic(tool)).toBe("Permission denied: synthetic storage")
+    }
+    for (const op of bookkeepingOps) {
+      const row = bookkeepingRow(op, { op, summary: scenario.summary.replaceAll("{op}", op),
+        consistent: evidence.kind === "matched" && evidence.tool?.state.status === "completed" && evidence.tool.output.ok === true,
+        contradiction: evidence.kind === "contradicted" ? "CLI/DB contradiction" : undefined, diagnostic: diagnostic(tool), detail: "DB matched" })
+      expect(rowOutcome(row)).toBe(scenario.expected)
+      expect(row.ok).toBe(["PASS", "N/A-PASS:"].includes(scenario.expected))
+    }
+  })
+
+  for (const scope of ["parent", "child", "grandchild"] as const) {
+    for (const scenario of shellCases) test(`${host} ${scope} ${scenario.name}: shell discipline and model pushes`, () => {
+      const { directory, db } = sessionFixture()
+      materialize(db, host, { name: "shell", input: scenario.command === undefined ? {} : { command: scenario.command }, error: scenario.error }, scope)
+      const descendants = readDescendants(db, syntheticIDs.parent)
+      expect(descendants.map(child => child.id)).toEqual([syntheticIDs.child, syntheticIDs.grandchild])
+      const tools = scope === "parent" ? readParentTools(db, syntheticIDs.parent) : descendants.find(child => child.id === syntheticIDs[scope])!.tools
+      expect(checkOrchestratorShell(tools, auditInput(directory)).ok).toBe(scenario.orchestrator)
+      expect(checkModelShellPushes(tools).ok).toBe(scenario.push)
+      expect(checkWriterExecution({ ...auditInput(directory), digest: "", tools, texts: [], auditLines: [] }).find(row => row.check === "writer shell discipline")?.ok).toBe(false)
+    })
+
+    for (const scenario of writeCases) for (const error of [undefined, "Permission denied"]) {
+      test(`${host} ${scope} ${scenario.name} ${error ? "denied" : "completed"}: model-state write audit`, () => {
+        const { directory, db } = sessionFixture()
+        materialize(db, host, { name: "patch", input: scenario.input, error }, scope)
+        const tools = [...readParentTools(db, syntheticIDs.parent), ...readDescendants(db, syntheticIDs.parent).flatMap(child => child.tools)]
+        expect(checkModelStateWrites(tools, directory).ok).toBe(scenario.ok)
+      })
+    }
+    for (const name of ["write", "edit"]) for (const path of [".corvus/reviews/pr8/meta.yaml", "safe.txt", ""]) {
+      test(`${host} ${scope} ${name} ${path || "missing path"}: native path field`, () => {
+        const { directory, db } = sessionFixture()
+        materialize(db, host, { name, input: host === "v1" ? { filePath: path } : { path } }, scope)
+        const tools = [...readParentTools(db, syntheticIDs.parent), ...readDescendants(db, syntheticIDs.parent).flatMap(child => child.tools)]
+        expect(checkModelStateWrites(tools, directory).ok).toBe(path === "safe.txt")
+      })
+    }
+  }
+
+  for (const kind of unavailableCases) test(`${host} ${kind}: unavailable evidence cannot pass hard audits`, async () => {
+    const { directory, db } = sessionFixture()
+    if (kind === "invalid-db") writeFileSync(db, "not a database")
+    else if (kind !== "missing-db") { materialize(db, host); corruptStore(db, host, kind) }
+    const ids = captureIDs[host], result = readSessionStore(db, ids.parent)
+    expect(result.available).toBe(false)
+    if (result.available) throw new Error("expected unavailable")
+    expect(() => readChildSessions(db, ids.parent)).toThrow("unavailable")
+    expect(() => readDescendants(db, ids.parent)).toThrow("unavailable")
+    expect(checkModelStateWrites([], directory, result.reason).ok).toBe(false)
+    expect(checkOrchestratorShell([], auditInput(directory), result.reason).ok).toBe(false)
+    expect(checkModelShellPushes([], result.reason).ok).toBe(false)
+    expect(checkRetiredTools([], result.reason).ok).toBe(false)
+    for (const op of bookkeepingOps) for (const [summary, expected] of [["", "undisclosed:"], [`${op} unavailable; no diagnostic exists`, "N/A-PASS:"],
+      [`${op} successfully written. ${op} unavailable; no diagnostic exists`, "forged:"]]) {
+      expect(rowOutcome(bookkeepingRow(op, { op, summary, consistent: false, detail: result.reason }))).toBe(expected)
+    }
+    // Root-level integration: the exported gate must propagate reader failures,
+    // not merely report one failing child row beside positive mutation audits.
+    const input = { ...auditInput(directory), db, intake: "local" as const,
+      jsonl: join(directory, "run.jsonl"), hostlog: join(directory, "host.log"), audit: join(directory, "audit.jsonl") }
+    writeFileSync(input.jsonl, JSON.stringify({ type: "text", sessionID: ids.parent, part: { text: "meta.yaml unavailable; no diagnostic exists" } }) + "\n")
+    writeFileSync(input.hostlog, `CORVUS_SMOKE_SESSION ${JSON.stringify({ id: ids.parent, agent: "corvus-review-auto" })}\n`)
+    writeFileSync(input.audit, "")
+    const checked = await checkReviewArtifacts(input)
+    for (const check of ["model state writes", "append ceiling", "orchestrator GitHub reads", "Git push isolation", "lock released", "LOCAL no writer", "LOCAL no posting tools", "unexpected denials"]) {
+      expect(checked.rows.find(row => row.check === check)?.ok).toBe(false)
+    }
+  })
+}
 
 const labelCounts = (overrides: Partial<LabelCounts> = {}): LabelCounts => ({ blocker: 0, critical: 0, major: 0, minor: 0, nitpick: 0, praise: 0, thought: 0, note: 0, ...overrides })
 const historyVerdict = { ok: true as const, round: 1, refuse_delta: false, missing_history: false }
@@ -29,6 +189,21 @@ const verdict: DocumentVerdict = {
   caps_applied: { max_nits: 3, max_minors: 6, totals: { minor: 1, nitpick: 0 } },
 }
 const verdictMeta = (head: string) => ({ autonomous: true, posted: false, mode: "pr", verdict_file: "verdict.yaml", code_head: head, head_sha: head })
+
+test.each([
+  ["Standards: 4 major/1 minor; Spec: 0 major/3 minor", false],
+  ["Standards: 4 major/2 minor", true],
+  ["Spec: 0 major/2 minor", true],
+  ["Standards: 4; Spec: 3", true],
+  ["Standards: 5; Spec: 3", false],
+  ["Standards: 4 major/1 minor, Spec: 0 major/3 minor", false],
+  ["Standards: 4 major/1 minor, Spec: 1 major/3 minor", true],
+  ["Standards: 5; Standards: 4", true],
+] as const)("terminal total versus per-label claim: %s", (summary, contradiction) => {
+  const value = { ...verdict, counts: { ...verdict.counts, standards: labelCounts({ major: 4, minor: 1 }), spec: labelCounts({ minor: 3 }) } }
+  expect(Boolean(verdictClaimContradiction(summary, value))).toBe(contradiction)
+  expect(verdictClaimContradiction(summary)).toContain("without a matched verdict")
+})
 const persistedVerdict = () => structuredClone({ ...verdict, computed_at: "2026-09-13T00:00:00.000Z" })
 const stats = (counts: LabelCounts) => ({ total_findings: Object.values(counts).reduce((sum, count) => sum + count, 0),
   blockers: counts.blocker, criticals: counts.critical, majors: counts.major, minors: counts.minor, nits_shown: counts.nitpick,
@@ -36,13 +211,15 @@ const stats = (counts: LabelCounts) => ({ total_findings: Object.values(counts).
   suppressed: 0, nits_suppressed: 0 })
 const reviewDocument = () => ({ verdict: "not_converged", synthesis_controls: { series_round: 1 }, source_findings: {}, findings: [] as object[],
   summary: { stats: stats(verdict.counts.total), by_axis: { standards: { stats: stats(verdict.counts.standards) }, spec: { stats: stats(verdict.counts.spec) } } } })
-const documentMarkdown = (document: object) => `# Review\n\n## REVIEW_DOCUMENT\n\n\`\`\`yaml\n${dump({ REVIEW_DOCUMENT: document })}\`\`\`\n`
+const documentSection = (document: object) => ({ heading: "REVIEW_DOCUMENT", body: `\`\`\`yaml\n${dump({ REVIEW_DOCUMENT: document })}\`\`\`` })
+const documentMarkdown = (document: object) => `## REVIEW_DOCUMENT\n\n${documentSection(document).body}\n`
 let callNumber = 0
 const toolEvent = (name: string, input: object, output: object, error?: string) => ({
   type: "tool_use", sessionID: "ses_smoke", part: { callID: `call_${++callNumber}`, tool: name,
     state: { status: error ? "error" : "completed", input, output: JSON.stringify(output), error } },
 })
 function seedParent(db: Database, events: object[]) {
+  db.run("insert or ignore into session (id, parent_id, agent, time_created) values (?, ?, ?, ?)", ["ses_smoke", null, "corvus-review-auto", 1])
   for (const [index, event] of events.entries()) {
     const item = event as { type: string; part: object }
     db.run("insert into part (id, session_id, time_created, data) values (?, ?, ?, ?)", [`parent_${index}`, "ses_smoke", index,
@@ -163,7 +340,7 @@ async function fixture(inline = false, intake: Inputs["intake"] = "url", layout:
     tool("corvus_review_persist", { op: "write_input", reviewRoot: relative, input: JSON.parse(readFileSync(join(root, "review-input.json"), "utf8")) }, receipt(workspace, `${relative}/review-input.json`)),
     tool("corvus_review_persist", { op: "write_facts", reviewRoot: relative, facts: { facts: [], open_questions: [] } }, receipt(workspace, `${relative}/verified_facts.yaml`)),
     tool("corvus_review_persist", { op: "begin", reviewRoot: relative, target: "document", headSha: head, expected_sections: 1 }, { ok: true, staging_id: "document-session" }),
-    tool("corvus_review_persist", { op: "append", reviewRoot: relative, staging_id: "document-session", index: 0, heading: "", body: documentMarkdown(reviewDocument()) }, { ok: true }),
+    tool("corvus_review_persist", { op: "append", reviewRoot: relative, staging_id: "document-session", index: 0, ...documentSection(reviewDocument()) }, { ok: true }),
     tool("corvus_review_persist", { op: "finalize", reviewRoot: relative, staging_id: "document-session", expected_sections: 1 }, receipt(workspace, `${relative}/${head}/REVIEW_DOCUMENT.md`)),
     ...(!local ? [tool("corvus_review_persist", { op: "write_candidate", reviewRoot: relative, candidate }, receipt(workspace, `${relative}/candidate.json`)),
       tool("corvus_review_payload", { op: "measure", candidatePath: `${relative}/candidate.json` }, measureFile(join(root, "candidate.json"), { reviewStateRoot: join(workspace, ".corvus") }))] : []),
@@ -191,7 +368,8 @@ async function fixture(inline = false, intake: Inputs["intake"] = "url", layout:
   seedGatherer(database, local)
   seedParent(database, events)
   database.close()
-  const input: Inputs = { fixture: workspace, owner: "owner", repo: "repo", pr: "8", head, intake, branch, bare, crossRepo, jsonl: join(directory, "run.jsonl"), hostlog: join(directory, "host.log"), audit: join(directory, "gh-audit.log"), db }
+  const input: Inputs = { fixture: workspace, owner: "owner", repo: "repo", pr: "8", head, intake, branch, bare, crossRepo, jsonl: join(directory, "run.jsonl"), hostlog: join(directory, "host.log"), audit: join(directory, "gh-audit.log"), pluginState: join(directory, "plugin-state.json"), db }
+  writeFileSync(input.pluginState!, JSON.stringify({ location: { directory: workspace }, data: [{ id: "corvus", state: { status: "active" }, features: { server: true } }] }))
   const saveEvents = () => writeFileSync(input.jsonl, events.map(event => JSON.stringify(event)).join("\n") + "\n")
   saveEvents()
   writeFileSync(input.hostlog, `INFO entrypoint=${directory}/install/node_modules/corvus-ai/server.js msg="loading plugin"\nCORVUS_SMOKE_SESSION {"id":"ses_smoke","agent":"corvus-review-auto"}\n`)
@@ -547,6 +725,131 @@ test.each(["url", "branch", "local"] as const)("%s sync gate rejects missing, re
   }
   save(baseline)
 }, 30_000)
+
+test.each(["document", "input", "candidate"] as const)("native %s duplicate-part contract", target => {
+  const { directory } = sessionFixture(), reviewRoot = join(directory, ".corvus/reviews/pr8")
+  const opts = { reviewStateRoot: join(directory, ".corvus") }
+  const start = begin({ reviewRoot, target, ...(target === "document" ? { headSha: "a".repeat(40), expected_sections: 1 }
+    : target === "candidate" ? { commit_id: "a".repeat(40), event: "COMMENT" } : {}) }, opts)
+  if (!start.ok || !("staging_id" in start)) throw new Error(JSON.stringify(start))
+  const part = { reviewRoot, staging_id: start.staging_id, part: 0, parts: 1 }
+  const content = (value: string) => target === "document" ? { index: 0, heading: "Review", body: value }
+    : target === "input" ? { key: "description", value } : { field: "body", text: value }
+  expect(append({ ...part, ...content("old") }, opts).ok).toBe(true)
+  for (const value of ["old", "replacement"]) {
+    const result = append({ ...part, ...content(value) }, opts)
+    expect(result).toMatchObject(target === "candidate" ? { ok: false, reason: "incomplete-staging" } : { ok: true })
+  }
+})
+
+test.each(["rejected retry", "identical duplicate", "replacement", "DB order", "DB order mismatch", "changed successful bytes", "DB mismatch", "multipart", "changed part count"])("document provenance: %s", async scenario => {
+  const data = await fixture()
+  const original = operation(data.events, "corvus_review_persist", "append")
+  const retryInput = { ...original.part.state.input }
+  if (scenario === "rejected retry") {
+    const rejected = toolEvent("corvus_review_persist", { ...retryInput, body: "x".repeat(6_001) }, { ok: false, reason: "chunk-too-large", length: 6_001 })
+    data.events.splice(data.events.indexOf(original), 0, rejected)
+  } else if (["identical duplicate", "replacement", "DB order", "DB order mismatch", "changed part count"].includes(scenario)) {
+    data.events.splice(data.events.indexOf(original), 0, toolEvent("corvus_review_persist", {
+      ...retryInput, ...(scenario !== "identical duplicate" ? { body: "different successful bytes" } : {}),
+      ...(scenario === "changed part count" ? { part: 0, parts: 2 } : {}),
+    }, { ok: true }))
+  } else if (scenario === "changed successful bytes") Object.assign(original.part.state.input, { body: "different successful bytes" })
+  else if (scenario === "multipart") {
+    const body = (original.part.state.input as { body: string }).body, split = Math.floor(body.length / 2)
+    Object.assign(original.part.state.input, { body: body.slice(0, split), part: 0, parts: 2 })
+    data.events.splice(data.events.indexOf(original) + 1, 0, toolEvent("corvus_review_persist", { ...retryInput, body: body.slice(split), part: 1, parts: 2 }, { ok: true }))
+  }
+  const stored = structuredClone(data.events)
+  if (scenario.startsWith("DB order")) {
+    // CLI completion order differs; the DB records the replacement last.
+    const index = data.events.indexOf(original)
+    const reordered = scenario === "DB order" ? data.events : stored
+    ;[reordered[index - 1], reordered[index]] = [reordered[index], reordered[index - 1]]
+  }
+  if (scenario === "DB mismatch") original.part.callID = "unmatched-retry"
+  saveTrace(data.input, data.events, stored)
+  const result = await checkReviewArtifacts(data.input)
+  const ok = ["rejected retry", "identical duplicate", "replacement", "DB order", "multipart"].includes(scenario)
+  for (const check of ["document staged", "review-state tools"]) {
+    expect(result.rows.find(row => row.check === check)).toMatchObject({ ok, ...(!ok ? { detail: expect.stringContaining("forged:") } : {}) })
+  }
+  if (scenario === "rejected retry") expect(result.rows.find(row => row.check === "append ceiling")).toMatchObject({ ok: false, detail: expect.stringContaining("6001") })
+})
+
+test.each(["replacement", "DB order", "DB order mismatch", "mismatch", "rejected retry", "path replacement"])("input provenance uses native replacement and serialization: %s", async scenario => {
+  const data = await fixture(), reviewRootPath = reviewRoot(data.input)
+  const opts = { reviewStateRoot: join(data.input.fixture, ".corvus") }
+  const source = operation(data.events, "corvus_review_persist", "write_input")
+  const inputValue = (source.part.state.input as { input: Record<string, unknown> }).input
+  const startInput = { reviewRoot: data.root, target: "input" }
+  const started = begin(startInput, opts)
+  if (!started.ok || !("staging_id" in started)) throw new Error(JSON.stringify(started))
+  const staged = [toolEvent("corvus_review_persist", { op: "begin", ...startInput }, started)]
+  let oldPart!: ReturnType<typeof toolEvent>, replacement!: ReturnType<typeof toolEvent>
+  for (const [key, value] of Object.entries(inputValue)) {
+    const part = { reviewRoot: data.root, staging_id: started.staging_id, key, part: 0, parts: 1, value }
+    const replaced = key === (scenario === "path replacement" ? "file_map" : "description_chunks")
+    if (replaced) {
+      const { value: ignored, ...identity } = part
+      const prior = scenario === "path replacement" ? { ...identity, path: ["obsolete"], chunk: "earlier evidence" }
+        : { ...part, value: scenario === "rejected retry" ? ["x".repeat(6_001)] : ["earlier evidence"] }
+      const output = append(prior, opts)
+      expect(output.ok).toBe(scenario !== "rejected retry")
+      oldPart = toolEvent("corvus_review_persist", { op: "append", ...prior }, output)
+      staged.push(oldPart)
+    }
+    const output = append(part, opts)
+    expect(output.ok).toBe(true)
+    const event = toolEvent("corvus_review_persist", { op: "append", ...part }, output)
+    if (replaced) replacement = event
+    staged.push(event)
+  }
+  const finalInput = { reviewRoot: data.root, staging_id: started.staging_id, expected_keys: Object.keys(inputValue) }
+  const output = finalize(finalInput, opts)
+  expect(output.ok).toBe(true)
+  staged.push(toolEvent("corvus_review_persist", { op: "finalize", ...finalInput }, output))
+  data.events.splice(data.events.indexOf(source), 1, ...staged)
+  if (scenario === "mismatch") Object.assign(replacement.part.state.input, { value: ["not the finalized evidence"] })
+  const stored = structuredClone(data.events)
+  if (scenario.startsWith("DB order")) {
+    const oldIndex = data.events.indexOf(oldPart), newIndex = data.events.indexOf(replacement)
+    const reordered = scenario === "DB order" ? data.events : stored
+    ;[reordered[oldIndex], reordered[newIndex]] = [reordered[newIndex], reordered[oldIndex]]
+  }
+  saveTrace(data.input, data.events, stored)
+  const result = await checkReviewArtifacts(data.input)
+  for (const check of ["input route", "review-state tools"]) {
+    const row = result.rows.find(row => row.check === check)!
+    expect(row.ok).toBe(!scenario.includes("mismatch"))
+    if (!row.ok) expect(row.detail).toStartWith("forged:")
+  }
+  if (scenario === "rejected retry") expect(result.rows.find(row => row.check === "append ceiling")?.ok).toBe(false)
+  expect(readFileSync(join(data.input.fixture, reviewRootPath, "review-input.json"), "utf8")).not.toContain("earlier evidence")
+})
+
+test.each(["Standards: 0 major/1 minor; Spec: 1 major/0 minor", "Standards: 0 major/2 minor", "Spec: 0 major/1 minor", "Standards: 0"])("R4 root gate audits terminal counts: %s", async summary => {
+  const data = await fixture()
+  data.events.push({ type: "text", sessionID: "ses_smoke", part: { text: summary } })
+  saveTrace(data.input, data.events)
+  const row = (await checkReviewArtifacts(data.input)).rows.find(row => row.check === "R4 verdict")!
+  expect(row.ok).toBe(summary.startsWith("Standards: 0 major/1 minor;"))
+  if (!row.ok) expect(row.detail).toStartWith("forged:")
+})
+
+test("checkpoint-failed cannot substitute nested semantic validation for the recorded append failure", async () => {
+  const data = await fixture()
+  const part = operation(data.events, "corvus_review_persist", "append")
+  data.events.splice(data.events.indexOf(part), 0, toolEvent("corvus_review_persist", { ...part.part.state.input, body: "x".repeat(6_001) },
+    { ok: false, reason: "chunk-too-large", length: 6_001 }))
+  const meta = { ...verdictMeta(data.input.head), status: "checkpoint-failed", recoverable: true, reason: "External evidence references",
+    checkpoint_failed: { stage: "document-evidence", failed_op: "self-contained-validation", reason: "External evidence references" } }
+  writeFileSync(join(data.root, data.input.head, "meta.yaml"), dump(meta))
+  refreshWrite(data, "write_meta", `${reviewRoot(data.input)}/${data.input.head}/meta.yaml`, { meta })
+  saveTrace(data.input, data.events)
+  expect((await checkReviewArtifacts(data.input)).rows.find(row => row.check === "checkpoint-failed route"))
+    .toMatchObject({ ok: false, detail: "forged: checkpoint failure metadata contradicts recorded failed operation/diagnostic/part/stage" })
+})
 
 test("staging rejects claimed staged single-call checkpoints, missing finalize, oversized appends and undisclosed checkpoint failure", async () => {
   const data = await fixture()
@@ -1231,7 +1534,7 @@ test("the audit accepts the fixed config GET header without allowing method or h
 
 test("no positive load, fallback agent, missing artifact and unexpected permission denial each fail", async () => {
   const data = await fixture()
-  writeFileSync(data.input.hostlog, 'agent "corvus-review-auto" not found. Falling back to default agent\nPermission denied: read\npermission=edit resource=.corvus/reviews/x action.action=deny\n')
+  writeFileSync(data.input.hostlog, 'agent "corvus-review-auto" not found. Falling back to default agent\nPermission denied: read\npermission=edit resource=.corvus/reviews/x action.action=deny\nCORVUS_SMOKE_SESSION {"id":"ses_smoke","agent":"corvus-review-auto"}\n')
   rmSync(join(data.root, "review-input.json"))
   const result = await checkReviewArtifacts(data.input)
   expect(result.exitCode).toBe(3)
@@ -1255,6 +1558,44 @@ async function v1Fixture(inline = false, intake: Inputs["intake"] = "url", barri
   const input: Inputs = { ...data.input, host: "v1", agents, install }
   return { ...data, input, agents }
 }
+
+test.each([
+  "active", "absent", "failed", "duplicate", "wrong location", "non-server", "unknown state", "malformed", "missing file", "missing path", "missing location",
+  "transform disabled", "load failed", "no marker",
+])("v2 plugin preflight: %s", scenario => {
+  const { directory } = sessionFixture()
+  const pluginState = join(directory, "plugin-state.json"), hostlog = join(directory, "host.log")
+  const active = { id: "corvus", state: { status: "active" }, features: { server: true } }
+  const entry = scenario === "failed" ? { ...active, state: { status: "failed", error: "Plugin disabled after skill.transform failed" } }
+    : scenario === "unknown state" ? { ...active, state: { status: "loading" } }
+    : scenario === "non-server" ? { ...active, features: { server: false } } : active
+  const body = { location: { directory: scenario === "wrong location" ? "/home" : directory },
+    data: scenario === "absent" ? [] : scenario === "duplicate" ? [entry, entry] : [entry] }
+  if (scenario !== "missing file") writeFileSync(pluginState, scenario === "malformed" ? "{bad json" : JSON.stringify(body))
+  const marker = 'message="loading plugin" entrypoint=/install/node_modules/corvus-ai/dist/server.js\n'
+  writeFileSync(hostlog, (scenario === "no marker" ? "" : marker)
+    + (scenario === "transform disabled" ? 'message="disabled plugin after transform failure" plugin.id=corvus\n' : "")
+    + (scenario === "load failed" ? 'message="failed to load plugin"\n' : ""))
+  const input = { host: "v2" as const, fixture: scenario === "missing location" ? undefined : directory,
+    pluginState: scenario === "missing path" ? undefined : pluginState, hostlog }
+  const result = checkPluginLoaded(input)
+  expect(result.ok, result.detail).toBe(scenario === "active")
+  expect(result.check).toBe("plugin loaded")
+  expect(result.detail).toContain("plugin-state:")
+  expect(checkPluginState(input.pluginState, input.fixture).absent).toBe(scenario === "absent")
+  if (scenario === "transform disabled") expect(result.detail).toContain("explicit plugin transform-disable")
+})
+
+test("v1 plugin preflight ignores v2 state/transform evidence and retains its load-failure veto", async () => {
+  const { input } = await v1Fixture()
+  writeFileSync(input.hostlog, 'message="disabled plugin after transform failure"\n')
+  const before = checkPluginLoaded({ ...input, pluginState: undefined })
+  writeFileSync(input.pluginState!, "invalid v2 evidence")
+  expect(checkPluginLoaded(input)).toEqual(before)
+  expect(before.ok).toBe(true)
+  writeFileSync(input.hostlog, 'message="failed to load plugin"\n')
+  expect(checkPluginLoaded(input).ok).toBe(false)
+})
 
 test("v1 accepts installed agent evidence without a load marker; v2 still requires the marker", async () => {
   const { input } = await v1Fixture()
@@ -1328,6 +1669,29 @@ test.each(["denied", "not-exposed"] as const)("non-writer PR gate accepts the %s
   }
 })
 
+test.each(["underscore", "active voice", "missing rail", "prefixed rail", "denied", "absent reason", "unrelated absence"])("writer non-exposure classification: %s", async scenario => {
+  const data = await v1Fixture(false, "url", "not-exposed")
+  const action = data.events.find((event): event is ReturnType<typeof toolEvent> => "tool" in event.part
+    && (event.part.state.input as { name?: string }).name === "review-action.yaml")!
+  const meta = (action.part.state.input as { meta: Record<string, unknown> }).meta
+  meta.decision_reason = "writer_capability_not_exposed: roster omits pr-comment-writer"
+  if (scenario === "missing rail") meta.rails_applied = []
+  if (scenario === "prefixed rail") meta.rails_applied = ["delivery:writer_capability_not_exposed"]
+  if (scenario === "denied") meta.decision_reason = "denied: permission denial"
+  if (scenario === "absent reason") delete meta.decision_reason
+  if (["active voice", "unrelated absence"].includes(scenario)) {
+    const terminal = data.events.at(-1)!
+    if (!("text" in terminal.part) || typeof terminal.part.text !== "string") throw new Error("missing terminal text")
+    terminal.part.text = terminal.part.text.replace("pr-comment-writer is not exposed by this host",
+      scenario === "active voice" ? "host does not expose the required pr-comment-writer agent" : "writer is denied; this host does not expose the read tool")
+  }
+  writeFileSync(join(data.root, data.input.head, "review-action.yaml"), dump(meta))
+  saveTrace(data.input, data.events)
+  const result = await checkReviewArtifacts(data.input)
+  expect(result.rows.find(row => row.check === "writer denied")?.ok).toBe(["underscore", "active voice"].includes(scenario))
+  expect(result.rows.find(row => row.check === "plugin loaded")?.ok).toBe(true)
+})
+
 test("R4 not-exposed requires measured, DB-matched local-only evidence and rejects invalid artifacts or writer dispatch", async () => {
   const { input, root, events: baseline } = await v1Fixture(false, "branch", "not-exposed")
   const actionPath = join(root, input.head, "review-action.yaml"), actionBytes = readFileSync(actionPath)
@@ -1378,6 +1742,8 @@ test("R4 not-exposed requires measured, DB-matched local-only evidence and rejec
     if (mutation === "child-writer") {
       const db = new Database(input.db!)
       db.run("insert into session values (?, ?, ?, ?)", ["ses_writer", "ses_smoke", "pr-comment-writer", 3])
+      db.run("insert into part (id, session_id, time_created, data) values (?, ?, ?, ?)", ["prt_writer", "ses_writer", 4,
+        JSON.stringify({ type: "text", text: "writer child" })])
       db.close()
     }
     const result = await checkReviewArtifacts(input)
@@ -1423,7 +1789,7 @@ test.each(["inert artifact", "writer dispatch", "post"])("not-exposed route with
 
 test("CLI emits one SMOKE_RESULT JSON line with per-check status and the process exit code", async () => {
   const { input, root } = await fixture()
-   const args = [input.fixture, input.owner, input.repo, input.pr, input.head, input.jsonl, input.hostlog, input.audit, "--db", input.db!, "--bare", input.bare!, "--branch", input.branch!]
+   const args = [input.fixture, input.owner, input.repo, input.pr, input.head, input.jsonl, input.hostlog, input.audit, "--db", input.db!, "--bare", input.bare!, "--branch", input.branch!, "--plugin-state", input.pluginState!]
   const run = async (argv: string[]) => {
     const child = Bun.spawn([process.execPath, "run", resolve(import.meta.dirname, "../../scripts/check-review-artifacts.ts"), ...argv], { stdout: "pipe", stderr: "pipe" })
     const [stdout, stderr, exitCode] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited])
@@ -1458,7 +1824,7 @@ test("CLI emits one SMOKE_RESULT JSON line with per-check status and the process
   for (const [intake, mode] of [["local", "normal"], ["branch", "normal"], ["url", "fork"]] as const) {
     const { input } = await fixture(false, intake, "plain", mode)
     const result = await run([input.fixture, input.owner, input.repo, input.pr, input.head, input.jsonl, input.hostlog, input.audit,
-      "--db", input.db!, "--intake", intake, "--branch", input.branch!, "--bare", input.bare!, "--cross-repo", String(input.crossRepo)])
+      "--db", input.db!, "--intake", intake, "--branch", input.branch!, "--bare", input.bare!, "--cross-repo", String(input.crossRepo), "--plugin-state", input.pluginState!])
     expect(result.exitCode).toBe(0)
     expect(result.summary.passed).toBe(result.summary.total)
   }
@@ -1535,7 +1901,6 @@ async function writerFixture(inline = true, retry = false) {
     database.run("create table part (id text primary key, message_id text, session_id text, time_created integer, data text)")
     seedGatherer(database)
     seedParent(database, events)
-    database.run("insert into session values (?, ?, ?, ?)", ["ses_smoke", null, "corvus-review-auto", 1])
     seedWriter(database, tools, texts, "ses_writer", agentName, parent)
     database.close()
   }
@@ -1699,7 +2064,7 @@ test("complete staged over-budget candidate → violating measure → fitted fre
   expect(result.audit).toMatchObject({ blocked: 1, unsafe: 0 })
 })
 
-test.each(["missing body part", "missing comment path part", "missing comment body part", "wrong staging id", "wrong final path", "wrong final digest", "comment order"])("staged candidate integrity rejects %s", async mutation => {
+test.each(["missing body part", "missing comment path part", "missing comment body part", "wrong staging id", "wrong final path", "wrong final digest", "comment order", "identical successful duplicate", "changed successful duplicate", "changed successful bytes"])("staged candidate integrity rejects %s", async mutation => {
   const data = await fittedWriterFixture()
   const final = operation(data.events, "corvus_review_persist", "finalize")
   if (mutation.startsWith("missing")) {
@@ -1714,6 +2079,13 @@ test.each(["missing body part", "missing comment path part", "missing comment bo
   if (mutation === "wrong final path") final.part.state.output = JSON.stringify({ ...JSON.parse(final.part.state.output), path: `${reviewRoot(data.input)}/other.json` })
   if (mutation === "wrong final digest") final.part.state.output = JSON.stringify({ ...JSON.parse(final.part.state.output), sha256: "b".repeat(64) })
   if (mutation === "comment order") writeFileSync(join(data.root, "candidate.json"), canonicalize({ ...data.candidate, comments: [...data.candidate.comments].reverse() }))
+  if (mutation.endsWith("successful duplicate")) {
+    const source = data.staged[1]
+    const duplicate = toolEvent("corvus_review_persist", { ...source.part.state.input,
+      ...(mutation.startsWith("changed") ? { text: "changed content" } : {}) }, { ok: true })
+    data.events.splice(data.events.indexOf(source) + 1, 0, duplicate)
+  }
+  if (mutation === "changed successful bytes") Object.assign(data.staged[1].part.state.input, { text: "not the finalized body" })
   data.save()
   const result = await checkReviewArtifacts(data.input)
   expect(result.exitCode).toBe(5)
@@ -1721,6 +2093,16 @@ test.each(["missing body part", "missing comment path part", "missing comment bo
   expect(producer?.ok).toBe(false)
   expect(producer?.detail).toMatch(/^forged:/)
   expect(result.rows.find(row => row.check === "tool chain")).toMatchObject({ ok: false })
+})
+
+test("candidate rejected duplicate contributes no bytes but a successful duplicate is impossible", async () => {
+  const data = await fittedWriterFixture(), source = data.staged[1]
+  data.events.splice(data.events.indexOf(source) + 1, 0, toolEvent("corvus_review_persist", { ...source.part.state.input },
+    { ok: false, reason: "incomplete-staging" }))
+  data.save()
+  const result = await checkReviewArtifacts(data.input)
+  expect(result.rows.find(row => row.check === "candidate producer")?.ok).toBe(true)
+  expect(result.rows.find(row => row.check === "append ceiling")?.ok).toBe(true)
 })
 
 test.each(["missing measurements", "invalid violations", "claimed in-budget", "wrong digest"])("fitted chain rejects malformed measurement: %s", async mutation => {
@@ -1868,7 +2250,7 @@ test("writer mode requires head → marker reviews → post tool → blocked plu
   // Leading read=0, head=1, diff=2, required marker reviews=3, post=4 (no separate integrity call).
   expect(result.rows.find(row => row.check === "writer PR reads")?.detail).toBe("head=1, diff=2, files=unused/missing, reviews=1 (required); post=4; 3 structured PR calls")
   expect(result.rows.find(row => row.check === "writer POST attempted")?.detail).toMatch(/corvus_review_post at event 4; outcome=unknown; shim audit: CORVUS_SMOKE_MUTATION_BLOCKED/)
-  expect(result.rows.find(row => row.check === "writer shell discipline")?.detail).toBe("0 bash call(s): no GitHub shell calls, 0 granted JSON validator(s) (informational); no shell measurement")
+  expect(result.rows.find(row => row.check === "writer shell discipline")?.detail).toBe("0 shell call(s): no GitHub shell calls, 0 granted JSON validator(s) (informational); no shell measurement")
   expect(result.rows.find(row => row.check === "writer result")?.detail).toStartWith("status=local_only, remote_state=unknown, review_url=null, api_calls=6")
   expect(result.rows.find(row => row.check === "R5 PR transport")?.ok).toBe(true)
   expect(result.rows.find(row => row.check === "orchestrator GitHub reads")?.ok).toBe(true)
@@ -1993,7 +2375,7 @@ test("writer mode requires head → marker reviews → post tool → blocked plu
   expect(shell?.detail).toStartWith("2 shell measurement/diagnostic command(s), 0 other off-form command(s): event 3: shasum -a 256")
   // Positive: the frontmatter's exact JSON validators on the artifact path are permitted read fallbacks (the 20n350 gate shape), reported as informational.
   data.writeDb([data.childTools[0], ["bash", { command: "python3 -m json.tool .corvus/reviews/pr8/post-request.json" }, "{}\n"], ["bash", { command: "jq . .corvus/reviews/pr8/post-request.json" }, "{}\n"], ...data.childTools.slice(1)])
-  expect(await row("writer shell discipline")).toMatchObject({ ok: true, detail: "2 bash call(s): no GitHub shell calls, 2 granted JSON validator(s) (informational); no shell measurement" })
+  expect(await row("writer shell discipline")).toMatchObject({ ok: true, detail: "2 shell call(s): no GitHub shell calls, 2 granted JSON validator(s) (informational); no shell measurement" })
   data.writeDb([data.childTools[0], ["bash", { command: "python3 -m json.tool .corvus/reviews/other__repo__pr8/post-request.json" }, "{}\n"], ...data.childTools.slice(1)])
   expect(await row("writer shell discipline")).toMatchObject({ ok: false })
   data.writeDb(data.childTools)

@@ -83,11 +83,12 @@ type Registration = Awaited<ReturnType<SetupContext["agent"]["transform"]>>
 export type PermissionEvaluation = Parameters<Parameters<SetupContext["permission"]["hook"]>[1]>[0]
 
 /**
- * `session.hook` accepts six different inputs; `SessionContext` is the only one
- * carrying `system`, so it can be picked out of the union without importing an
- * SDK subpath.
+ * Specialize the generic hook by NAME: context, title, compaction and generate
+ * all carry system/options on stable v2, so a field-based Extract is ambiguous.
+ * This declaration is type-only and introduces no SDK runtime import.
  */
-export type SessionContextInput = Extract<Parameters<Parameters<SetupContext["session"]["hook"]>[1]>[0], { system: unknown }>
+declare const sessionHook: SetupContext["session"]["hook"]
+export type SessionContextInput = Parameters<Parameters<typeof sessionHook<"context">>[1]>[0]
 
 export type SystemPart = SessionContextInput["system"][number]
 
@@ -203,6 +204,7 @@ export interface EvaluationInput {
 export interface ContextInput {
   readonly agent: string
   readonly system?: readonly string[]
+  readonly options?: SessionContextInput["options"]
 }
 
 export interface FakeContext {
@@ -422,16 +424,20 @@ export function createFakeContext(directory = FAKE_DIRECTORY): FakeContext {
       return evaluation
     },
     context: async (input) => {
-      const value = {
-        sessionID: "ses_fake",
-        agent: input.agent,
-        model: { providerID: "fake", id: "fake-model" },
+      // Only fixture IDs need nominal string brands; check the entire request
+      // shape structurally so a future SDK field change cannot hide in a cast.
+      const value: SessionContextInput = {
+        sessionID: "ses_fake" as SessionContextInput["sessionID"],
+        agent: input.agent as SessionContextInput["agent"],
+        model: {
+          providerID: "fake" as SessionContextInput["model"]["providerID"],
+          id: "fake-model" as SessionContextInput["model"]["id"],
+        },
         system: (input.system ?? []).map((text) => ({ type: "text", text })),
         messages: [],
         tools: {},
-        generation: {},
-        providerOptions: {},
-      } as unknown as SessionContextInput
+        options: { ...input.options },
+      }
       await drive("session.hook", "context", value)
       return value
     },

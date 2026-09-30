@@ -1,12 +1,12 @@
-import type { Plugin } from "@opencode-ai/plugin-v2"
+import type { Plugin } from "@opencode/plugin"
 
 /**
  * Narrow local types for the OpenCode v2 entry.
  *
- * The beta SDK (`@opencode-ai/plugin-v2`, pinned exactly) is expected to churn,
- * so its type surface is confined to this module and `src/server.ts`. Every
- * registrar imports from here instead of the SDK, which keeps an upstream
- * rename from rippling through `src/v2/register-*.ts` (risk R5).
+ * The stable SDK (`@opencode/plugin`, pinned exactly) has its type surface
+ * confined to this module and `src/server.ts`. Every registrar imports from here
+ * instead of the SDK, keeping dependency changes localized while derived types
+ * still expose upstream contract changes to the type checker.
  */
 
 /**

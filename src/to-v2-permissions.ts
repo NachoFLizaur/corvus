@@ -3,8 +3,11 @@ import type { Rule } from "./v2/types"
 /**
  * Pure v1 → v2 permission translation. No I/O, no draft access, no console.
  *
- * The oracle is the host's own v1 migration, `core/src/v1/config/migrate.ts:89-115`
- * at `@opencode-ai/plugin@0.0.0-beta-19086`:
+ * Stable hook contract: `@opencode/plugin@2.0.20`,
+ * `dist/promise/permission.d.ts:6-17`, exposes action/resources and effect.
+ * Translation originated in `core/src/v1/config/migrate.ts:89-115` — a
+ * historical host-source reference, not shipped in the stable SDK or proof
+ * from its declarations that the current host uses the same migration:
  *
  * - a scalar effect becomes one rule with resource `"*"`;
  * - a resource map becomes one rule per entry, in frontmatter (insertion) order;

@@ -10,11 +10,17 @@ interface SkillFrontmatter {
 /**
  * One packaged skill, shaped for the OpenCode v2 `SkillEditor.add` contract.
  *
- * Field-for-field the host's own derivation for a `<dir>/SKILL.md` file
- * (`core/src/config/plugin/skill-file.ts:41-57`): `id` is the containing
- * directory's basename, `name` falls back to `id`, `description` is OMITTED
- * rather than set to `undefined` when the frontmatter has none, `location` is the
- * absolute path to `SKILL.md`, and `content` is the body verbatim.
+ * `id` is the containing directory's basename, `name` falls back to `id`,
+ * `description` is OMITTED rather than set to `undefined` when the frontmatter
+ * has none, `location` and `path` are the same absolute path to `SKILL.md`, and
+ * `content` is the body verbatim.
+ *
+ * Dual-key compatibility design: PR #12 by @clopca / issue #10. Retain the
+ * legacy `location` alongside stable `path` without probing the host version.
+ * Stable 2.0.20 `@opencode/schema/dist/skill.js` requires `path`; its Struct
+ * decoder ignores the extra `location`. Emitting both also retains the file key
+ * consumed by older hosts. The registrar checks the stable record structure;
+ * schema regression coverage rejects the old location-only shape.
  *
  * `slash` and `autoinvoke` are deliberately absent. The host derives them from a
  * `slash` key or an `opencode/slash` / `opencode/autoinvoke` metadata entry
@@ -26,6 +32,7 @@ export interface SkillRecord {
   readonly name: string
   readonly description?: string
   readonly location: string
+  readonly path: string
   readonly content: string
 }
 
@@ -104,6 +111,7 @@ function readSkill(id: string, location: string): SkillRecord {
     name: frontmatter.name ?? id,
     ...(frontmatter.description === undefined ? {} : { description: frontmatter.description }),
     location,
+    path: location,
     content: content.slice(block[0].length),
   }
 }
