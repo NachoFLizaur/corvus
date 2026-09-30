@@ -60,11 +60,13 @@ type SkillDefinition = Parameters<SkillDraft["add"]>[0]
 type Registration = Awaited<ReturnType<SetupContext["skill"]["transform"]>>
 
 export const registerSkills: Registrar = async (ctx) => {
-  // `Skill.Info` brands `id`, `name`, and `location` as nominal strings
-  // (`@opencode-ai/schema/dist/skill.d.ts`). The brands exist only in the type
-  // system — `Skill.ID.make` is an identity at runtime — so the cast adds the
-  // nominal tags and changes no field, shape, or value. It is applied here, once,
-  // rather than inside `SkillRecord` so `load-skills.ts` stays free of SDK types.
+  // `Skill.Info` brands `id`, `name`, and the file key (`location` on <= 2.0.3,
+  // `path` on >= 2.0.4) as nominal strings (`@opencode-ai/schema/dist/skill.d.ts`).
+  // The brands exist only in the type system — `Skill.ID.make` is an identity at
+  // runtime — so the cast adds the nominal tags and changes no field, shape, or
+  // value. It is applied here, once, rather than inside `SkillRecord` so
+  // `load-skills.ts` stays free of SDK types. The record carries BOTH file keys on
+  // purpose; see `SkillRecord` for why the host's schema makes that necessary.
   const skills = loadSkills(skillDir) as unknown as readonly SkillDefinition[]
 
   const registration: Registration = await ctx.skill.transform((draft) => {

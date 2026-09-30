@@ -13,8 +13,22 @@ interface SkillFrontmatter {
  * Field-for-field the host's own derivation for a `<dir>/SKILL.md` file
  * (`core/src/config/plugin/skill-file.ts:41-57`): `id` is the containing
  * directory's basename, `name` falls back to `id`, `description` is OMITTED
- * rather than set to `undefined` when the frontmatter has none, `location` is the
- * absolute path to `SKILL.md`, and `content` is the body verbatim.
+ * rather than set to `undefined` when the frontmatter has none, `location` and
+ * `path` are both the absolute path to `SKILL.md`, and `content` is the body
+ * verbatim.
+ *
+ * WHY TWO KEYS FOR ONE VALUE. `@opencode/schema` renamed the file key of
+ * `Skill.Info` from `location` to `path` in OpenCode 2.0.4 (compare
+ * `@opencode/schema@2.0.3` and `@2.0.4` `dist/skill.js`). The host decodes what
+ * `draft.add` receives with that schema, and a missing required key is a
+ * `SchemaError` that DISABLES the whole plugin at startup ("Missing key at
+ * [\"path\"]" on >= 2.0.4; "Missing key at [\"location\"]" on <= 2.0.3), taking
+ * every agent, command, and the `subagent` tool with it. `Schema.Struct`
+ * ignores keys it does not declare, so a record carrying both decodes on every
+ * OpenCode 2 release: <= 2.0.3 keeps `location` and drops `path`, >= 2.0.4 the
+ * reverse. Emitting both is therefore the ONLY shape that needs no host-version
+ * probe (the plugin API exposes none for the schema) and cannot regress either
+ * side. Drop `location` only once <= 2.0.3 is out of support.
  *
  * `slash` and `autoinvoke` are deliberately absent. The host derives them from a
  * `slash` key or an `opencode/slash` / `opencode/autoinvoke` metadata entry
@@ -25,7 +39,10 @@ export interface SkillRecord {
   readonly id: string
   readonly name: string
   readonly description?: string
+  /** Absolute path to `SKILL.md`; the key OpenCode <= 2.0.3 requires. */
   readonly location: string
+  /** The same absolute path; the key OpenCode >= 2.0.4 requires. */
+  readonly path: string
   readonly content: string
 }
 
@@ -104,6 +121,7 @@ function readSkill(id: string, location: string): SkillRecord {
     name: frontmatter.name ?? id,
     ...(frontmatter.description === undefined ? {} : { description: frontmatter.description }),
     location,
+    path: location,
     content: content.slice(block[0].length),
   }
 }

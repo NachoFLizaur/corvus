@@ -58,7 +58,7 @@ describe("registerSkills", () => {
     expect(stored).toEqual(loadSkills(skillDir))
   })
 
-  test("derives id, name, absolute location and a verbatim body for every record", async () => {
+  test("derives id, name, absolute location/path and a verbatim body for every record", async () => {
     const fake = createFakeContext()
 
     await registerSkills(fake.ctx)
@@ -70,6 +70,13 @@ describe("registerSkills", () => {
       // path to its `SKILL.md`.
       expect({ id, location: String(skill.location) }).toEqual({ id, location })
       expect(isAbsolute(String(skill.location))).toBe(true)
+
+      // `path` is the SAME absolute path under the key OpenCode >= 2.0.4 requires
+      // (`@opencode/schema` renamed `location` -> `path` in `Skill.Info`). Both
+      // keys must be present: the host's `Schema.Struct` ignores the one it does
+      // not declare, and dropping either disables the plugin on that side.
+      const record = skill as unknown as Record<string, unknown>
+      expect({ id, path: record.path }).toEqual({ id, path: location })
 
       // `name` comes from frontmatter, which equals the directory name in all 18.
       expect({ id, name: String(skill.name) }).toEqual({ id, name: id })
