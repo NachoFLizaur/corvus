@@ -5,6 +5,21 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.11.0-beta.0 — 2026-10-31
+
+### Added
+
+- `@corvus-review-light`: autonomous PR and LOCAL review through one bounded detector per attempt, reduced coverage and local-only posting artifacts. It never APPROVEs; PR publication reuses the frozen/digest-bound artifact and existing writer, without switching the user's worktree.
+- Protected read-only `pr-light-reviewer` and the single `corvus-review-light` skill, covering correctness, security, stated intent and consequential architecture/conventions within experimental bounds.
+- Tool-owned `.light/` review storage class, candidate-only light persistence, and host-enforced fixed question/Git/gh command denies that preserve additional user denials and model overrides.
+- Non-posting `smoke-review.sh --agent light` fixture and `light-metrics.json` for agent-controlled timing, session/turn/tool counts and local-only evidence. Live light verification remains unverified without separate cost authorization; expected savings and full-review quality parity are unproven. See [Review Gates](README.md#review-gates).
+
+### Changed
+
+- Light review omits the generic reduced-coverage banner from frozen artifacts and posted bodies, keeping applicable factual scope/gap/overflow disclosures. Code-head or verified base-SHA moves restart a fresh bounded review, including writer `head-moved`, for at most three detection attempts (initial plus two restarts); each restart adds a detector pass and renews artifact/preview/authorization. CLOSED/MERGED stops at intake and revalidation before further detection/posting; raw-head-only changes are ignored. The shared lock is retained with fresh-ownership checks; changed roots or lock age over 90 minutes refuse restart. Completion reports attempts, their full head/base SHAs and the terminal reason. Minor filtering is unchanged: up to two eligible minors detailed by default, extra minors counted per axis, nitpicks excluded. Live light detection now needs an OPEN `--pr` URL; default fixture PR #8 is CLOSED and stops at intake. Full-review behavior is unchanged.
+- Both host adapters use one shared review caller roster, with detector-only reads for `pr-light-reviewer`, resolve-only sync for `corvus-review-light` and writer-only posting unchanged.
+- Full-review state sync excludes `.light/` artifacts and shared lock records in roots containing that class, including later or overlapping full reviews. Other full-review state remains sync-eligible; see [local-artifact guidance](README.md#light-review-and-local-artifacts).
+
 ## 0.10.2 — 2026-09-30
 
 ### Fixed

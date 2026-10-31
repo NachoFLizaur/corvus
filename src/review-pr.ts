@@ -1,5 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process"
 import { resolve } from "node:path"
+import { isReviewCallerAllowed } from "./review-callers"
 
 export type PrExecResult = { code: number; stdout: string; stderr: string; stdout_truncated?: true }
 export type PrExec = (argv: string[], options?: { cwd?: string }) => Promise<PrExecResult>
@@ -83,12 +84,7 @@ export type PrOperation = keyof PrData
  * No tool argument or option disables this caller fence.
  */
 export function isPrCallerAllowed(caller: unknown, op: unknown): boolean {
-  if (typeof op !== "string" || !Object.hasOwn(KEYS, op)) return false
-  if (caller === "pr-comment-writer") return ["head", "diff", "files", "reviews"].includes(op)
-  if (caller === "pr-code-reviewer" || caller === "security-reviewer") {
-    return ["metadata", "head", "files", "diff", "reviews", "checks"].includes(op)
-  }
-  return typeof caller === "string" && ["corvus-review", "corvus-review-auto", "pr-context-gatherer"].includes(caller)
+  return isReviewCallerAllowed("corvus_review_pr", caller, { op })
 }
 export type PrFailure = {
   reason: string; http_status?: number; unavailable?: true; login?: null

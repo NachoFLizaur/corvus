@@ -116,7 +116,8 @@ describe("plugin.setup", () => {
     const fake = createFakeContext()
     const cleanup = await plugin.setup(fake.ctx)
     try {
-      const orchestrators = ["corvus-review", "corvus-review-auto"]
+      const fullOrchestrators = ["corvus-review", "corvus-review-auto"]
+      const orchestrators = [...fullOrchestrators, "corvus-review-light"]
       const policies = [
         { name: "corvus_review_payload", allowed: orchestrators, args: { op: "measure", candidatePath: "" } },
         { name: "corvus_review_payload", allowed: orchestrators, args: { op: "preview", artifactPath: "", expectedSha256: "0".repeat(64) } },
@@ -125,9 +126,11 @@ describe("plugin.setup", () => {
         { name: "corvus_review_lock", allowed: orchestrators, args: { op: "acquire", reviewRoot: "" } },
         { name: "corvus_review_pr", allowed: [...orchestrators, "pr-context-gatherer"], args: { op: "identity", cwd: "relative" } },
         { name: "corvus_review_verdict", allowed: orchestrators, args: { op: "compute" } },
-        { name: "corvus_review_sync", allowed: orchestrators, args: { op: "pull", cwd: "relative" } },
+        { name: "corvus_review_sync", allowed: orchestrators, args: { op: "resolve", cwd: "relative" } },
+        { name: "corvus_review_sync", allowed: fullOrchestrators, args: { op: "pull", cwd: "relative" } },
+        { name: "corvus_review_sync", allowed: fullOrchestrators, args: { op: "push", cwd: "relative" } },
       ]
-      const agents = [...fake.agents.keys(), "unknown", "", undefined, null, { agent: "corvus-review" }]
+      const agents = [...new Set([...fake.agents.keys(), "corvus-review-light", "pr-light-reviewer"]), "unknown", "", undefined, null, { agent: "corvus-review" }]
       for (const { name, allowed, args } of policies) {
         const tool = fake.tools.get(name)!
         const rejected = name === "corvus_review_post"
@@ -166,9 +169,9 @@ describe("plugin.setup", () => {
 
     const cleanup = await plugin.setup(traced.ctx)
 
-    expect(fake.agents.size).toBe(16)
+    expect(fake.agents.size).toBe(18)
     expect([...fake.commands.keys()].sort()).toEqual(COMMANDS)
-    expect(fake.skills.size).toBe(18)
+    expect(fake.skills.size).toBe(19)
     expect([...fake.mcp.keys()]).toEqual(["web-research"])
     expect([...fake.tools.keys()]).toEqual(["corvus_review_payload", "corvus_review_post", "corvus_review_persist", "corvus_review_lock", "corvus_review_pr", "corvus_review_verdict", "corvus_review_sync"])
     for (const tool of fake.tools.values()) {
@@ -272,9 +275,9 @@ describe("plugin.setup", () => {
     // a bare append would grow it on each replay while everything else matched.
     expect(ruleCounts(fake)).toEqual(counts)
 
-    expect(fake.agents.size).toBe(16)
+    expect(fake.agents.size).toBe(18)
     expect(fake.commands.size).toBe(4)
-    expect(fake.skills.size).toBe(18)
+    expect(fake.skills.size).toBe(19)
     expect(fake.mcp.size).toBe(1)
     expect(fake.tools.size).toBe(7)
   })

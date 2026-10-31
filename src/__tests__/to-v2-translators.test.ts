@@ -9,7 +9,7 @@ import { evaluateRules } from "../evaluate-rules"
  * Translator contract tests (task 06).
  *
  * The REAL packaged corpus is the primary fixture: these translators only have to
- * be right about the 16 files corvus actually ships, and a synthetic fixture would
+ * be right about the 18 files corvus actually ships, and a synthetic fixture would
  * not notice the day one of them grows a key nobody reviewed. Synthetic fixtures
  * are used only for the failure and edge shapes the corpus deliberately does not
  * contain.
@@ -36,8 +36,8 @@ describe("toV2Agent over the real corpus", () => {
     }
   })
 
-  test("translates all 16 agents with zero warnings", () => {
-    expect(ids).toHaveLength(16)
+  test("translates all 18 agents with zero warnings", () => {
+    expect(ids).toHaveLength(18)
 
     const warnings = ids.flatMap((name) => toV2Agent({ name, config: corpus[name] }).warnings)
 
@@ -66,7 +66,8 @@ describe("toV2Agent over the real corpus", () => {
 
     const colored = ids.filter((name) => toV2Agent({ name, config: corpus[name] }).fields.color !== undefined)
 
-    expect(colored.sort()).toEqual(["corvus", "corvus-auto", "corvus-review", "corvus-review-auto"])
+    expect(colored.sort()).toEqual(["corvus", "corvus-auto", "corvus-review", "corvus-review-auto", "corvus-review-light"])
+    expect(toV2Agent({ name: "corvus-review-light", config: corpus["corvus-review-light"] }).fields.color).toBe("#bd711a")
   })
 })
 
@@ -147,18 +148,19 @@ describe("toV2Permissions", () => {
       const rules = toV2Permissions(corpus[name].permission)
       const shell = rules.filter(rule => rule.action === "shell")
       const orchestrator = ["corvus", "corvus-auto"].includes(name)
-      const leaf = ["pr-context-gatherer", "pr-comment-writer", "pr-code-reviewer", "security-reviewer"].includes(name)
-      const autonomous = ["corvus-auto", "corvus-review-auto"].includes(name)
+      const light = name === "corvus-review-light"
+      const leaf = ["pr-context-gatherer", "pr-comment-writer", "pr-code-reviewer", "security-reviewer", "pr-light-reviewer"].includes(name)
+      const autonomous = ["corvus-auto", "corvus-review-auto", "corvus-review-light"].includes(name)
       expect(rules[0]).toEqual({ action: "*", resource: "*", effect: "allow" })
-      expect(rules).toHaveLength(1 + (orchestrator ? 11 : 0) + (leaf ? 2 : 0) + (autonomous ? 1 : 0))
-      expect(rules.filter(rule => rule.effect === "deny")).toHaveLength((orchestrator ? 10 : 0) + (leaf ? 2 : 0) + (autonomous ? 1 : 0))
-      if (!orchestrator) {
+      expect(rules).toHaveLength(1 + (orchestrator ? 11 : light ? 20 : 0) + (leaf ? 2 : 0) + (autonomous ? 1 : 0))
+      expect(rules.filter(rule => rule.effect === "deny")).toHaveLength((orchestrator ? 10 : light ? 19 : 0) + (leaf ? 2 : 0) + (autonomous ? 1 : 0))
+      if (!orchestrator && !light) {
         expect(shell).toEqual([])
         continue
       }
       expect(shell[0]).toEqual({ action: "shell", resource: "*", effect: "allow" })
       expect(shell).toEqual(Object.entries(corpus[name].permission!.bash as ShellPolicy).map(([resource, effect]) => ({ action: "shell", resource, effect })))
-      expect(shell).toHaveLength(11)
+      expect(shell).toHaveLength(light ? 20 : 11)
     }
   })
 

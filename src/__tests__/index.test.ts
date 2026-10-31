@@ -109,7 +109,7 @@ describe("plugin entry point", () => {
 
     await hook!(config as any)
 
-    expect(Object.keys(config.agent)).toHaveLength(16)
+    expect(Object.keys(config.agent)).toHaveLength(18)
     expect(config.agent["pr-code-reviewer"]).toBeDefined()
   })
 
@@ -275,7 +275,7 @@ describe("review tool hooks", () => {
       // Deliberately cross the typed-name boundary to exercise registration lookup.
       const name = "corvus_review_verify" as ReviewToolName
       const args = { op: "verify", artifactPath: join(directory, ".corvus/reviews/pr/post-request.json"), expectedSha256: "0".repeat(64) }
-      for (const agent of ["corvus-review", "corvus-review-auto", "pr-comment-writer", "pr-code-reviewer", "security-reviewer", "unknown", undefined]) {
+      for (const agent of ["corvus-review", "corvus-review-auto", "corvus-review-light", "pr-comment-writer", "pr-code-reviewer", "security-reviewer", "pr-light-reviewer", "unknown", undefined]) {
         await expect(call(name, args, agent)).rejects.toThrow("Unknown review tool: corvus_review_verify")
       }
     })
@@ -283,20 +283,21 @@ describe("review tool hooks", () => {
 
   test.each(["v1", "v2"] as const)("%s gates payload, post, persist and lock on host identity for every op", async host => {
     await withReviewTools(host, async (_directory, call) => {
-      const orchestrators = ["corvus-review", "corvus-review-auto"]
+      const orchestrators = ["corvus-review", "corvus-review-auto", "corvus-review-light"]
       const policies = [
         { name: "corvus_review_payload", ops: ["measure", "freeze", "preview"], allowed: orchestrators },
         { name: "corvus_review_post", ops: [undefined], allowed: ["pr-comment-writer"] },
-        { name: "corvus_review_persist", ops: ["write_document", "write_input", "write_meta", "write_candidate", "read_document", "write_facts", "read_facts", "begin", "append", "finalize", "abort", "status"], allowed: orchestrators },
+        { name: "corvus_review_persist", ops: ["write_document", "write_input", "write_meta", "write_candidate", "read_document", "write_facts", "read_facts", "begin", "append", "finalize", "abort", "status"], allowed: ["corvus-review", "corvus-review-auto"] },
         { name: "corvus_review_lock", ops: ["acquire", "release", "status"], allowed: orchestrators },
       ] as const
-      const agents = [...Object.keys(await loadPluginAgents()), "unknown", "", undefined, null, { agent: "corvus-review" }]
+      const agents = [...new Set([...Object.keys(await loadPluginAgents()), "corvus-review-light", "pr-light-reviewer"]), "unknown", "", undefined, null, { agent: "corvus-review" }]
       for (const { name, ops, allowed } of policies) {
         for (const agent of agents) {
           for (const op of ops) {
             const args = op === undefined ? {} : { op }
             const result = await call(name, args, agent)
-            if (typeof agent === "string" && allowed.some(name => name === agent)) {
+            if (typeof agent === "string" && (allowed.some(name => name === agent)
+              || (name === "corvus_review_persist" && agent === "corvus-review-light" && op === "write_candidate"))) {
               expect(result.reason).toMatch(/^(?:invalid-|missing-field)/)
             } else {
               const rejected = name === "corvus_review_post"
@@ -311,6 +312,50 @@ describe("review tool hooks", () => {
     })
   })
 
+  test.each(["v1", "v2"] as const)("%s limits light persist to candidate staging before state I/O", async host => {
+    await withReviewTools(host, async (directory, call) => {
+      const reviewRoot = join(directory, ".corvus/reviews/pr1")
+      const candidate = { commit_id: "a".repeat(40), event: "COMMENT", body: "Light review", comments: [] }
+      const rejected = { ok: false, reason: "caller-not-allowed" }
+      const light = "corvus-review-light"
+      for (const op of ["write_document", "write_input", "write_meta", "read_document", "write_facts", "read_facts"]) {
+        expect(await call("corvus_review_persist", { op, reviewRoot }, light)).toEqual(rejected)
+      }
+      for (const target of ["document", "input"]) {
+        expect(await call("corvus_review_persist", { op: "begin", reviewRoot, target }, light)).toEqual(rejected)
+      }
+      for (const op of ["append", "finalize", "abort", "status"]) for (const staging_id of ["input:id", "document:id"]) {
+        expect(await call("corvus_review_persist", { op, reviewRoot, staging_id }, light)).toEqual(rejected)
+      }
+      const candidatePath = join(reviewRoot, ".light/candidate.json"), artifactPath = join(reviewRoot, ".light/post-request.json")
+      expect(await call("corvus_review_persist", { op: "write_candidate", reviewRoot, candidate }, light)).toMatchObject({ ok: true, path: candidatePath })
+      const started = await call("corvus_review_persist", { op: "begin", reviewRoot, target: "candidate", commit_id: candidate.commit_id, event: candidate.event }, light)
+      expect(started.ok).toBe(true)
+      expect(started.staging_id).toMatch(/^candidate:/)
+      expect(existsSync(join(reviewRoot, ".light/.staging/candidate/manifest.json"))).toBe(true)
+      expect(existsSync(join(reviewRoot, ".staging"))).toBe(false)
+      const session = { reviewRoot, staging_id: started.staging_id }
+      expect(await call("corvus_review_persist", { op: "append", ...session, field: "body", text: "Light review", part: 0, parts: 1 }, light)).toMatchObject({ ok: true })
+      expect(await call("corvus_review_persist", { op: "status", ...session }, light)).toMatchObject({ ok: true })
+      expect(await call("corvus_review_persist", { op: "finalize", ...session, expected_comments: 0 }, light)).toMatchObject({ ok: true, path: candidatePath })
+      const open = await call("corvus_review_persist", { op: "begin", reviewRoot, target: "candidate", commit_id: candidate.commit_id, event: candidate.event }, light)
+      expect(await call("corvus_review_persist", { op: "abort", reviewRoot, staging_id: open.staging_id }, light)).toMatchObject({ ok: true })
+      expect(await call("corvus_review_payload", { op: "measure", candidatePath }, light)).toMatchObject({ ok: true })
+      const frozen = await call("corvus_review_payload", { op: "freeze", candidatePath, artifactPath }, light)
+      expect(frozen).toMatchObject({ ok: true, artifactPath })
+      expect(await call("corvus_review_payload", { op: "preview", artifactPath, expectedSha256: frozen.sha256 }, light)).toMatchObject({ ok: true, body: candidate.body })
+      expect(await call("corvus_review_payload", { op: "freeze", candidatePath, artifactPath: join(reviewRoot, "post-request.json") }, light)).toMatchObject({ ok: false, reason: "path-outside-root" })
+      expect(existsSync(join(reviewRoot, "post-request.json"))).toBe(false)
+      expect(existsSync(join(reviewRoot, "candidate.json"))).toBe(false)
+      expect(await call("corvus_review_payload", { op: "measure", candidatePath }, "corvus-review")).toMatchObject({ ok: false, reason: "path-outside-root" })
+      expect(await call("corvus_review_lock", { op: "acquire", reviewRoot, runId: "light" }, light)).toMatchObject({ ok: true })
+      expect(await call("corvus_review_lock", { op: "acquire", reviewRoot, runId: "full" }, "corvus-review")).toMatchObject({ ok: false, state: "held" })
+      expect(await call("corvus_review_lock", { op: "release", reviewRoot, runId: "light", mode: "complete" }, light)).toMatchObject({ ok: false, reason: "invalid-arguments" })
+      expect(await call("corvus_review_lock", { op: "release", reviewRoot, runId: "light", mode: "delete" }, light)).toMatchObject({ ok: true })
+      expect(existsSync(join(reviewRoot, "lock.yaml"))).toBe(false)
+    })
+  })
+
   test.each(["v1", "v2"] as const)("%s rejects unauthorized valid requests without altering review state", async host => {
     await withReviewTools(host, async (directory, call) => {
       const reviewRoot = join(directory, ".corvus/reviews/pr")
@@ -322,7 +367,7 @@ describe("review tool hooks", () => {
       if (!frozen.ok) throw new Error("Expected a frozen artifact")
       const artifact = readFileSync(artifactPath)
       const rejected = { ok: false, reason: "caller-not-allowed" }
-      for (const agent of ["pr-comment-writer", "pr-code-reviewer", "security-reviewer", undefined]) {
+      for (const agent of ["pr-comment-writer", "pr-code-reviewer", "security-reviewer", "pr-light-reviewer", undefined]) {
         expect(await call("corvus_review_payload", { op: "measure", candidatePath }, agent)).toEqual(rejected)
         expect(await call("corvus_review_payload", { op: "freeze", candidatePath, artifactPath: join(reviewRoot, "unauthorized.json") }, agent)).toEqual(rejected)
         expect(await call("corvus_review_payload", { op: "preview", artifactPath, expectedSha256: frozen.sha256 }, agent)).toEqual(rejected)
@@ -330,7 +375,7 @@ describe("review tool hooks", () => {
         expect(await call("corvus_review_lock", { op: "acquire", reviewRoot, runId: "unauthorized" }, agent)).toEqual(rejected)
       }
       const descriptor = { artifactPath, expectedSha256: frozen.sha256, repo: { owner: "o", name: "r" }, prNumber: 1, headSha: "b".repeat(40), event: "COMMENT" }
-      for (const agent of ["corvus-review", "corvus-review-auto", "pr-code-reviewer", "security-reviewer", undefined]) {
+      for (const agent of ["corvus-review", "corvus-review-auto", "corvus-review-light", "pr-code-reviewer", "security-reviewer", "pr-light-reviewer", undefined]) {
         expect(await call("corvus_review_post", descriptor, agent)).toEqual({ outcome: "rejected", reason: "caller-not-allowed", tool_api_calls: 0 })
       }
       expect(await call("corvus_review_lock", { op: "status", reviewRoot }, "corvus-review")).toMatchObject({ held: false, holders: [] })
@@ -399,14 +444,14 @@ describe("review tool hooks", () => {
   test.each(["v1", "v2"] as const)("%s gates every PR op on host caller identity before transport", async host => {
     await withReviewTools(host, async (_directory, call) => {
       const ops = ["metadata", "head", "files", "diff", "reviews", "checks", "identity", "config", "repo", "find", "local"]
-      for (const agent of ["pr-comment-writer", "corvus-review", "corvus-review-auto", "pr-context-gatherer", "pr-code-reviewer", "security-reviewer", "researcher", "unknown", "", undefined, null]) {
+      for (const agent of ["pr-comment-writer", "corvus-review", "corvus-review-auto", "corvus-review-light", "pr-context-gatherer", "pr-code-reviewer", "security-reviewer", "pr-light-reviewer", "researcher", "unknown", "", undefined, null]) {
         for (const op of ops) {
           // Invalid fields stop permitted calls in the module without real GitHub I/O.
           const args = { op, owner: "!", name: "r", pr: 1, paginate: true }
           const allowed = agent === "pr-comment-writer" ? ["head", "diff", "files", "reviews"].includes(op)
-            : agent === "pr-code-reviewer" || agent === "security-reviewer"
+            : agent === "pr-code-reviewer" || agent === "security-reviewer" || agent === "pr-light-reviewer"
               ? ["metadata", "head", "files", "diff", "reviews", "checks"].includes(op)
-              : ["corvus-review", "corvus-review-auto", "pr-context-gatherer"].includes(agent as string)
+              : ["corvus-review", "corvus-review-auto", "corvus-review-light", "pr-context-gatherer"].includes(agent as string)
           const result = await call("corvus_review_pr", args, agent)
           expect(result).toMatchObject({ ok: false, api_calls: 0 })
           expect(result.reason === "caller-not-allowed").toBe(!allowed)
@@ -419,14 +464,15 @@ describe("review tool hooks", () => {
         .toEqual({ ok: false, reason: "caller-not-allowed", api_calls: 0 })
       const verdictArgs = { op: "compute", reviewRoot: ".corvus/reviews/o__r__pr1", config: {},
         priorReviews: { ok: true, reviews: [], threads: [], dispositions: [], complete_pagination: true, complete_threads: true, api_calls: 2 } }
-      for (const agent of ["corvus-review", "corvus-review-auto", "corvus", "corvus-auto", "pr-comment-writer", "pr-context-gatherer", "pr-code-reviewer", "security-reviewer", "code-explorer", "code-implementer", "code-quality", "plan-reviewer", "requirements-analyst", "researcher", "task-planner", "ux-dx-quality", "unknown", undefined]) {
+      for (const agent of ["corvus-review", "corvus-review-auto", "corvus-review-light", "corvus", "corvus-auto", "pr-comment-writer", "pr-context-gatherer", "pr-code-reviewer", "security-reviewer", "pr-light-reviewer", "code-explorer", "code-implementer", "code-quality", "plan-reviewer", "requirements-analyst", "researcher", "task-planner", "ux-dx-quality", "unknown", undefined]) {
         for (const op of ["resolve", "pull", "push"]) {
           const sync = await call("corvus_review_sync", { op, cwd: "relative" }, agent)
-          expect(sync.reason).toBe(["corvus-review", "corvus-review-auto"].includes(agent as string) ? "invalid-cwd" : "caller-not-allowed")
+          const allowed = ["corvus-review", "corvus-review-auto"].includes(agent as string) || (agent === "corvus-review-light" && op === "resolve")
+          expect(sync.reason).toBe(allowed ? "invalid-cwd" : "caller-not-allowed")
           expect(sync.git_calls).toBe(0)
         }
         const result = await call("corvus_review_verdict", verdictArgs, agent)
-        expect(result).toEqual(["corvus-review", "corvus-review-auto"].includes(agent as string)
+        expect(result).toEqual(["corvus-review", "corvus-review-auto", "corvus-review-light"].includes(agent as string)
           ? { ok: true, round: 1, refuse_delta: false, missing_history: false }
           : { ok: false, reason: "caller-not-allowed" })
       }

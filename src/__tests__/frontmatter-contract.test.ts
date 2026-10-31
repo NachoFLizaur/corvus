@@ -13,6 +13,7 @@ import { toV2Permissions } from "../to-v2-permissions"
 import { registerCommands } from "../v2/register-commands"
 import type { SetupContext } from "../v2/types"
 import { createFakeContext, type CommandInvocation } from "./fake-context"
+import { LIGHT_BASH_DENIES } from "./fixtures/review-light"
 
 /**
  * CORPUS CONTRACT GUARD — the packaged `agent/*.md`, `command/*.md`, and
@@ -54,7 +55,7 @@ import { createFakeContext, type CommandInvocation } from "./fake-context"
  */
 const AGENT_KEYS: readonly string[] = ["description", "mode", "temperature", "permission", "color"]
 
-/** Present in all 16 agents; a missing one is a silently degraded agent. */
+/** Present in all 18 agents; a missing one is a silently degraded agent. */
 const REQUIRED_AGENT_KEYS: readonly string[] = ["description", "mode", "temperature", "permission"]
 
 /**
@@ -112,7 +113,7 @@ const SHELL_INTERPOLATION = /!`([^`]+)`/g
  */
 const INTERPOLATION_SITES = 7
 
-const LEAF_REVIEWERS: readonly string[] = ["pr-code-reviewer", "security-reviewer", "pr-context-gatherer", "pr-comment-writer"]
+const LEAF_REVIEWERS: readonly string[] = ["pr-code-reviewer", "security-reviewer", "pr-context-gatherer", "pr-comment-writer", "pr-light-reviewer"]
 const DESTRUCTIVE_BASH = ["git init*", "git reset --hard*", "git push --force*", "git push -f*", "git rebase*", "rm -rf *", "rm -rf /*", "rm -fr *", "rm -r *", "sudo *"]
 
 /* ------------------------------------------------------------------ *
@@ -162,8 +163,9 @@ describe("agent corpus frontmatter", () => {
       const name = file.replace(/\.md$/, "")
       const expected = [
         ...(LEAF_REVIEWERS.includes(name) ? ["edit", "write"] : []),
-        ...(["corvus-auto", "corvus-review-auto"].includes(name) ? ["question"] : []),
+        ...(["corvus-auto", "corvus-review-auto", "corvus-review-light"].includes(name) ? ["question"] : []),
         ...(["corvus", "corvus-auto"].includes(name) ? DESTRUCTIVE_BASH.map(pattern => `bash:${pattern}`) : []),
+        ...(name === "corvus-review-light" ? LIGHT_BASH_DENIES.map(pattern => `bash:${pattern}`) : []),
       ]
       expect(permission["*"], file).toBe("allow")
       expect(Object.keys(permission)[0], file).toBe("*")
@@ -171,19 +173,19 @@ describe("agent corpus frontmatter", () => {
         isRecord(effect) ? Object.entries(effect).map(([pattern, value]) => [`${action}:${pattern}`, value]) : [[action, effect]])
       expect(entries.filter(([, effect]) => effect === "deny").map(([key]) => key).sort(), file).toEqual(expected.sort())
       expect(entries.filter(([, effect]) => effect !== "deny").sort(), file).toEqual([
-        ["*", "allow"], ...(["corvus", "corvus-auto"].includes(name) ? [["bash:*", "allow"] as [string, string]] : []),
+        ["*", "allow"], ...(["corvus", "corvus-auto", "corvus-review-light"].includes(name) ? [["bash:*", "allow"] as [string, string]] : []),
       ])
       expect(Object.keys(permission).sort(), file).toEqual([
         "*", ...(LEAF_REVIEWERS.includes(name) ? ["edit", "write"] : []),
-        ...(["corvus-auto", "corvus-review-auto"].includes(name) ? ["question"] : []),
-        ...(["corvus", "corvus-auto"].includes(name) ? ["bash"] : []),
+        ...(["corvus-auto", "corvus-review-auto", "corvus-review-light"].includes(name) ? ["question"] : []),
+        ...(["corvus", "corvus-auto", "corvus-review-light"].includes(name) ? ["bash"] : []),
       ].sort())
     }
   })
 
   test("carries only the five allowlisted keys, and always the four required ones", () => {
     const files = markdownFiles(agentDir)
-    expect(files).toHaveLength(16)
+    expect(files).toHaveLength(18)
 
     const unexpected: string[] = []
     const missing: string[] = []
@@ -341,7 +343,7 @@ describe("skill corpus identity", () => {
   test("every SKILL.md authors a name equal to its directory", () => {
     const records = loadSkills(skillDir)
 
-    expect(records).toHaveLength(18)
+    expect(records).toHaveLength(19)
 
     // Read the FILE's frontmatter, not `record.name`: the loader falls back to the
     // directory basename when `name` is absent (mirroring the host), so comparing
@@ -393,7 +395,7 @@ describe("protected agent coverage", () => {
 })
 
 /** Packaged permissions and v1 config are read before comparison; drift fails unconditionally without mutation or a bypass. */
-test("only corvus and corvus-auto retain ordered destructive-bash denies through the loader and v1 hook", async () => {
+test("only workflow orchestrators and light retain their distinct ordered bash denies through the loader and v1 hook", async () => {
   const hooks = await v1Plugin({} as Parameters<typeof v1Plugin>[0])
   if (!hooks.config) throw new Error("Missing v1 config hook")
   const config: Parameters<NonNullable<typeof hooks.config>>[0] = {}
@@ -404,14 +406,15 @@ test("only corvus and corvus-auto retain ordered destructive-bash denies through
     const permission = parseFrontmatter(raw).frontmatter.permission
     if (!isRecord(permission)) throw new Error(`Missing permission: ${name}`)
     for (const bash of [permission.bash, loaded[name].permission?.bash, config.agent?.[name]?.permission?.bash]) {
-      if (!["corvus", "corvus-auto"].includes(name)) {
+      if (!["corvus", "corvus-auto", "corvus-review-light"].includes(name)) {
         expect(bash, name).toBeUndefined()
         continue
       }
       if (!isRecord(bash)) throw new Error(`Missing bash map: ${name}`)
-      expect(Object.entries(bash), name).toEqual([["*", "allow"], ...DESTRUCTIVE_BASH.map((pattern): [string, string] => [pattern, "deny"])])
+      const denies = name === "corvus-review-light" ? LIGHT_BASH_DENIES : DESTRUCTIVE_BASH
+      expect(Object.entries(bash), name).toEqual([["*", "allow"], ...denies.map((pattern): [string, string] => [pattern, "deny"])])
     }
     const hostRules = toV2Permissions(config.agent?.[name]?.permission).filter(rule => rule.action === "shell")
-    expect(hostRules, name).toHaveLength(["corvus", "corvus-auto"].includes(name) ? 11 : 0)
+    expect(hostRules, name).toHaveLength(name === "corvus-review-light" ? 20 : ["corvus", "corvus-auto"].includes(name) ? 11 : 0)
   }
 })

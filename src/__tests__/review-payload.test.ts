@@ -4,7 +4,7 @@ import { createHash } from "node:crypto"
 import * as fs from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { LIMITS, canonicalize, freeze, measure, measureFile, preview, verify } from "../review-payload"
+import { LIMITS, canonicalize, createReviewToolExecutors, freeze, measure, measureFile, preview, verify } from "../review-payload"
 import type { CandidateRequest, ReviewPayloadFs, ReviewPayloadOptions } from "../review-payload"
 import { post } from "../review-post"
 
@@ -72,6 +72,43 @@ function totalBoundary(): CandidateRequest {
 }
 
 const escapeCases = ["parent traversal", "absolute outside root", "symlink outside root"] as const
+
+describe("caller-selected payload storage", () => {
+  test("light measure/freeze/preview stay in the class; full cannot enter it or redirect its bytes", () => withFixture(({ opts }) => {
+    const directory = join(opts.reviewStateRoot, "workspace")
+    const root = join(directory, ".corvus/tasks/example/reviews/pr42")
+    fs.mkdirSync(join(root, ".light"), { recursive: true })
+    const bytes = canonicalize(candidate())
+    const fullCandidate = join(root, "candidate.json"), lightCandidate = join(root, ".light/candidate.json")
+    const lightArtifact = join(root, ".light/post-request.json"), fullArtifact = join(root, "post-request.json")
+    for (const target of [fullCandidate, lightCandidate]) fs.writeFileSync(target, bytes)
+    const { payload } = createReviewToolExecutors(directory)
+    const call = (args: object, caller = "corvus-review-light") => JSON.parse(payload(args, caller))
+    expect(call({ op: "measure", candidatePath: lightCandidate })).toMatchObject({ ok: true })
+    const frozen = call({ op: "freeze", candidatePath: lightCandidate, artifactPath: lightArtifact })
+    expect(frozen).toMatchObject({ ok: true, artifactPath: lightArtifact })
+    expect(call({ op: "preview", artifactPath: lightArtifact, expectedSha256: frozen.sha256 })).toMatchObject({ ok: true, body: candidate().body })
+    for (const args of [
+      { op: "measure", candidatePath: fullCandidate },
+      { op: "freeze", candidatePath: lightCandidate, artifactPath: fullArtifact },
+      { op: "freeze", candidatePath: fullCandidate, artifactPath: lightArtifact },
+      { op: "preview", artifactPath: fullCandidate, expectedSha256: frozen.sha256 },
+      { op: "preview", artifactPath: `${root}/.light/../candidate.json`, expectedSha256: frozen.sha256 },
+    ]) expect(call(args)).toMatchObject({ ok: false, reason: "path-outside-root" })
+    for (const args of [
+      { op: "measure", candidatePath: lightCandidate },
+      { op: "freeze", candidatePath: lightCandidate, artifactPath: lightArtifact },
+      { op: "preview", artifactPath: lightArtifact, expectedSha256: frozen.sha256 },
+    ]) expect(call(args, "corvus-review")).toMatchObject({ ok: false, reason: "path-outside-root" })
+    expect(fs.existsSync(fullArtifact)).toBe(false)
+    const alias = join(root, ".light/alias.json")
+    fs.symlinkSync(fullCandidate, alias)
+    expect(call({ op: "measure", candidatePath: alias })).toMatchObject({ ok: false, reason: "path-outside-root" })
+    expect(call({ op: "freeze", candidatePath: lightCandidate, artifactPath: alias })).toMatchObject({ ok: false, reason: "path-outside-root" })
+    expect(call({ op: "preview", artifactPath: alias, expectedSha256: frozen.sha256 })).toMatchObject({ ok: false, reason: "path-outside-root" })
+    expect(fs.readFileSync(fullCandidate, "utf8")).toBe(bytes)
+  }))
+})
 
 function escapedPath(kind: typeof escapeCases[number], fixture: Fixture): string {
   if (kind === "parent traversal") return "../x.json"

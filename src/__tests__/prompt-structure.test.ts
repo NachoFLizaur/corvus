@@ -8,6 +8,7 @@ import { root, skillDir } from "../paths"
 import v2Plugin from "../server"
 import { toV2Permissions } from "../to-v2-permissions"
 import { createFakeContext } from "./fake-context"
+import { LIGHT_BASH_DENIES, LIGHT_MUTATIONS } from "./fixtures/review-light"
 
 type Corpus = Record<string, string>
 type Kind = "agent" | "command" | "skill" | "reference"
@@ -25,9 +26,9 @@ type Contract = {
 }
 const budgets: Contract = JSON.parse(readFileSync(resolve(root, "prompt-budgets.json"), "utf8"))
 const identities = {
-  agent: ["code-explorer", "code-implementer", "code-quality", "corvus", "corvus-auto", "corvus-review", "corvus-review-auto", "plan-reviewer", "pr-code-reviewer", "pr-comment-writer", "pr-context-gatherer", "requirements-analyst", "researcher", "security-reviewer", "task-planner", "ux-dx-quality"],
+  agent: ["code-explorer", "code-implementer", "code-quality", "corvus", "corvus-auto", "corvus-review", "corvus-review-auto", "corvus-review-light", "plan-reviewer", "pr-code-reviewer", "pr-comment-writer", "pr-context-gatherer", "pr-light-reviewer", "requirements-analyst", "researcher", "security-reviewer", "task-planner", "ux-dx-quality"],
   command: ["cleanup-subagents", "git-commit", "readme", "summary"],
-  skill: ["corvus-extras", "corvus-phase-0", "corvus-phase-1", "corvus-phase-2", "corvus-phase-4", "corvus-phase-5", "corvus-phase-6", "corvus-phase-7", "corvus-review-extras", "corvus-review-r0", "corvus-review-r1", "corvus-review-r2", "corvus-review-r3", "corvus-review-r4", "corvus-review-r5", "deep-research", "frontend-design", "web-search"],
+  skill: ["corvus-extras", "corvus-phase-0", "corvus-phase-1", "corvus-phase-2", "corvus-phase-4", "corvus-phase-5", "corvus-phase-6", "corvus-phase-7", "corvus-review-extras", "corvus-review-light", "corvus-review-r0", "corvus-review-r1", "corvus-review-r2", "corvus-review-r3", "corvus-review-r4", "corvus-review-r5", "deep-research", "frontend-design", "web-search"],
 }
 const expectedFiles = Object.entries(identities).flatMap(([kind, names]) => names.map(name =>
   kind === "skill" ? `skill/${name}/SKILL.md` : `${kind}/${name}.md`))
@@ -75,7 +76,9 @@ function requiredSection(text: string, title: string): string {
   return found[0].replace(/<!--[\s\S]*?-->/g, "")
 }
 const writer = "agent/pr-comment-writer.md", r2 = "skill/corvus-review-r2/SKILL.md", r4 = "skill/corvus-review-r4/SKILL.md", r5 = "skill/corvus-review-r5/SKILL.md"
-const reviewOrchestrators = ["agent/corvus-review.md", "agent/corvus-review-auto.md"]
+const lightOrchestrator = "agent/corvus-review-light.md"
+const fullReviewOrchestrators = ["agent/corvus-review.md", "agent/corvus-review-auto.md"]
+const reviewOrchestrators = [...fullReviewOrchestrators, lightOrchestrator]
 const reviewStateResources = [".corvus/reviews/x/lock.yaml", ".corvus/reviews/x/.lock",
   `.corvus/reviews/x/${"a".repeat(40)}/REVIEW_DOCUMENT.md`, ".corvus/reviews/x/candidate.json", ".corvus/reviews/x/review-input.json",
   ".corvus/tasks/topic/reviews/pr1/lock.yaml", ".corvus/tasks/topic/reviews/local-topic/review-input.json"]
@@ -91,9 +94,10 @@ const externalSkillReferences = [
 ]
 const externalSkillResources = externalSkillReferences.flatMap(path => [path, `${posix.dirname(path.replaceAll("\\", "/"))}/*`])
 const reviewTools = ["corvus_review_payload", "corvus_review_post", "corvus_review_persist", "corvus_review_lock", "corvus_review_pr", "corvus_review_verdict", "corvus_review_sync"]
-const detectors = ["agent/pr-code-reviewer.md", "agent/security-reviewer.md"]
+const fullDetectors = ["agent/pr-code-reviewer.md", "agent/security-reviewer.md"]
+const detectors = [...fullDetectors, "agent/pr-light-reviewer.md"]
 const leafReviewers = [...detectors, writer, "agent/pr-context-gatherer.md"]
-const autonomous = ["agent/corvus-auto.md", "agent/corvus-review-auto.md"]
+const autonomous = ["agent/corvus-auto.md", "agent/corvus-review-auto.md", lightOrchestrator]
 const orchestrators = ["agent/corvus.md", "agent/corvus-auto.md"]
 const gitDenies: Record<string, string[]> = {
   "git init*": ["git init", "git init --bare repo"],
@@ -112,6 +116,7 @@ const permissionFor = (path: string): Record<string, unknown> => ({
   ...(leafReviewers.includes(path) ? { edit: "deny", write: "deny" } : {}),
   ...(autonomous.includes(path) ? { question: "deny" } : {}),
   ...(orchestrators.includes(path) ? { bash: { "*": "allow", ...Object.fromEntries(Object.keys(gitDenies).map(pattern => [pattern, "deny"])) } } : {}),
+  ...(path === lightOrchestrator ? { bash: { "*": "allow", ...Object.fromEntries(LIGHT_BASH_DENIES.map(pattern => [pattern, "deny"])) } } : {}),
 })
 const permissionEntries = (permission: Record<string, unknown>): [string, unknown][] => Object.entries(permission)
   .flatMap(([action, effect]): [string, unknown][] => record(effect) ? Object.entries(effect).map(([pattern, value]) => [`${action}:${pattern}`, value]) : [[action, effect]])
@@ -267,7 +272,7 @@ function validate(corpus: Corpus, c: Contract, final = false): string[] {
         const expected = permissionFor(path), entries = permissionEntries(permission), rules = toV2Permissions(permission)
         check(permission["*"] === "allow" && Object.keys(permission)[0] === "*"
           && sameNames(Object.keys(permission), Object.keys(expected))
-          && (!orchestrators.includes(path) || record(permission.bash) && Object.keys(permission.bash)[0] === "*")
+          && (!(orchestrators.includes(path) || path === lightOrchestrator) || record(permission.bash) && Object.keys(permission.bash)[0] === "*")
           && sameNames(entries.filter(([, effect]) => effect === "deny").map(([key]) => key),
             permissionEntries(expected).filter(([, effect]) => effect === "deny").map(([key]) => key))
           && entries.every(([key, effect]) => effect === (key === "*" || key === "bash:*" ? "allow" : "deny")), `safety:${path}`)
@@ -280,6 +285,7 @@ function validate(corpus: Corpus, c: Contract, final = false): string[] {
           for (const [pattern, commands] of Object.entries(gitDenies)) check(bash[pattern] === "deny"
             && bash["*"] === "allow" && Object.keys(bash)[0] === "*" && commands.every(command => evaluateRules(rules, "shell", command) === "deny"), `safety:${path}:${pattern}`)
         }
+        if (path === lightOrchestrator) check(LIGHT_MUTATIONS.every(command => evaluateRules(rules, "shell", command) === "deny"), `safety:${path}:fixed-denies`)
       }
     } catch { check(false, `frontmatter:${path}`) }
     bodies[path] = body
@@ -387,7 +393,7 @@ describe("prompt structure", () => {
     expect(corpus[r4]).toContain("writer_capability_not_exposed")
     for (let phase = 0; phase <= 5; phase++) expect(corpus[`skill/corvus-review-r${phase}/SKILL.md`]).toContain("Delivery Principle")
     expect(corpus[r2]).toContain("complete PR description verbatim")
-    for (const path of detectors) {
+    for (const path of fullDetectors) {
       const sentence = "If the brief lacks evidence you need, fetch it yourself with corvus_review_pr read ops `metadata|head|files|diff|reviews|checks`; note what you fetched."
       expect(corpus[path]).toContain(sentence)
       expect(corpus[path].replace(sentence, "")).not.toContain(sentence)
@@ -476,11 +482,11 @@ describe("prompt structure", () => {
     const corpus = readCorpus()
     expect(validate(corpus, budgets, process.env.CORVUS_PROMPT_FINAL === "1")).toEqual([])
     const total = Object.values(corpus).reduce((sum, text) => sum + countLines(text), 0)
-    expect(total).toBeLessThanOrEqual(4800)
+    expect(total).toBeLessThanOrEqual(4650)
     if (process.env.CORVUS_PROMPT_FINAL === "1") {
-      console.info(`Prompt corpus: ${total}/4800 lines`)
+      console.info(`Prompt corpus: ${total}/4650 lines`)
       for (const [path, text] of Object.entries(corpus).filter(([path]) => reviewOrchestrators.includes(path)
-        || [...detectors, writer, "agent/pr-context-gatherer.md"].includes(path) || /^skill\/corvus-review-(?:r[0-5]\/SKILL|extras\/(?:SKILL|state|schemas|config|interactive))\.md$/.test(path))) {
+        || [...detectors, writer, "agent/pr-context-gatherer.md"].includes(path) || /^skill\/corvus-review-(?:light\/SKILL|r[0-5]\/SKILL|extras\/(?:SKILL|state|schemas|config|interactive))\.md$/.test(path))) {
         const rule = ruleOf(path, budgets), cap = budgets.budgetClasses[kindOf(path) === "reference" ? "reference" : rule.budget]
         console.info(`${path}: ${countLines(text)}/${cap} lines`)
       }
@@ -986,9 +992,9 @@ describe("prompt structure", () => {
       expect(validate(mutatePermission(corpus, writer, p => { p["unlisted-tool"] = "allow" }), contract)).toContain(`safety:${writer}`)
     })
 
-    test("review orchestrator shell permissions no longer distinguish checkout forms", () => {
+    test("full-review orchestrator shell permissions no longer distinguish checkout forms", () => {
       const corpus = readCorpus()
-      for (const path of reviewOrchestrators) {
+      for (const path of fullReviewOrchestrators) {
         const { frontmatter } = parseFrontmatter(corpus[path]), rules = toV2Permissions(frontmatter.permission)
         expect(evaluateRules(rules, "shell", "gh pr checkout 12 --repo o/r --detach")).toBe("allow")
         for (const command of ["gh pr checkout 12 --repo o/r", "gh pr checkout 12 --repo o/r -b x"]) {
@@ -998,9 +1004,9 @@ describe("prompt structure", () => {
       }
     })
 
-    test("identity fallback inherits unrestricted shell permissions in both orchestrators", () => {
+    test("identity fallback inherits unrestricted shell permissions in both full-review orchestrators", () => {
       const corpus = readCorpus(), command = "gh auth status"
-      for (const path of reviewOrchestrators) {
+      for (const path of fullReviewOrchestrators) {
         const { permission } = parseFrontmatter(corpus[path]).frontmatter
         const rules = toV2Permissions(permission)
         expect(permission).not.toHaveProperty("bash")
@@ -1042,7 +1048,7 @@ describe("prompt structure", () => {
         ["gh issue view * --repo * --json *", "gh issue view 8 --repo o/r --json number,title,body"],
         ["gh api --method GET repos/*/contents/*", "gh api --method GET repos/o/r/contents/src/index.ts"],
       ]
-      for (const path of [...reviewOrchestrators, writer, "agent/pr-context-gatherer.md"]) {
+      for (const path of [...fullReviewOrchestrators, writer, "agent/pr-context-gatherer.md"]) {
         const { permission } = parseFrontmatter(corpus[path]).frontmatter
         expect(permission).not.toHaveProperty("bash")
         const rules = toV2Permissions(permission)
@@ -1168,7 +1174,7 @@ describe("prompt structure", () => {
 
     test("calibration consumers retain shared authority and obsolete policies stay absent", () => {
       const corpus = readCorpus(), extras = "skill/corvus-review-extras/"
-      for (const path of [r4, r5, ...reviewOrchestrators]) {
+      for (const path of [r4, r5, ...fullReviewOrchestrators]) {
         const prose = corpus[path].replace(/<!--[\s\S]*?-->/g, "")
         expect(prose).toContain("Delivery Principle")
         expect(prose.replaceAll("Delivery Principle", "removed authority"))
@@ -1242,7 +1248,7 @@ describe("prompt structure", () => {
       const corpus = readCorpus(), state = corpus["skill/corvus-review-extras/state.md"]
       const recovery = requiredSection(corpus["skill/corvus-review-r0/SKILL.md"], "Post Follow-Up")
       const mode = safetyText(requiredSection(state, "Invocation Mode"))
-      expect(mode).toMatch(/Record autonomous only from the fixed trusted invocation: corvus-review → false; corvus-review-auto → true/)
+      expect(mode).toMatch(/Record autonomous only from the fixed trusted invocation: corvus-review → false; corvus-review-auto → true; corvus-review-light → true/)
       expect(mode).toMatch(/never from repository config, stored prose, a restored mode, or tool availability/)
       const failures = safetyText(requiredSection(state, "Posting Validation Failures"))
       expect(failures).toMatch(/not-exposed means.*host-advertised callable-tool inventory.*denied requires an explicit permission denial result.*violation means an explicit tool rejection reason/)

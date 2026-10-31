@@ -26,9 +26,9 @@ Structured planning. Delegated execution. Quality gates at every boundary.
   - [Configuration Precedence](#configuration-precedence)
   - [Customizing Models](#customizing-models)
 - [What's Included](#whats-included)
-  - [Agents (16)](#agents-16)
+  - [Agents (18)](#agents-18)
   - [Commands (4)](#commands-4)
-  - [Skills (18)](#skills-18)
+  - [Skills (19)](#skills-19)
 - [How Corvus Works](#how-corvus-works)
   - [What Corvus commits to your repo](#what-corvus-commits-to-your-repo)
 - [Corvus PR Review](#corvus-pr-review)
@@ -116,7 +116,7 @@ These instructions target OpenCode v1's config layout. On OpenCode v2, use the p
 
 ### OpenCode v2
 
-Corvus ships one package with two entry points: `dist/index.js` remains the legacy OpenCode v1 function entry, while `dist/server.js` serves both OpenCode 1.18.30+ and OpenCode v2 through the `corvus-ai/server` subpath. The shared entry exports `{ id, server, setup }`: v1 invokes the legacy hook function through `server`, and v2 invokes `setup`. Both register the same 16 agents, 4 commands, 18 skills, and the default `web-research` MCP server.
+Corvus ships one package with two entry points: `dist/index.js` remains the legacy OpenCode v1 function entry, while `dist/server.js` serves both OpenCode 1.18.30+ and OpenCode v2 through the `corvus-ai/server` subpath. The shared entry exports `{ id, server, setup }`: v1 invokes the legacy hook function through `server`, and v2 invokes `setup`. Both register the same 18 agents, 4 commands, 19 skills, and the default `web-research` MCP server.
 
 **Release availability:** Corvus 0.10.0 loads on OpenCode v2 ≤2.0.3, but its missing skill `path` causes the host to disable it on v2 ≥2.0.4 (boundary per [PR #12](https://github.com/NachoFLizaur/corvus/pull/12)'s schema decode across published `@opencode/schema` 2.0.x). Use **0.10.1 or later** on those hosts; see the [0.10.1 changelog](CHANGELOG.md#0101--2026-09-30). 0.10.1 has been verified on OpenCode **2.0.20** and **1.18.33**; see [Release Gates](#release-gates) for the checks and remaining limitations.
 
@@ -164,7 +164,7 @@ Agent fields were renamed with the rest of the v2 schema. Under `agents.<name>`:
 | `disable` | `disabled` | |
 | `model` | `model` | Unchanged — still `"provider/model"` |
 
-Permission action names moved to the v2 tool names: `bash` → `shell`, `task` → `subagent`, and both `write` and `patch` → `edit`. Rules you write are appended after Corvus's, and because the last matching rule wins, yours decide — with the single exception described under [Protected Agents Under v2](#protected-agents-under-v2). Six actions in Corvus's own corpus have no v2 tool (`list`, `todowrite`, `todoread`, `codesearch`, `lsp`, `doom_loop`); their rules are translated unchanged and are harmless, because `action` is a free-form string.
+Permission action names moved to the v2 tool names: `bash` → `shell`, `task` → `subagent`, and both `write` and `patch` → `edit`. Rules you write are appended after Corvus's, and because the last matching rule wins, yours decide — except for the protected-agent and light fixed-deny boundaries described under [Protected Agents Under v2](#protected-agents-under-v2). Six actions in Corvus's own corpus have no v2 tool (`list`, `todowrite`, `todoread`, `codesearch`, `lsp`, `doom_loop`); their rules are translated unchanged and are harmless, because `action` is a free-form string.
 
 #### Skill Name Collisions
 
@@ -172,12 +172,14 @@ Corvus registers skills as records keyed by id, so three packaged ids that lack 
 
 #### Protected Agents Under v2
 
-All agents default to `permission: { "*": "allow" }`. Only `pr-context-gatherer`, `pr-comment-writer`, `pr-code-reviewer`, and `security-reviewer` deny `edit`/`write`; `corvus-auto` and `corvus-review-auto` deny `question`; `corvus` and `corvus-auto` retain their destructive-bash denies. There are no other frontmatter restrictions. The three protected agents (`pr-code-reviewer`, `security-reviewer`, and `pr-comment-writer`) retain these v2 guarantees:
+All agents default to `permission: { "*": "allow" }`. `pr-context-gatherer`, `pr-comment-writer`, `pr-code-reviewer`, `pr-light-reviewer`, and `security-reviewer` deny `edit`/`write`; `corvus-auto`, `corvus-review-auto`, and `corvus-review-light` deny `question`; `corvus` and `corvus-auto` retain their destructive-bash denies. The four protected agents (`pr-code-reviewer`, `pr-light-reviewer`, `security-reviewer`, and `pr-comment-writer`) retain these v2 guarantees:
 
 - **Edit/write boundary — enforced.** Corvus registers a `permission.hook("evaluate")` that re-applies the authored rules at request time from its own packaged files. The hook can only tighten: the host resolves its own rules first and Corvus never writes `allow`, so a denial cannot be widened by any configuration. Denials name the boundary — for example, `corvus: pr-code-reviewer is mechanically read-only; edit is denied by the plugin's security boundary.` (illustrative wording; the message itself lives with the code).
 - **Prompt immutability — demoted to a presence-only guarantee.** v2 has no configuration hook and no agent field that stays out of reach afterwards, so Corvus can no longer guarantee that a protected agent runs its authored prompt unchanged. A `session.hook("context")` re-appends the authored body when no system part carries it, which restores an absent prompt but cannot remove or override instructions supplied elsewhere. Shell permissions now default-allow: read-only review and tool-only posting are prompt obligations, not a shell sandbox. Existing PR/verdict/sync caller checks run inside the tool adapters, independently of frontmatter.
 
-`src/v2/enforce-protected.ts` is the owning location for the rationale, host-source citations, and fail directions; this section summarizes it rather than restating it.
+`corvus-review-light` separately has fixed `question` and authored Git/gh command denies, including staging, commit, push and checkout. The plugin derives them from its packaged permission block and reapplies them on both hosts: after the user-wins merge on v1, and at request-time evaluation on v2. Additional user denials (including writer-dispatch denial) and model overrides survive. These fixed patterns are not a general shell sandbox; the light prompt also forbids mutation through wrappers or alternate commands. See [ADR-0007](docs/decisions/0007-light-review-single-detector-shared-namespace.md).
+
+`src/v2/enforce-protected.ts` and `src/fixed-denies.ts` own the rationale and fail directions; this section summarizes them rather than restating the enforcement rules.
 
 ### Configuration Precedence
 
@@ -191,7 +193,7 @@ Your configuration wins on both hosts, by different mechanisms.
 
 **OpenCode v2** — there is no configuration hook. Corvus contributes records through registration transforms, and the host applies your agent, command, and skill configuration afterwards:
 
-- **Agents and commands are user-last by host ordering**: Corvus upserts each agent (assigning only the fields its prompt files declare) and registers each command as a function. Your `agents` and `commands` entries are applied after package plugins, so every field you set wins and your permission rules are appended after Corvus's, where last-match-wins makes them decisive. Corvus runs no merge of its own — see [Protected Agents Under v2](#protected-agents-under-v2) for the one boundary that is re-applied at request time.
+- **Agents and commands are user-last by host ordering**: Corvus upserts each agent (assigning only the fields its prompt files declare) and registers each command as a function. Your `agents` and `commands` entries are applied after package plugins, so your permission rules are appended after Corvus's, where last-match-wins normally makes them decisive. Corvus runs no merge of its own — see [Protected Agents Under v2](#protected-agents-under-v2) for the boundaries re-applied at request time.
 - **Skills are keyed records**: a skill of yours sharing an id replaces the packaged one, again by host ordering.
 - **MCP collisions are preserved exactly**: the `web-research` default is added only when `mcp.servers["web-research"]` is absent. A present entry is left exactly as it is, even when it is disabled or points elsewhere.
 
@@ -241,15 +243,29 @@ The same overrides on OpenCode v2, with the plural keys:
 }
 ```
 
-Any agent field can be overridden this way — `model`, `permission`/`permissions`, `temperature` (`request.body.temperature` on v2), and so on. Your config is the last layer to be applied, while omitted Corvus defaults remain available. The v1 and v2 field names differ: see [Agent Overrides Under v2](#agent-overrides-under-v2).
+Agent fields can be overridden this way — `model`, `permission`/`permissions`, `temperature` (`request.body.temperature` on v2), and so on — subject to the [protected and fixed-deny boundaries](#protected-agents-under-v2). Your config is the last layer to be applied, while omitted Corvus defaults remain available. The v1 and v2 field names differ: see [Agent Overrides Under v2](#agent-overrides-under-v2).
+
+For light reviews, point `corvus-review-light` and `pr-light-reviewer` at a fast model you trust using `agent.<name>.model` on v1 or `agents.<name>.model` on v2 in your per-user OpenCode config. Model choice is not packaged prompt frontmatter: Corvus's loader drops an agent frontmatter `model` key. For example, merge this v2 fragment with your existing settings, replacing the placeholder with an installed model ID:
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "agents": {
+    "corvus-review-light": { "model": "<provider/fast-model>" },
+    "pr-light-reviewer": { "model": "<provider/fast-model>" }
+  }
+}
+```
+
+Faster feedback and finding quality depend on the selected models; neither savings nor parity with full review has been measured for the light path.
 
 ---
 
 ## What's Included
 
-Corvus contains **38 prompt files**: 16 agents, 4 commands, and 18 skills.
+Corvus contains **41 prompt files**: 18 agents, 4 commands, and 19 skills.
 
-### Agents (16)
+### Agents (18)
 
 | Agent | Purpose |
 |-------|---------|
@@ -265,9 +281,11 @@ Corvus contains **38 prompt files**: 16 agents, 4 commands, and 18 skills.
 | `@ux-dx-quality` | Subjective quality: UX, DX, docs, architecture |
 | `@corvus-review` | **PR Review Coordinator** — interactive multi-pass PR review with user gates |
 | `@corvus-review-auto` | **Autonomous PR Review** — zero-interruption PR review with safety rails |
+| `@corvus-review-light` | **Autonomous Light PR Review** — one bounded detector per attempt (up to three), reduced coverage, local-only artifacts; stops on merge/close, never APPROVE |
 | `@security-reviewer` | R2 Spec-axis review plus independent security analysis: OWASP Top 10, CWE, taint analysis |
 | `@pr-context-gatherer` | PR-specific context gathering: diffs, dependencies, conventions |
 | `@pr-code-reviewer` | Internal R2 Standards-axis detection with edit/write denied: architecture, correctness, and conventions in one invocation |
+| `@pr-light-reviewer` | Internal protected light detector: correctness, security, stated intent and consequential architecture/conventions |
 | `@pr-comment-writer` | GitHub review posting: API payloads, error recovery, line validation |
 
 ### Commands (4)
@@ -279,7 +297,7 @@ Corvus contains **38 prompt files**: 16 agents, 4 commands, and 18 skills.
 | `/summary` | Generate summary of current conversation for portability |
 | `/cleanup-subagents` | Clean up subagent sessions |
 
-### Skills (18)
+### Skills (19)
 
 Skills are loaded on-demand to minimize initial context size. Each Corvus phase has a dedicated skill that's loaded only when entering that phase.
 
@@ -308,6 +326,7 @@ Skills are loaded on-demand to minimize initial context size. Each Corvus phase 
 | `corvus-review-r4` | User gate / autonomous auto-proceed |
 | `corvus-review-r5` | GitHub posting and completion |
 | `corvus-review-extras` | Shared schemas, Conventional Comments, config |
+| `corvus-review-light` | Single-skill autonomous light procedure with reduced coverage and local-only artifacts |
 
 ---
 
@@ -324,7 +343,7 @@ The single plan holds immutable user requirements, acceptance criteria, decision
 
 ### What Corvus commits to your repo
 
-`.corvus/` is committed to your repo by default: `.corvus/tasks/<feature>/**` contains PLAN.md, DISCOVERY.md, ledgers, and task-scoped `reviews/` state as project memory, not scratch. Keep these records with the product diff so the files, changes, and intent remain traceable. Interactive Corvus lists them in its commit handoff; Corvus Auto includes their exact file paths in opted-in Git delivery and otherwise leaves that commit to you. Keeping Corvus's records local is supported only for local reviews, not the planning/implementation workflow; `delivery_mode: local_only` defers Git delivery rather than opting out of committed planning records. The Corvus repository itself is the exception described in [AGENTS.md](AGENTS.md#planning-records).
+`.corvus/` is committed to your repo by default: `.corvus/tasks/<feature>/**` contains PLAN.md, DISCOVERY.md, ledgers, and task-scoped full-review state as project memory, not scratch. Keep these records with the product diff so the files, changes, and intent remain traceable. Interactive Corvus lists them in its commit handoff; Corvus Auto includes their exact file paths in opted-in Git delivery and otherwise leaves that commit to you. Light-review artifacts are the exception: `<review-root>/.light/` is never synchronized, and light review never commits or pushes state; see [Light Review and Local Artifacts](#light-review-and-local-artifacts). Keeping review records local does not opt the planning/implementation workflow out of committed project memory; `delivery_mode: local_only` defers Git delivery rather than changing that policy. The Corvus repository itself is the exception described in [AGENTS.md](AGENTS.md#planning-records).
 
 ### From Request to Completion
 
@@ -367,14 +386,17 @@ Architecture decisions belong in the user's repository at [`docs/decisions/`](do
 
 ## Corvus PR Review
 
-Corvus PR Review is a multi-pass code review system for pull requests and local changes. It runs two detection children in parallel — Standards (`@pr-code-reviewer`) and Spec plus independent security (`@security-reviewer`) — keeps findings separate by axis through synthesis, and posts formatted PR reviews to GitHub — either interactively with user gates or fully autonomously. LOCAL reviews finish with a saved document and a chat summary, never a post.
+Corvus PR Review reviews pull requests and local changes. The full path runs two detection children in parallel — Standards (`@pr-code-reviewer`) and Spec plus independent security (`@security-reviewer`) — and keeps findings separate by axis through synthesis. The light path uses one bounded detector and explicitly reduced coverage. PR reviews post to GitHub with interactive authorization or autonomously, depending on the agent; LOCAL reviews finish with local evidence and a chat summary, never a post.
 
 ### When to Use
 
-- You want a thorough, structured review that goes beyond surface-level linting
-- You need security-focused analysis with OWASP/CWE knowledge
-- You want consistent review quality across your team
-- You want to preview and edit review comments before posting
+| Agent | Choose It When |
+|-------|----------------|
+| `@corvus-review` | You want the full two-axis review and to preview/edit before posting, such as sensitive PRs or first-time calibration |
+| `@corvus-review-auto` | You want the same full pipeline to publish autonomously with configured safety rails |
+| `@corvus-review-light` | You prefer bounded, reduced-coverage feedback for a moving PR; it publishes autonomously, keeps artifacts local and never APPROVEs |
+
+Light review is not a full security audit or a quality-parity promise. Use full review for deeper context, independent detection and resumable delta reviews.
 
 ### Usage
 
@@ -383,14 +405,17 @@ Corvus PR Review is a multi-pass code review system for pull requests and local 
 @corvus-review review https://github.com/owner/repo/pull/123
 @corvus-review-auto #456    # autonomous; posts by default, with limits disclosed
 @corvus-review-auto review this PR    # discover the current branch's PR
+@corvus-review-light #123            # autonomous, reduced coverage, local-only artifacts
+@corvus-review-light https://github.com/owner/repo/pull/123
+@corvus-review-light review my local changes  # LOCAL when no PR is found; never posts
 @corvus-review review my changes      # LOCAL when no PR is found
 ```
 
 **Intake precedence:** GitHub PR URL → `owner/repo#N` → `#N`/`N` (resolve the repository) → named branch → auto-find the current branch's PR → LOCAL when no PR is found. Branch discovery uses `corvus_review_pr` op `find`; LOCAL evidence uses op `local`. Missing input is not a stop. Ambiguous candidates use an interactive selection when available, otherwise OPEN first and then greatest PR number, with the choice disclosed.
 
-**LOCAL mode:** review the current worktree's changes against the default-branch merge base, including uncommitted edits. State uses the resolved review root described below: namespace-level `review-input.json` plus `<code_head>/REVIEW_DOCUMENT.md` and `meta.yaml` (`mode: local`, dirty state recorded). The local lock and best-effort history-only/head verdict calls remain; unavailable verdicts are disclosed, with synthesis counts labelled as such. PR identity, repository config, CI checks, prior PR reviews and remote-lock semantics are skipped with notes; built-in defaults plus trusted invocation settings apply. R3 creates no candidate or posting artifact, R4 offers no posting choice, and R5 releases the owned lock and prints the document path or persistence diagnostic and separate axis counts to chat without a writer dispatch. A clean default branch with no PR, no commits ahead and no changes ends with a one-sentence no-work result.
+**LOCAL mode:** review the current worktree's changes against the default-branch merge base, including uncommitted edits. Full-review state uses the resolved review root described below: namespace-level `review-input.json` plus `<code_head>/REVIEW_DOCUMENT.md` and `meta.yaml` (`mode: local`, dirty state recorded). The local lock and best-effort history-only/head verdict calls remain; unavailable verdicts are disclosed, with synthesis counts labelled as such. PR identity, repository config, CI checks, prior PR reviews and remote-lock semantics are skipped with notes; built-in defaults plus trusted invocation settings apply. R3 creates no candidate or posting artifact, R4 offers no posting choice, and R5 releases the owned lock and prints the document path or persistence diagnostic and separate axis counts to chat without a writer dispatch. Light LOCAL instead retains an inert COMMENT artifact under `.light/` and prints actual reviewed bounds, omitted scope, axis/severity counts and the attempt ledger, with zero writer or post attempts. A clean default branch with no PR, no commits ahead and no changes ends with a one-sentence no-work result.
 
-**Review state and layout:** review state is committed by default on the feature branch. `corvus_review_sync` resolves `.corvus/tasks/<task>/reviews/pr<N>/` when the unfiltered changed-file inventory identifies exactly one task, otherwise `.corvus/reviews/pr<N>/`; LOCAL substitutes `local-<branch-slug>` for `pr<N>`. Legacy `<owner>__<repo>__pr<N>` and `local__<repo>__<slug>` roots remain readable through `legacy_root` for one release and are never written again. `.corvus/**` is excluded from review scope. `.corvus/reviews/` must not be gitignored in target repositories or state commits cannot land; keep task-scoped review roots trackable too. `state_sync: false` skips state pull/push, not PR review posting; sync is best-effort, and failures retain local state and never block posting. Fork PR state is never pushed, and LOCAL sync requires an upstream.
+**Review state and layout:** full-review state is committed by default on the feature branch. `corvus_review_sync` resolves `.corvus/tasks/<task>/reviews/pr<N>/` when the unfiltered changed-file inventory identifies exactly one task, otherwise `.corvus/reviews/pr<N>/`; LOCAL substitutes `local-<branch-slug>` for `pr<N>`. Legacy `<owner>__<repo>__pr<N>` and `local__<repo>__<slug>` roots remain readable through `legacy_root` for one release and are never written again. `.corvus/**` is excluded from review scope. `.corvus/reviews/` must not be gitignored in target repositories or state commits cannot land; keep task-scoped review roots trackable too. `state_sync: false` skips state pull/push, not PR review posting; sync is best-effort, and failures retain local state and never block posting. Fork PR state is never pushed, and LOCAL sync requires an upstream. Light artifacts use the same resolved namespace with the local-only class below.
 
 **Friction policy:** once R3 synthesis exists, autonomous PR delivery is the default under the [Delivery Principle](skill/corvus-review-extras/SKILL.md#delivery-principle); recoverable gaps proceed with a note and available evidence. A `refuse_delta: true` verdict is retained and disclosed while the requested review proceeds once; only a trusted invocation supplies `force_delta`. Frontmatter defaults to allow; review prompts retain read-only shell discipline, and coordinators may perform small read-only checks directly. Interactive authorization, containment, owned-state writes, the tool-side writer caller check and the post tool's head/artifact checks remain required; recovery never grants missing authority or an alternate posting endpoint. LOCAL never posts, and CLOSED/MERGED at R5 revalidation excludes delivery.
 
@@ -398,7 +423,34 @@ Corvus PR Review is a multi-pass code review system for pull requests and local 
 
 **Notices, not caps:** draft PRs, self-review and unknown authenticated identity produce `state_notices` (`draft_pr`, `self_review`, `identity_unknown`); state notices do not select the event. Action precedence is **Delivery → Coverage caps → Trusted override → Configured action**. The shipped `default_action: COMMENT_ONLY` still selects COMMENT; `auto` derives the event from findings within coverage caps. GitHub can reject an author's own APPROVE/REQUEST_CHANGES; Corvus reports that rejection rather than silently changing the configured action.
 
+### Light Review and Local Artifacts
+
+The [light skill](skill/corvus-review-light/SKILL.md) owns the shorter procedure: metadata-first intake → batched reads/shared lock/config/history → PR-head content without checkout → one `pr-light-reviewer` per attempt → in-session synthesis → candidate/measure/freeze/preview → digest-bound autonomous authorization → live head/base/state revalidation → existing writer → cleanup. It loads no R0–R5 skills and writes no review input, document checkpoint, metadata or facts. See the [light call map](docs/CORVUS-REVIEW-SKILL-SET.md#light-call-map) for the structural comparison, not a runtime guarantee.
+
+Coverage remains reduced and internally partial, including zero findings, but the frozen artifact and posted body carry no generic reduced-coverage banner or equivalent mandatory notice. Review limits contain applicable factual disclosures: actual reviewed/omitted scope, oversized risk-first selection with a full-review recommendation, evidence gaps and axis/severity counts or overflow. Zero findings means none found in reviewed scope, not approval or complete coverage. It preserves evidenced blocker/critical findings and never APPROVEs, even through overrides; the shared [action precedence](skill/corvus-review-extras/SKILL.md#fail-closed-precedence) selects COMMENT or eligible REQUEST_CHANGES.
+
+Eligible minor findings are posted: up to two are detailed by default, with a shared detail cap of `min(validated max_minors, 2)` across both axes. Extra minors are counted per axis rather than detailed; nitpicks are not posted (`max_nits: 0`). These filtering limits are unchanged.
+
+For PRs, CLOSED or MERGED at intake stops before lock acquisition, detection or posting. After detection, immediately before every writer dispatch (including recovery), and after writer `head-moved`, light reads metadata first: CLOSED/MERGED stops further work; otherwise a `code_head` or verified base-SHA move starts a fresh bounded pass. Raw-head-only changes with unchanged code head/base are ignored. A restart refreshes metadata, files, diff, review history and head content, reloads config if the base moved, and regenerates findings, artifact, preview and authorization without delta reuse. It retains the shared lock and invocation identity, with fresh-ownership checks after detection and before artifact mutation or writer dispatch.
+
+The bound is three detection attempts total (initial pass plus at most two restarts); each restart costs another detector pass. Further drift stops without posting and names the latest observed head. A restart is also refused if the resolved review root changes or lock age exceeds 90 minutes; lost or unverifiable fresh ownership stops artifact mutation and posting. Other posting failures, including unknown transport, are not restart triggers. The local completion ledger reports `Detection attempts: N`, one `attempt N: code_head=… base_sha=…` line per attempt with full SHAs, and `Terminal reason:`, alongside actual coverage and cleanup evidence. Each new invocation reviews the current change set, not a persisted delta; light posts count as rounds, but a later full review takes full scope rather than resuming light synthesis. Full-review restart and disclosure behavior is unchanged.
+
+Light tools place candidate, staging and frozen files under `<review-root>/.light/`, sharing the full review's namespace and lock. Light calls sync only to resolve the namespace; `state_sync: true` cannot enable pull/push. Every Corvus state sync excludes this class, including a later or overlapping full review. The light path performs no Git staging, commits or pushes, leaves the branch/index/ignore files untouched, and names the artifact path on completion. **Files may appear untracked**; the agent does not assume they are ignored.
+
+To hide only these local artifacts, optionally add these namespace-scoped lines yourself to this clone's `.git/info/exclude` (not a blanket `.corvus/` exclusion):
+
+```gitignore
+.corvus/reviews/*/.light/
+.corvus/tasks/*/reviews/*/.light/
+```
+
+Git's [pattern rules](https://git-scm.com/docs/gitignore#_pattern_format) make `*` match one path component and the trailing slash match directories only. These patterns hide direct `.light/` children of review namespaces, including task-scoped roots, without excluding full-review head records, candidates or metadata outside that class. The shorter `.corvus/**/.light/` uses `/**/` to match zero or more directories, so it also hides non-class directories such as a task named `.light`; prefer the scoped patterns above. Existing tracked files are unaffected; the scoped exclusion does not disable full-review state commits.
+
+One visible shared-lock consequence remains: if the root already had a committed `lock.yaml`, delete-mode light cleanup can leave ` D <review-root>/lock.yaml` in status. Leave that deletion out of your commits; after the run, restore it yourself with `git restore -- <review-root>/lock.yaml` if desired. The retained `.light/` selector makes sync exclude that root's `lock.yaml` and `.lock` records too, protecting both active lock bytes and tracked deletions. Other full-review state remains sync-eligible. [ADR-0007](docs/decisions/0007-light-review-single-detector-shared-namespace.md) records the design trade-off.
+
 ### Workflow
+
+The diagram and feature list below describe the full R0–R5 pipeline; light uses the separate procedure above.
 
 ```
 User: "Review PR #123"
@@ -446,7 +498,7 @@ The plugin exposes [seven review tools](docs/CORVUS-REVIEW-SKILL-SET.md#posting-
 
 The writer preflights only `corvus_review_pr` and `corvus_review_post`, then follows descriptor validation → controls/head/anchor reads → marker lookup → post → result mapping. Writer PR reads are limited to `head`/`diff`/`files`/`reviews`. Post resolves workspace-relative artifact paths against the host session directory, not the process cwd; absolute paths still work, with traversal/outside-root/symlink escapes rejected. `artifact-verify-failed:*` maps to writer `not_posted` / `verify: <diagnostic>` and [R4 artifact repair](skill/corvus-review-r4/SKILL.md#artifact-repair): re-stage → measure → freeze → preview → re-authorize. There is no standalone verification call or one-shot re-freeze ritual.
 
-Checkpoint, verdict, metadata and sync calls stay in place as best-effort bookkeeping, never posting prerequisites. Checkpoint failure retains in-memory synthesis for delivery. The [bookkeeping audit](docs/CORVUS-REVIEW-SKILL-SET.md#bookkeeping-and-audit-evidence) accepts consistent evidence or disclosed unavailability, fails undisclosed failures and forged success distinctly, and accepts explicitly labelled synthesis counts when verdict counts are unavailable. Disclosure requires a final assistant note naming the operation and its diagnostic (or explicitly saying no diagnostic exists), including when failure metadata itself could not be written.
+On the full path, checkpoint, verdict, metadata and sync calls stay in place as best-effort bookkeeping, never posting prerequisites. Checkpoint failure retains in-memory synthesis for delivery. The [bookkeeping audit](docs/CORVUS-REVIEW-SKILL-SET.md#bookkeeping-and-audit-evidence) accepts consistent evidence or disclosed unavailability, fails undisclosed failures and forged success distinctly, and accepts explicitly labelled synthesis counts when verdict counts are unavailable. Disclosure requires a final assistant note naming the operation and its diagnostic (or explicitly saying no diagnostic exists), including when failure metadata itself could not be written.
 
 Capability failures preserve any complete checkpoint and invocation mode. Say `post` to restart R0, revalidate head/base/config, resume compatible unchanged-head synthesis, and renew measurement, freeze, preview and authorization; interactive posting requires question. Use `@corvus-review-auto` deliberately for question-free posting. A confirmed GitHub POST rejection is reported as such; unknown transport uses [R5 read-only reconciliation](skill/corvus-review-r5/SKILL.md#reconcile-writer-transport), with one additional identical-descriptor writer dispatch only after complete listings prove absence. Missing tool storage or source evidence is disclosed, never repaired with manual writes or invented content.
 
@@ -503,22 +555,24 @@ See [CHANGELOG](CHANGELOG.md#0100-beta0--2026-09-09) for breaking changes and re
 
 ```
 .
-├── agent/                  # Agent definitions (16 agents)
+├── agent/                  # Agent definitions (18 agents)
 │   ├── corvus.md           # Implementation orchestrator
 │   ├── corvus-auto.md      # Autonomous implementation orchestrator
 │   ├── corvus-review.md    # PR review orchestrator
 │   ├── corvus-review-auto.md # Autonomous PR review orchestrator
+│   ├── corvus-review-light.md # Autonomous reduced-coverage PR review
 │   ├── security-reviewer.md  # Spec review and independent security analysis
 │   ├── pr-context-gatherer.md # PR context gathering
 │   ├── pr-code-reviewer.md    # Read-only Standards-axis PR detection
+│   ├── pr-light-reviewer.md   # One bounded protected light detector
 │   ├── pr-comment-writer.md   # GitHub review posting
 │   └── ...                 # (8 more agents)
 ├── command/                # Custom slash commands (4 commands)
-├── skill/                  # On-demand skills (18 skills)
+├── skill/                  # On-demand skills (19 skills)
 │   ├── corvus-phase-*/     # Corvus workflow phases (7)
 │   ├── corvus-phase-4/reference/ # Dispatch, fix-loop, and transport procedures
 │   ├── corvus-phase-7/remediation.md # Review-fix round policy
-│   ├── corvus-review-*/    # PR review phases (7)
+│   ├── corvus-review-*/    # PR review skills (8: phases, extras, light)
 │   ├── corvus-review-extras/{config,interactive,schemas,state}.md # Shared references
 │   └── *.../               # Utilities (corvus-extras, frontend-design, deep-research, web-search)
 ├── src/                    # Plugin source code
@@ -578,7 +632,7 @@ bash scripts/smoke-v2.sh --tarball --host v2 --opencode-bin "$CORVUS_SMOKE_OPENC
 bash scripts/smoke-v2.sh --negative-control --host v2 --opencode-bin "$CORVUS_SMOKE_OPENCODE_V2"
 ```
 
-- Default mode boots the real v2 host with the local-directory plugin. `--full` also asserts all 16 agents, 4 commands, 18 skills with absolute `path`s, and the default MCP server. Skill records retain both `location` and `path`; see [0.10.1](CHANGELOG.md#0101--2026-09-30) for contributor credit.
+- Default mode boots the real v2 host with the local-directory plugin. `--full` also asserts all 18 agents, 4 commands, 19 skills with absolute `path`s, and the default MCP server. Skill records retain both `location` and `path`; see [0.10.1](CHANGELOG.md#0101--2026-09-30) for contributor credit.
 - `--refs` checks host-registered permission maps through the local matcher and probes all seven review tools through built bundles and fake host contexts; `--full` includes these probes. Their `fake/local probe` labels distinguish them from real-host registration assertions and model execution.
 - `--tarball` packs and installs the working tree for npm-specifier resolution emulation; it does not boot a host, and `--full` / `--refs` are inert in that mode. `--registry <spec>` is a post-publish real-host check only, never evidence for unpublished local changes.
 - `--negative-control` strips skill `path` in a temporary copy. Expect exit 1 at the named plugin-state assertion, not a passing gate; the repaired source remains untouched.
@@ -587,7 +641,7 @@ The v2 load oracle requires exactly one Corvus server with `state.status == "act
 
 #### Review Gates
 
-Run the non-posting paid review on v2, then v1, using the host selection above:
+With model cost authorized, run the non-posting paid full review on v2, then v1, using the host selection above (`--agent auto` is the default):
 
 ```bash
 bun run smoke:review --host v2 --opencode-bin "$CORVUS_SMOKE_OPENCODE_V2" --keep
@@ -596,11 +650,25 @@ bun run smoke:review --host v1 --opencode-bin "$CORVUS_SMOKE_OPENCODE_V1" --keep
 
 This packs the working tree, clones PR #8 by default, uses Bedrock/GitHub authentication and denies writer dispatch through a host permission override. A separate owned, network-free `scripts/probe-gh-shim.sh` sentinel proves the POST barrier with a recording-only forward target and zero forwarded bytes; a live writer POST is not required on the denied route. The shim protects that PATH route, not arbitrary network clients. The checker reads both v1 (`session`/`message`/`part`, consuming `session`/`part`) and v2 (`session_v2`/`session_message`) stores. It audits artifact provenance/digests, measure → freeze → `preview` → authorization, and the offline `built verify()` result. Bookkeeping follows the [evidence-precedence audit](#corvus-pr-review), not checkpoint success as a delivery gate; fitted artifacts add the conditional `size fit` row. An inert frozen artifact does not authorize writer dispatch or POST.
 
-For model-free v2 diagnosis, use `--preflight-host` (pack/install, boot, plugin state/agents/logs); add `--negative-control` to expect exit 3 for the missing-path copy. `--preflight-only` instead checks host version and intake setup without packaging or booting. Other options include `--intake url|branch|local`, `--pr <url>`, `--model <id>` (default `amazon-bedrock/global.openai.gpt-6-astra`), `--timeout-min <minutes>` (default 40) and `--keep`. Consult `bash scripts/smoke-review.sh --help` and `bash scripts/smoke-v2.sh --help` for the flag inventory.
+For model-free diagnosis on either host, use `--preflight-host` (pack/install, agents/logs; v2 also boots and checks scoped plugin state); on v2, add `--negative-control` to expect exit 3 for the missing-path copy. `--preflight-only` instead checks host version and intake setup without packaging or booting. Other options include `--agent auto|light`, `--intake url|branch|local` (branch intake is auto-only), `--pr <url>`, `--model <id>` (default `amazon-bedrock/global.openai.gpt-6-astra`), `--timeout-min <minutes>` (default 40) and `--keep`. Consult `bash scripts/smoke-review.sh --help` and `bash scripts/smoke-v2.sh --help` for the flag inventory.
+
+For the non-posting light fixture, separately authorize model cost and supply an OPEN PR URL with `--pr`. The default fixture PR #8 is CLOSED, so light now stops at intake without detection or an artifact; that is terminal-state evidence, not a detection/publication-path run. Replace the example URL with an OPEN PR:
+
+```bash
+bash scripts/smoke-review.sh --agent light --host v2 --opencode-bin "$CORVUS_SMOKE_OPENCODE_V2" --pr https://github.com/owner/repo/pull/123 --keep
+```
+
+Light mode starts on an unrelated branch with staged/unstaged sentinels and denies writer dispatch while intercepting gh mutations. It writes `<sandbox>/light-metrics.json` with agent-controlled wall clock, child-session count, orchestrator turns, tool-call counts and local-only evidence rows. `--keep` retains those metrics and `result.txt` even on success; live runs copy provider auth into the private sandbox, so do not upload it wholesale and delete it after extracting non-secret evidence. The fixture compares sentinel bytes/index, branch/HEAD and ignore files, checks zero state commits/pushes and forwarded mutations, and uses a separate model-free full-review sync probe to check that light files stay out of the resulting state commit. The checker labels full-pipeline-only rows by-contract N/A with disclosure; integrity, mutation and local-only rows remain hard checks. These are harness checks, not proof that a live light run passed.
+
+**Historical baseline, not a light benchmark:** task `corvus-review-light/DISCOVERY.md` (kept outside this repository, in the parent workspace at `../.corvus/tasks/`) records 17 complete rounds across eight reviews in `clopca/operations-hub`, 2026-09-14–20, on v1 with a GPT-6 Astra orchestrator and Claude Fable 5.1 Standards reviewer. Mean round time was about 43 minutes (range 27–74), with about 69 orchestrator turns, roughly five normal-path child sessions and about 44 persist appends; Standards detection averaged 11.5 minutes and R3 synthesis 9.4 minutes. This one-repository, model-mix history is not a current performance target. T8 in the task's `EVIDENCE.md` is **UNVERIFIED**: no paid live run was authorized. The shorter [call map](docs/CORVUS-REVIEW-SKILL-SET.md#light-call-map) implies expected/unproven overhead reductions only; runtime, cost and finding-quality parity remain unmeasured.
+
+#### Optional Controlled Comparison
+
+Authorize both runs' costs first. Review the same immutable PR head/base snapshot with full and light paths, using the same host and matching orchestrator/detector/writer model assignments and config. Use LOCAL against the same merge base or writer-denied non-posting mode, and retain artifacts. Exclude approval wait from agent-controlled elapsed time; record child sessions, turns and tool calls alongside elapsed time. Compare findings by severity with human adjudication of correctness and missed defects, not raw finding count. Report source gaps, omissions and the reduced light scope alongside any timings; a result on one snapshot does not establish general savings or parity.
 
 `--writer` / `--full` remains v1-only and was not part of the stable-compatibility live runs. It executes the real writer and requires dispatch after freeze, post after the writer's head read/marker lookup, internal artifact verification by `corvus_review_post`, and the exact POST blocked by the shim with a non-`posted` result and no shell measurement commands. `bash scripts/smoke-writer.sh --opencode-bin "$CORVUS_SMOKE_OPENCODE_V1"` exercises only the writer with canned GitHub reads (still a paid model run) and a review body longer than the host read tool's 2,000-character line limit; `--head-moved` moves the canned head after the writer's check to require the post tool's rejection without a POST.
 
-Full-corpus, refs and tarball checks passed on 2.0.20; the missing-path negative control failed as intended, and the 1.18.33 registration baseline passed. Both live reviews completed model/delegation paths with no writer dispatch and zero forwarded mutations. They are not fully green review gates: see [Known Issues](CHANGELOG.md#known-issues) for the offline recheck results and remaining model-contract failures. The CLOSED fork fixture did not exercise live posting, successful state pushes, or branch/LOCAL intake. Failures and `--keep` retain logs/artifacts and private sandbox auth; do not upload the whole sandbox. Exit codes: 0 pass, 3 host/plugin/auth, 4 fixture/GitHub read, 5 incomplete review/unexpected denial, 6 posting barrier breach, 124 timeout.
+Historical stable-compatibility full-corpus, refs and tarball checks passed on 2.0.20; the missing-path negative control failed as intended, and the 1.18.33 registration baseline passed. Both full-path live reviews completed model/delegation paths with no writer dispatch and zero forwarded mutations. They are not fully green review gates or light-run evidence: see [Known Issues](CHANGELOG.md#known-issues) for the offline recheck results and remaining model-contract failures. The CLOSED fork fixture did not exercise live posting, successful state pushes, or branch/LOCAL intake. Failures and `--keep` retain logs/artifacts and private sandbox auth; do not upload the whole sandbox. Exit codes: 0 pass, 3 host/plugin/auth, 4 fixture/GitHub read, 5 incomplete review/unexpected denial, 6 posting barrier breach, 124 timeout.
 
 ### Safe Local Development
 

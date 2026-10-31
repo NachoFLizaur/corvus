@@ -4,7 +4,8 @@ import * as nodeFs from "node:fs"
 import { basename, dirname, resolve } from "node:path"
 import yaml from "js-yaml"
 import type { ReviewPayloadFs } from "./review-payload"
-import { isLegacyReviewPath, resolveReviewDirectory, ReviewDirectoryError } from "./review-persist"
+import { isLegacyReviewPath, resolveReviewDirectory, resolveLightReviewDirectory, ReviewDirectoryError } from "./review-persist"
+import { REVIEW_CALLERS } from "./review-callers"
 
 export type ReviewLockFs = Omit<ReviewPayloadFs, "writeFileSync"> & {
   writeFileSync(path: string, data: Uint8Array, options: { flag: "wx"; mode: number }): void
@@ -13,6 +14,7 @@ export type ReviewLockFs = Omit<ReviewPayloadFs, "writeFileSync"> & {
   unlinkSync(path: string): void
 }
 export type LockOptions = { reviewStateRoot: string; fs?: ReviewLockFs; now?: () => Date }
+type InternalLockOptions = LockOptions & { temporaryDirectory?: string }
 export type AcquireInput = { reviewRoot: string; runId: string; force?: boolean }
 export type ReleaseInput = { reviewRoot: string; runId: string; mode: "delete" | "complete" }
 export type StatusInput = { reviewRoot: string }
@@ -173,9 +175,9 @@ function available(snapshots: Array<Snapshot | null>, now: number, force: boolea
  * exists. Atomic replacement is not compare-and-swap, a cross-process mutex or a
  * durability guarantee: another writer can replace a lock between these checks.
  */
-function writeAtomic(path: string, lock: Lock, fs: ReviewLockFs, beforeRename: () => void): void {
+function writeAtomic(path: string, lock: Lock, fs: ReviewLockFs, beforeRename: () => void, temporaryDirectory = dirname(path)): void {
   const expected = Buffer.from(yaml.dump(lock, { schema: yaml.JSON_SCHEMA, noRefs: true, lineWidth: -1 }), "utf8")
-  const temp = resolve(dirname(path), `.${basename(path)}.${randomUUID()}.tmp`)
+  const temp = resolve(temporaryDirectory, `.${basename(path)}.${randomUUID()}.tmp`)
   let temporary = false
   let installed = false
   let failure: Failure | undefined
@@ -233,14 +235,14 @@ function cleanLegacy(initial: Snapshot | null, now: number, fs: ReviewLockFs): v
   }
 }
 
-function acquireLock(input: AcquireInput, paths: Paths, opts: LockOptions, fs: ReviewLockFs): AcquireResult {
+function acquireLock(input: AcquireInput, paths: Paths, opts: InternalLockOptions, fs: ReviewLockFs): AcquireResult {
   const now = clock(opts)
   const snapshots = readBoth(paths, fs)
   available(snapshots, now.ms, input.force === true)
   const lock: ActiveLock = { schema_version: 1, status: "active", started_at: now.iso, run_id: input.runId }
   let installed = false
   try {
-    writeAtomic(paths.current, lock, fs, () => available(readBoth(paths, fs), now.ms, input.force === true))
+    writeAtomic(paths.current, lock, fs, () => available(readBoth(paths, fs), now.ms, input.force === true), opts.temporaryDirectory)
     installed = true
     cleanLegacy(snapshots[1], now.ms, fs)
     const current = requireOwner(paths.current, input.runId, fs)
@@ -304,7 +306,7 @@ function argumentsObject(input: unknown): Record<string, unknown> {
     return [key, descriptor.value]
   }))
 }
-function execute(op: Operation, input: unknown, opts: LockOptions): AcquireResult | ReleaseResult | StatusResult {
+function execute(op: Operation, input: unknown, opts: InternalLockOptions, caller?: string): AcquireResult | ReleaseResult | StatusResult {
   try {
     const args = argumentsObject(input)
     if (Object.keys(args).some(key => !KEYS[op].includes(key)) || !nonempty(args.reviewRoot)
@@ -312,6 +314,17 @@ function execute(op: Operation, input: unknown, opts: LockOptions): AcquireResul
       || (Object.hasOwn(args, "force") && typeof args.force !== "boolean")
       || (op === "release" && args.mode !== "delete" && args.mode !== "complete")) fail("invalid-arguments")
     const fs = opts.fs ?? nodeFs
+    /**
+     * Host identity selects local-only locking before the active record write.
+     * Creating the durable .light class first makes sync exclude this namespace's
+     * lock.yaml/.lock, including a previously tracked terminal marker's deletion.
+     * Light temps stay in the class and release permits only delete. No tool
+     * argument disables this rule; ordinary full locks retain their old layout.
+     */
+    if (caller === REVIEW_CALLERS.lightOrchestrator) {
+      if (op === "release" && args.mode !== "delete") fail("invalid-arguments")
+      if (op === "acquire") opts = { ...opts, temporaryDirectory: resolveLightReviewDirectory(args.reviewRoot, opts.reviewStateRoot, fs, true) }
+    }
     const paths = lockPaths(args.reviewRoot, opts, fs, op === "acquire")
     // Legacy namespaces are a read-only resume source, including lock release.
     if (op !== "status" && isLegacyReviewPath(paths.current)) fail("path-outside-root", args.reviewRoot)
@@ -325,6 +338,7 @@ function execute(op: Operation, input: unknown, opts: LockOptions): AcquireResul
     })
     return { held: holders.length > 0, holders, legacy_present: snapshots[1] !== null }
   } catch (error) {
+    if (error instanceof ReviewDirectoryError) return rejection(error.reason === "not-found" ? "path-resolution-error" : error.reason, error.path, error.cause)
     return error instanceof LockFailure ? error.result : rejection("invalid-arguments")
   }
 }
@@ -343,13 +357,13 @@ export function status(input: StatusInput, opts: LockOptions): StatusResult {
 export function createLockExecutor(
   reviewStateRoot: string,
   options: Omit<LockOptions, "reviewStateRoot"> = {},
-): (input: unknown) => string {
+): (input: unknown, caller?: string) => string {
   const opts: LockOptions = { reviewStateRoot, fs: options.fs, now: options.now }
-  return input => {
+  return (input, caller) => {
     try {
       const { op, ...args } = argumentsObject(input)
       if (typeof op !== "string" || !Object.hasOwn(KEYS, op)) fail("invalid-op")
-      return JSON.stringify(execute(op as Operation, args, opts))
+      return JSON.stringify(execute(op as Operation, args, opts, caller))
     } catch (error) {
       return JSON.stringify(error instanceof LockFailure ? error.result : rejection("invalid-arguments"))
     }

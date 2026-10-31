@@ -2,11 +2,11 @@ import { Database } from "bun:sqlite"
 import { afterEach, expect, test } from "bun:test"
 import { createHash } from "node:crypto"
 import { execFileSync } from "node:child_process"
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { dump } from "js-yaml"
-import { REVIEW_INPUT_LINE_LIMIT, artifactTree, checkPluginLoaded, checkPluginState, checkReviewArtifacts, reviewNamespace, reviewRoot, type Inputs } from "../../scripts/check-review-artifacts"
+import { REVIEW_INPUT_LINE_LIMIT, artifactTree, checkPluginLoaded, checkPluginState, checkReviewArtifacts, checkLightAttempts, checkLightSnapshots, countReviewMetrics, lightContractRow, lightFixtureMutations, snapshotLightFixture, reviewNamespace, reviewRoot, type Inputs } from "../../scripts/check-review-artifacts"
 import { checkWriterRun } from "../../scripts/check-writer-run"
 import { canonicalize, freeze, measureFile, preview, type CandidateRequest } from "../review-payload"
 import { append, begin, finalize } from "../review-persist"
@@ -29,6 +29,30 @@ function sessionFixture() {
   return { directory, db: join(directory, "opencode.db") }
 }
 const rowOutcome = (row: Row) => row.detail.match(/^(forged:|undisclosed:|N\/A-PASS:)/)?.[0] ?? (row.ok ? "PASS" : "FAIL")
+
+test("light contract N/A follows ADR-0006 precedence, not a blanket PASS", () => {
+  const note = "Full-pipeline bookkeeping omitted by light contract."
+  for (const check of ["sync.pull", "sync.push", "metadata", "R0 verdict", "R4 verdict", "document staged", "review-input lines"]) {
+    expect(rowOutcome(lightContractRow(check, note))).toBe("N/A-PASS:")
+    expect(rowOutcome(lightContractRow(check, "Reduced coverage light review"))).toBe("undisclosed:")
+    expect(rowOutcome(lightContractRow(check, note, "contradicted DB"))).toBe("forged:")
+    expect(rowOutcome(lightContractRow(check, `${check} successfully written. ${note}`))).toBe("forged:")
+  }
+})
+
+test.each([...hosts])("%s metrics count descendants and tools from the stopped-host tree", host => {
+  const { db } = sessionFixture()
+  materialize(db, host)
+  const store = readSessionStore(db, captureIDs[host].parent)
+  if (!store.available) throw new Error(store.reason)
+  const counts = countReviewMetrics(db, captureIDs[host].parent)
+  expect(counts.childSessions).toBe(store.descendants.length)
+  expect(Object.values(counts.toolCallsByTool).reduce((a, b) => a + b, 0)).toBe(5)
+  expect(counts.orchestratorTurns).toBe(host === "v2"
+    ? new Set(store.parent.parts.map(part => part.messageID)).size
+    : store.parent.parts.filter(part => part.type === "step-start").length)
+  expect(() => countReviewMetrics(undefined, captureIDs[host].parent)).toThrow("unavailable")
+})
 const auditInput = (directory: string): Inputs => ({ fixture: directory, owner: "owner", repo: "repo", pr: "8", head: "a".repeat(40), jsonl: "", hostlog: "", audit: "" })
 
 test("v1 session_message is not a v2 discriminator; both parent and descendants remain readable", () => {
@@ -390,6 +414,108 @@ function seedGatherer(db: Database, local = false) {
   }
 }
 
+/** Same retained full fixture builders power baseline replay; this additive
+ * light fixture changes only light expectations, never auto row-count assertions. */
+async function lightFixture(count = 1, options: LightReplayOptions = {}) {
+  const data = await fixture(false, "url", "plain", "disabled")
+  const { input, root } = data, work = resolve(input.fixture, ".."), relative = reviewRoot(input)
+  git(input.fixture, "checkout", "-b", "smoke/light-unrelated", "main")
+  for (const name of [".smoke-light-staged", ".smoke-light-unstaged"]) writeFileSync(join(input.fixture, name), "committed sentinel\n")
+  git(input.fixture, "add", ".smoke-light-staged", ".smoke-light-unstaged")
+  git(input.fixture, "commit", "-m", "Unrelated fixture")
+  input.branch = "smoke/light-unrelated"
+  git(input.fixture, "push", "origin", `HEAD:refs/heads/${input.branch}`)
+  writeFileSync(join(input.fixture, ".smoke-light-staged"), "index sentinel\n")
+  git(input.fixture, "add", ".smoke-light-staged")
+  writeFileSync(join(input.fixture, ".smoke-light-staged"), "worktree staged sentinel\n")
+  writeFileSync(join(input.fixture, ".smoke-light-unstaged"), "worktree unstaged sentinel\n")
+  // Remove only fixture-owned full bookkeeping, retaining the built verifier.
+  rmSync(root, { recursive: true })
+  mkdirSync(join(root, ".light"), { recursive: true })
+  buildLightRestartTrace(data, count, options)
+  input.agent = "light"
+  writeFileSync(input.hostlog, readFileSync(input.hostlog, "utf8").replaceAll("corvus-review-auto", "corvus-review-light"))
+  saveTrace(input, data.events)
+  const before = snapshotLightFixture(input.fixture, input.bare!)
+  writeFileSync(join(work, "light-before.json"), JSON.stringify(before))
+  writeFileSync(join(work, "light-after.json"), JSON.stringify(snapshotLightFixture(input.fixture, input.bare!)))
+  writeFileSync(join(root, "probe-meta.yaml"), "model_free_probe: true\n")
+  const result = await push({ ...data.pushInput, head_sha: before.head, branch: input.branch })
+  if (!result.synced || !result.state_commit) throw new Error(JSON.stringify(result))
+  const paths = git(input.bare!, "diff-tree", "--no-commit-id", "--name-only", "-r", result.state_commit).split("\n")
+  writeFileSync(join(work, "light-push-probe.json"), JSON.stringify({ ok: true, root: relative, state_commit: result.state_commit, paths }))
+  return data
+}
+
+test("light checker keeps integrity/local-only rows hard and full-only rows disclosed N/A", async () => {
+  const data = await lightFixture()
+  const result = await checkReviewArtifacts(data.input)
+  expect(result.rows.filter(row => !row.ok)).toEqual([])
+  for (const check of ["sync.push", "R0 verdict", "R4 verdict", "document staged", "metadata", "review-input lines"]) {
+    expect(rowOutcome(result.rows.find(row => row.check === check)!)).toBe("N/A-PASS:")
+  }
+  for (const check of ["candidate producer", "tool chain", "SHA-256", "built verify()", "writer denied", "sentinel bytes/index unchanged", "mixed full push excludes light"]) {
+    expect(rowOutcome(result.rows.find(row => row.check === check)!)).toBe("PASS")
+  }
+  const after = JSON.parse(readFileSync(join(data.input.fixture, "..", "light-after.json"), "utf8"))
+  const before = JSON.parse(readFileSync(join(data.input.fixture, "..", "light-before.json"), "utf8"))
+  after.index += "forged staged entry"
+  expect(checkLightSnapshots(before, after).find(row => row.check === "sentinel bytes/index unchanged")?.ok).toBe(false)
+  writeFileSync(join(data.root, ".light/post-request.json"), "forged artifact")
+  const changed = await checkReviewArtifacts(data.input)
+  expect(changed.rows.find(row => row.check === "SHA-256")?.ok).toBe(false)
+  expect(changed.rows.find(row => row.check === "built verify()")?.ok).toBe(false)
+})
+
+test("light checker ignores host snapshot Git but fails a fixture add even if snapshots agree", async () => {
+  const data = await lightFixture(), work = resolve(data.input.fixture, "..")
+  const snapshot = join(work, "xdg/data/opencode/snapshot/project/tree")
+  mkdirSync(snapshot, { recursive: true })
+  const trace = [
+    { event: "start", sid: "host-index", argv: ["git", "--git-dir", snapshot, "--work-tree", data.input.fixture, "update-index", "--add", "--stdin"] },
+    { event: "def_repo", sid: "host-index", repo: 1, worktree: data.input.fixture },
+    { event: "start", sid: "host-checkout", argv: ["git", `--git-dir=${snapshot}`, `--work-tree=${data.input.fixture}`, "checkout", "a".repeat(40), "--", "README.md"] },
+    { event: "def_repo", sid: "host-checkout", repo: 1, worktree: data.input.fixture },
+  ]
+  const path = join(work, "git-trace.jsonl")
+  writeFileSync(path, trace.map(event => JSON.stringify(event)).join("\n") + "\n")
+  const clean = await checkReviewArtifacts(data.input)
+  expect(clean.rows.filter(row => !row.ok)).toEqual([])
+  writeFileSync(path, readFileSync(path, "utf8") + JSON.stringify({ event: "start", sid: "fixture-add", argv: ["git", "-C", data.input.fixture, "add", ".smoke-light-staged"] }) + "\n")
+  const mutation = await checkReviewArtifacts(data.input)
+  expect(mutation.exitCode).toBe(6)
+  for (const check of ["state commit scope", "Git push isolation"]) expect(mutation.rows.find(row => row.check === check)?.ok).toBe(false)
+  expect(mutation.rows.find(row => row.check === "Git push isolation")?.detail).toContain("1 traced fixture mutation commands")
+  expect(mutation.rows.find(row => row.check === "sentinel bytes/index unchanged")?.ok).toBe(true)
+})
+
+test("light Git trace scopes argv/environment/repo evidence and keeps unknown fixture mutations hard", () => {
+  const { directory } = sessionFixture(), fixture = join(directory, "fixture"), outside = join(directory, "xdg/data/opencode/snapshot/tree")
+  mkdirSync(join(fixture, ".git"), { recursive: true })
+  mkdirSync(outside, { recursive: true })
+  const alias = join(directory, "fixture-alias")
+  symlinkSync(fixture, alias)
+  const start = (sid: string, ...args: string[]) => ({ event: "start", sid, argv: ["git", ...args] })
+  const trace = [
+    start("host-env", "update-index", "--add"), { event: "def_param", sid: "host-env", param: "GIT_DIR", value: outside },
+    start("outside-worktree", "--work-tree", outside, "checkout", "HEAD", "--"),
+    start("outside-repo", "commit", "-m", "host"), { event: "def_repo", sid: "outside-repo", repo: 1, worktree: outside },
+    start("outside-cwd", "-C", outside, "reset", "--hard"),
+    start("fixture-env", "update-ref", "refs/heads/topic", "HEAD"), { event: "def_param", sid: "fixture-env", param: "GIT_DIR", value: join(fixture, ".git") },
+    start("fixture-alias", "--git-dir", join(alias, ".git"), "add", "sentinel"),
+    start("fixture-relative", "-C", fixture, "--git-dir=.git", "-c", "core.fsmonitor=false", "commit", "-m", "fixture"),
+    start("unknown", "push", "origin"),
+    // A filename/config value named like a verb is not the command.
+    start("read", "-c", "alias.example=add", "show", "HEAD:commit"),
+    start("branch-read", "branch", "--show-current"), start("stash-read", "stash", "list"),
+  ]
+  expect(lightFixtureMutations(trace, fixture).map(event => event.sid)).toEqual(["fixture-env", "fixture-alias", "fixture-relative", "unknown"])
+  for (const args of [["add", "sentinel"], ["commit", "-m", "fixture"], ["checkout", "HEAD", "--"], ["update-index", "--add"], ["push", "origin"],
+    ["switch", "topic"], ["reset", "--hard"], ["stash", "push"], ["branch", "topic"], ["update-ref", "refs/heads/topic", "HEAD"], ["rm", "--cached", "sentinel"], ["apply", "--cached", "patch.diff"]]) {
+    expect(lightFixtureMutations([start("mutation", ...args)], fixture)).toHaveLength(1)
+  }
+})
+
 type ReviewFixture = Awaited<ReturnType<typeof fixture>>
 const traceTools = (events: ReviewFixture["events"]) => events.filter((event): event is ReturnType<typeof toolEvent> => "tool" in event.part)
 const operation = (events: ReviewFixture["events"], name: string, op: string) => traceTools(events)
@@ -404,6 +530,295 @@ const lastNote = (events: ReviewFixture["events"]) => {
   if (!("text" in terminal.part) || typeof terminal.part.text !== "string") throw new Error("fixture has no terminal assistant note")
   return terminal.part.text
 }
+
+type LightReplayOptions = {
+  intake?: "CLOSED" | "MERGED"; terminal?: "CLOSED" | "MERGED"; exhaustion?: boolean
+  previews?: boolean; driftAfterPreview?: boolean; rawOnly?: boolean; baseOnly?: boolean; codeOnly?: boolean
+  ownership?: boolean; takeover?: boolean; age?: boolean; root?: boolean; restartAge?: number
+  held?: "lock.yaml" | ".lock"; denied?: boolean
+}
+const lightHead = (number: number) => String(number).repeat(40)
+const lightBase = (number: number) => String(number + 4).repeat(40)
+const lightNote = (text: string) => ({ type: "text", sessionID: "ses_smoke", part: { text } })
+
+/** T3's stopped-host replay builders, not model-run evidence. Oracle: independently
+ * recorded controls/receipts and DB-matched children, constructed before negative
+ * mutations. Scoring never regenerates receipts to bless tampered bytes. Each
+ * parameterization uses literal SHAs/paths and no symlink-dependent setup; no
+ * asymmetric matcher may replace a fixture field reused by later mutations. */
+function buildLightRestartTrace(data: ReviewFixture, count: number, options: LightReplayOptions) {
+  const { input, root } = data, relative = reviewRoot(input)
+  const path = `${relative}/.light/candidate.json`, artifact = `${relative}/.light/post-request.json`
+  const files: string[] = JSON.parse(readFileSync(join(input.fixture, "..", "changed-files.json"), "utf8"))
+  const opts = { reviewStateRoot: join(input.fixture, ".corvus") }, started = "2026-09-13T00:00:00Z"
+  const pr = (op: string, output: object, extra = {}) => toolEvent("corvus_review_pr", { op, owner: "owner", name: "repo", pr: 8, ...extra }, output)
+  const meta = (h: string, b: string, state = "OPEN", raw = h) => pr("metadata", { ok: true, number: 8, url: "https://github.com/owner/repo/pull/8", state, code_head: h, head_sha: raw, baseRefOid: b, isCrossRepository: false, api_calls: 1 })
+  const status = (age = options.restartAge ?? 60, run = "run-1") => toolEvent("corvus_review_lock", { op: "status", reviewRoot: relative }, { held: age < 7200, holders: age < 7200 ? [{ path: join(root, "lock.yaml"), run_id: run, started_at: started, age_s: age }] : [], legacy_present: false })
+  const resolution = () => toolEvent("corvus_review_sync", { op: "resolve", cwd: input.fixture, pr: { owner: "owner", name: "repo", number: 8, isCrossRepository: false }, changed_files: files }, { ok: true, root: relative, remote: "github", task: null })
+  const events: (ReturnType<typeof toolEvent> | ReturnType<typeof lightNote>)[] = []
+  const children: { id: string; tools: ReturnType<typeof toolEvent>[] }[] = []
+  const heads: { attempt: number; code_head: string; base_sha: string }[] = []
+  let lastArtifact: { attempt: number; h: string } | undefined
+  const headFor = (i: number) => lightHead(options.baseOnly ? 1 : i)
+  const baseFor = (i: number) => lightBase(options.codeOnly ? 1 : i)
+  events.push(meta(headFor(1), baseFor(1), options.intake ?? "OPEN"))
+  if (!options.intake) events.push(pr("files", { ok: true, files, complete_pagination: true, api_calls: 1 }, { paginate: true, include_corvus: true, names_only: true }), resolution(),
+    options.held ? toolEvent("corvus_review_lock", { op: "acquire", reviewRoot: relative, runId: "run-1" },
+      options.denied ? {} : { ok: false, state: "held", holder: { path: join(root, options.held), run_id: "other-run", started_at: started, age_s: 60 } },
+      options.denied ? "Permission denied: corvus_review_lock acquire" : undefined)
+      : toolEvent("corvus_review_lock", { op: "acquire", reviewRoot: relative, runId: "run-1" }, { ok: true, state: "acquired", started_at: started }))
+  for (let i = 1; !options.intake && !options.held && i <= count; i++) {
+    const h = headFor(i), b = baseFor(i)
+    heads.push({ attempt: i, code_head: h, base_sha: b })
+    if (i > 1) events.push(status(options.restartAge ?? 60), pr("files", { ok: true, files, complete_pagination: true, api_calls: 1 }, { paginate: true, include_corvus: true, names_only: true }), resolution())
+    events.push(pr("reviews", { ok: true, reviews: [], complete_pagination: true, api_calls: 1 }))
+    if (i === 1 || !options.codeOnly) events.push(toolEvent("corvus_review_pr", { op: "config", owner: "owner", name: "repo", ref: b }, { ok: true, present: false, api_calls: 1 }))
+    events.push(toolEvent("corvus_review_verdict", { op: "compute", reviewRoot: relative, owner: "owner", name: "repo", pr: 8, priorReviews: {}, config: {} }, { ok: true, round: i }),
+      toolEvent("bash", { command: "git fetch --no-tags github pull/8/head" }, {}), toolEvent("bash", { command: `git cat-file -e '${h}^{commit}'` }, {}),
+      toolEvent("task", { subagent_type: "pr-light-reviewer", prompt: `attempt: ${i}; code_head: ${h}; base_sha: ${b}; fresh bounded light pass` }, { sessionID: `ses_light_${i}`, status: "completed" }),
+      status(options.ownership ? 7200 : options.restartAge ?? 60, options.takeover ? "other-run" : "run-1"))
+    children.push({ id: `ses_light_${i}`, tools: [meta(h, b), pr("files", { ok: true, files: [], complete_pagination: true, api_calls: 1 }, { paginate: true }), pr("diff", { ok: true, text: "", api_calls: 1 })] })
+    if (options.ownership || options.takeover) break
+    const nextH = headFor(i + 1), nextB = baseFor(i + 1)
+    if (options.terminal && !options.driftAfterPreview) { events.push(meta(nextH, nextB, options.terminal)); break }
+    if (options.exhaustion || i < count && !options.previews) { events.push(meta(nextH, nextB)); continue }
+    events.push(meta(h, b, "OPEN", options.rawOnly ? lightHead(4) : h))
+    const candidate: CandidateRequest = { commit_id: h, event: "COMMENT", body: `<!-- corvus-review v2 path=${relative} head=${h} round=${i} -->\nNo actionable findings in the reviewed scope.`, comments: [] }
+    writeFileSync(join(input.fixture, path), canonicalize(candidate))
+    const frozen = freeze(join(input.fixture, path), join(input.fixture, artifact), opts)
+    // Assert before narrowing, rather than throwing from a parameterized setup.
+    expect(frozen.ok).toBe(true)
+    if (!frozen.ok) return
+    lastArtifact = { attempt: i, h }
+    events.push(status(), toolEvent("corvus_review_persist", { op: "write_candidate", reviewRoot: relative, candidate }, receipt(input.fixture, path)),
+      toolEvent("corvus_review_payload", { op: "measure", candidatePath: path }, measureFile(join(input.fixture, path), opts)),
+      toolEvent("corvus_review_payload", { op: "freeze", candidatePath: path, artifactPath: artifact }, frozen),
+      toolEvent("corvus_review_payload", { op: "preview", artifactPath: artifact, expectedSha256: frozen.sha256 }, preview(join(input.fixture, artifact), frozen.sha256, opts)),
+      lightNote(JSON.stringify({ decision: "auto_post", digest: frozen.sha256, event: "COMMENT", code_head: h, decision_reason: "autonomous", rails_applied: ["partial"], edits: [], rerun_scope: [] })))
+    if (options.terminal) { events.push(meta(nextH, nextB, options.terminal)); break }
+    if (options.age || options.root) {
+      events.push(meta(nextH, nextB), status(options.age ? 5401 : 60))
+      if (options.root) events.push(toolEvent("corvus_review_sync", { op: "resolve", cwd: input.fixture, pr: { owner: "owner", name: "repo", number: 8, isCrossRepository: false }, changed_files: [".corvus/tasks/moved/PLAN.md"] }, { ok: true, root: ".corvus/tasks/moved/reviews/pr8", remote: "github" }))
+      break
+    }
+    if (i < count) { events.push(meta(nextH, nextB)); continue }
+    events.push(meta(h, b), status())
+    const descriptor = { POST_ARTIFACT: { artifact_path: artifact, expected_sha256: frozen.sha256, repository: { owner: "owner", name: "repo" }, pr_number: 8, head_sha: h, event: "COMMENT" } }
+    events.push(toolEvent("subagent", { agent: "pr-comment-writer", prompt: JSON.stringify(descriptor) }, {}, "Subagent denied: pr-comment-writer"))
+  }
+  if (!lastArtifact) { rmSync(join(input.fixture, path), { force: true }); rmSync(join(input.fixture, artifact), { force: true }) }
+  if (!options.intake && !options.held) events.push(toolEvent("corvus_review_lock", { op: "release", reviewRoot: relative, runId: "run-1", mode: "delete" }, options.takeover ? { ok: false, reason: "not-owner" } : { ok: true, state: "released" }))
+  if (options.takeover) writeFileSync(join(root, "lock.yaml"), dump({ schema_version: 1, status: "active", started_at: started, run_id: "other-run" }))
+  if (options.held) writeFileSync(join(root, options.held), dump({ schema_version: 1, status: "active", started_at: started, run_id: "other-run" }))
+  const reason = options.intake ?? options.terminal ?? (options.held ? "lock held/denied: other-run" : options.ownership || options.takeover ? "ownership expired/not-owner" : options.age ? "lock-age refusal" : options.root ? "namespace refusal" : options.exhaustion ? "exhaustion" : "writer denied")
+  const inert = lastArtifact && (options.terminal || options.age || options.root) ? `Retained superseded artifact from attempt ${lastArtifact.attempt} head ${lastArtifact.h} is inert, not authorized for latest head.` : ""
+  events.push(lightNote(`Full-pipeline bookkeeping omitted by light contract.\nDetection attempts: ${heads.length}\n${heads.map(x => `attempt ${x.attempt}: code_head=${x.code_head} base_sha=${x.base_sha}`).join("\n")}\nTerminal reason: ${reason}; no posting. Latest observed head: ${options.exhaustion ? headFor(count + 1) : heads.at(-1)?.code_head ?? headFor(1)}.\nActual coverage: ${options.intake || options.held ? "zero reviewed at intake" : "reviewed bounds 20 files / 600 changed lines"}; synthesis counts: Standards 0, Spec 0. ${lastArtifact ? artifact : "Candidate and frozen artifact unavailable: no presentation produced."}; files may appear untracked. ${inert}`))
+  data.events.splice(0, data.events.length, ...events)
+  input.writer = false // Post-time movement is protocol-pinned, not a denied-harness claim.
+  input.head = lightHead(4) // Intentionally not the live intake or any reviewed head.
+  const db = new Database(input.db!)
+  db.run("delete from part where session_id != 'ses_smoke'")
+  db.run("delete from session where id != 'ses_smoke'")
+  for (const child of children) {
+    db.run("insert into session (id, parent_id, agent, time_created) values (?, ?, ?, ?)", [child.id, "ses_smoke", "pr-light-reviewer", 2])
+    for (const [index, event] of child.tools.entries()) db.run("insert into part (id, session_id, time_created, data) values (?, ?, ?, ?)", [`${child.id}_${index}`, child.id, index, JSON.stringify({ ...event.part, type: "tool", sessionID: child.id })])
+  }
+  db.close()
+}
+
+const restartFixture = (count: number, options: LightReplayOptions = {}) => lightFixture(count, options)
+async function replayCase(count: number, options: LightReplayOptions, mutation?: (data: ReviewFixture) => void) {
+  const data = await restartFixture(count, options)
+  mutation?.(data)
+  saveTrace(data.input, data.events)
+  return { data, result: await checkReviewArtifacts(data.input) }
+}
+
+const lightRestartCases: readonly [string, number, LightReplayOptions][] = [
+  ["two attempts with independently previewed artifacts", 2, { previews: true }],
+  ["three attempts with independently previewed artifacts", 3, { previews: true }],
+  ["code-head-only drift reuses same-base config", 2, { previews: true, codeOnly: true }],
+  ["base-only drift reloads config", 2, { previews: true, baseOnly: true }],
+  ["raw-head-only change remains one attempt", 1, { rawOnly: true }],
+  ["CLOSED at intake", 0, { intake: "CLOSED" }],
+  ["MERGED at intake", 0, { intake: "MERGED" }],
+  ["MERGED with drift after detection before synthesis", 1, { terminal: "MERGED" }],
+  ["CLOSED with drift after detection before synthesis", 1, { terminal: "CLOSED" }],
+  ["third drift exhausts without artifacts", 3, { exhaustion: true }],
+  ["CLOSED with drift after preview retains inert artifact", 1, { terminal: "CLOSED", driftAfterPreview: true }],
+  ["restart refused at 5401s lock age", 1, { age: true }],
+  ["restart admitted at inclusive 5400s ceiling", 2, { previews: true, restartAge: 5400 }],
+  ["restart refused when resolved root changes", 1, { root: true }],
+  ["detector returns after 7200s freshness expiry", 1, { ownership: true }],
+  ["detector returns after another run takes over", 1, { takeover: true }],
+]
+test.each(lightRestartCases)("AC4/AC6–AC10 replay: %s", async (_name, count, options) => {
+  const { data, result } = await replayCase(count, options)
+  expect(result.rows.filter(row => !row.ok)).toEqual([])
+  expect(result.exitCode).toBe(0)
+  expect(result.rows).toHaveLength(64) // T3's common light row inventory, every route.
+  const controls = result.rows.find(row => row.check === "light attempt controls")
+  expect(controls?.ok).toBe(true)
+  expect(controls?.detail).toContain(`${count} DB-validated attempts`)
+  const tools = traceTools(data.events)
+  const presentations = tools.filter(tool => tool.part.tool === "corvus_review_payload" && (tool.part.state.input as { op?: string }).op === "preview")
+  if (options.intake) {
+    expect(tools.map(tool => tool.part.tool)).toEqual(["corvus_review_pr"])
+    expect(readDescendants(data.input.db!, "ses_smoke")).toEqual([])
+  } else {
+    expect(tools.filter(tool => tool.part.tool === "corvus_review_lock" && (tool.part.state.input as { op?: string }).op === "acquire")).toHaveLength(1)
+    expect(tools.filter(tool => tool.part.tool === "corvus_review_lock" && (tool.part.state.input as { op?: string }).op === "release")).toHaveLength(1)
+  }
+  if (options.previews) {
+    expect(presentations).toHaveLength(count)
+    const digests = presentations.map(tool => (tool.part.state.input as { expectedSha256: string }).expectedSha256)
+    expect(new Set(digests).size).toBe(count)
+    for (const [index, shown] of presentations.entries()) {
+      const decoded = JSON.parse(shown.part.state.output)
+      expect(decoded.commit_id).toBe(lightHead(options.baseOnly ? 1 : index + 1))
+      expect(decoded.body.split("\n")[0]).toContain(`round=${index + 1}`)
+      expect(decoded.body).not.toMatch(/\[!WARNING\]|Reduced-coverage/)
+    }
+    expect(tools.filter(tool => tool.part.tool === "corvus_review_pr" && (tool.part.state.input as { op?: string }).op === "config")).toHaveLength(options.codeOnly ? 1 : count)
+  }
+  if (options.exhaustion) {
+    expect(presentations).toEqual([])
+    expect(existsSync(join(data.root, ".light/post-request.json"))).toBe(false)
+    expect(lastNote(data.events)).toContain(`Latest observed head: ${lightHead(4)}`)
+    for (let attempt = 1; attempt <= 3; attempt++) expect(lastNote(data.events)).toContain(`attempt ${attempt}: code_head=${lightHead(attempt)}`)
+  }
+  if (options.takeover) {
+    expect(readFileSync(join(data.root, "lock.yaml"), "utf8")).toContain("run_id: other-run")
+    expect(JSON.parse(operation(data.events, "corvus_review_lock", "release").part.state.output)).toEqual({ ok: false, reason: "not-owner" })
+  }
+})
+
+test.each([
+  ["lock.yaml", false], [".lock", false], ["lock.yaml", true], [".lock", true],
+] as const)("light intake preserves foreign %s (acquire denied=%s)", async (held, denied) => {
+  const data = await restartFixture(0, { held, denied }), path = join(data.root, held)
+  const before = readFileSync(path)
+  const result = await checkReviewArtifacts(data.input)
+  // Permission denials stay hard independently of the expected admission stop;
+  // foreign-lock evidence excuses neither mutation nor unexpected-denial rows.
+  expect(result.rows.filter(row => !row.ok).map(row => row.check)).toEqual(denied ? ["unexpected denials"] : [])
+  expect(result.exitCode).toBe(denied ? 5 : 0)
+  expect(result.rows.find(row => row.check === "lock released")?.ok).toBe(true)
+  expect(result.rows.find(row => row.check === "light attempt controls")?.detail).toContain("terminal=held/denied")
+  expect(result.rows.find(row => row.check === "light class isolation")?.ok).toBe(true)
+  expect(readFileSync(path)).toEqual(before)
+  expect(readDescendants(data.input.db!, "ses_smoke")).toEqual([])
+  const tools = traceTools(data.events)
+  expect(tools.map(tool => tool.part.tool)).toEqual(["corvus_review_pr", "corvus_review_pr", "corvus_review_sync", "corvus_review_lock"])
+  expect(tools.filter(tool => tool.part.tool === "corvus_review_lock").map(tool => (tool.part.state.input as { op: string }).op)).toEqual(["acquire"])
+  expect(existsSync(join(data.root, ".light/candidate.json"))).toBe(false)
+  expect(existsSync(join(data.root, ".light/post-request.json"))).toBe(false)
+})
+
+test.each(["lock.yaml", ".lock"] as const)("foreign %s evidence never exempts an extra sync-eligible file", async held => {
+  const { data, result } = await replayCase(0, { held }, data => writeFileSync(join(data.root, "foreign-notes.md"), "forged foreign file\n"))
+  expect(result.exitCode).toBe(5)
+  expect(result.rows.find(row => row.check === "light attempt controls")?.ok).toBe(true)
+  expect(result.rows.find(row => row.check === "light class isolation")).toMatchObject({ ok: false, detail: 'sync-eligible namespace files (excluding harness probe): ["foreign-notes.md"]' })
+  expect(readFileSync(join(data.root, held), "utf8")).toContain("run_id: other-run")
+})
+
+test("ownership-loss wording never exempts a retained same-run lock", async () => {
+  const { result } = await replayCase(1, { takeover: true }, data => writeFileSync(join(data.root, "lock.yaml"), dump({ schema_version: 1, status: "active", started_at: "2026-09-13T00:00:00Z", run_id: "run-1" })))
+  expect(result.exitCode).toBe(5)
+  expect(result.rows.find(row => row.check === "lock released")?.ok).toBe(false)
+  expect(result.rows.find(row => row.check === "light class isolation")?.ok).toBe(false)
+})
+
+test.each(["none", "writer", "post"])("light LOCAL %s retains posting-barrier code 6", async kind => {
+  const { directory } = sessionFixture(), input = { ...auditInput(directory), intake: "local" as const, agent: "light" as const }
+  const events = kind === "writer" ? [toolEvent("subagent", { agent: "pr-comment-writer" }, {}, "Subagent denied: pr-comment-writer")]
+    : kind === "post" ? [toolEvent("corvus_review_post", {}, {})] : []
+  const tools = toolsFromEvents(events)
+  // Only these barrier rows are scored; this probe deliberately omits the attempt protocol.
+  const result = await checkLightAttempts(input, events, tools, tools, [], "ses_smoke", join(directory, reviewRoot(input)))
+  for (const [check, forbidden] of [["LOCAL no writer", "writer"], ["LOCAL no posting tools", "post"]]) {
+    expect(result.rows.find(row => row.check === check)).toMatchObject({ code: 6, ok: kind !== forbidden })
+  }
+})
+
+const lightNegativeCases: readonly [string, string, (data: ReviewFixture) => void][] = [
+  ["stale preview digest", "light presentation integrity", data => {
+    const shown = traceTools(data.events).filter(event => event.part.tool === "corvus_review_payload" && (event.part.state.input as { op?: string }).op === "preview")
+    Object.assign(shown.at(-1)!.part.state.input, { expectedSha256: (shown[0].part.state.input as { expectedSha256: string }).expectedSha256 })
+  }],
+  ["stale authorization", "light attempt controls", data => {
+    const notes = data.events.filter(event => "text" in event.part && typeof event.part.text === "string" && event.part.text.includes('"decision":"auto_post"'))
+    Object.assign(notes.at(-1)!.part, { text: (notes[0].part as { text: string }).text })
+  }],
+  ["summary leaves detector unaccounted", "light detector roster", data => terminalNote(data.events, lastNote(data.events).replace("Detection attempts: 2", "Detection attempts: 1"))],
+  ["extra detector session", "light detector roster", data => {
+    const db = new Database(data.input.db!)
+    db.run("insert into session (id, parent_id, agent, time_created) values ('ses_extra', 'ses_smoke', 'pr-light-reviewer', 4)")
+    db.run("insert into part (id, session_id, time_created, data) values ('extra_part', 'ses_extra', 0, ?)", [JSON.stringify({ type: "text", text: "unaccounted detector result" })])
+    db.close()
+  }],
+  ["retained bytes from stale head", "light presentation integrity", data => {
+    const path = join(data.root, ".light/post-request.json")
+    writeFileSync(path, readFileSync(path, "utf8").replace(lightHead(2), lightHead(1)))
+  }],
+  ["forged intake stop followed by work", "light attempt controls", data => {
+    const first = traceTools(data.events)[0], output = JSON.parse(first.part.state.output)
+    output.state = "CLOSED"
+    first.part.state.output = JSON.stringify(output)
+  }],
+  ["generic summary without actual coverage", "light coverage/action", data => terminalNote(data.events, lastNote(data.events).replace("Actual coverage: reviewed bounds 20 files / 600 changed lines", "Reduced-coverage light review"))],
+  ["mutation after expired detector return", "light attempt controls", data => {
+    const returned = traceTools(data.events).find(event => event.part.tool === "corvus_review_lock" && (event.part.state.input as { op?: string }).op === "status")!
+    const output = JSON.parse(returned.part.state.output)
+    output.held = false
+    output.holders = [] // Actual status() shape at the 7200s freshness boundary.
+    returned.part.state.output = JSON.stringify(output)
+  }],
+  ["writer dispatch reuses an expired ownership status", "light attempt controls", data => {
+    const revalidation = operation(data.events, "corvus_review_lock", "status"), output = JSON.parse(revalidation.part.state.output)
+    output.held = false
+    output.holders = []
+    revalidation.part.state.output = JSON.stringify(output)
+  }],
+]
+test.each(lightNegativeCases)("AC8/AC10 replay fails closed: %s", async (_name, check, mutate) => {
+  const { result } = await replayCase(2, { previews: true }, mutate)
+  expect(result.exitCode).toBe(5)
+  expect(result.rows.find(row => row.check === check)?.ok).toBe(false)
+})
+
+test("AC1: checker rejects the removed banner even with internally consistent receipts", async () => {
+  const { result } = await replayCase(1, {}, data => {
+    const path = join(data.root, ".light/candidate.json"), artifact = join(data.root, ".light/post-request.json")
+    const opts = { reviewStateRoot: join(data.input.fixture, ".corvus") }
+    const candidate: CandidateRequest = JSON.parse(readFileSync(path, "utf8"))
+    candidate.body += "\n> [!WARNING] Reduced-coverage light review"
+    writeFileSync(path, canonicalize(candidate))
+    const produced = operation(data.events, "corvus_review_persist", "write_candidate")
+    Object.assign(produced.part.state.input, { candidate })
+    produced.part.state.output = JSON.stringify(receipt(data.input.fixture, path))
+    operation(data.events, "corvus_review_payload", "measure").part.state.output = JSON.stringify(measureFile(path, opts))
+    const frozen = freeze(path, artifact, opts)
+    expect(frozen.ok).toBe(true)
+    if (!frozen.ok) return
+    operation(data.events, "corvus_review_payload", "freeze").part.state.output = JSON.stringify(frozen)
+    const shown = operation(data.events, "corvus_review_payload", "preview")
+    Object.assign(shown.part.state.input, { expectedSha256: frozen.sha256 })
+    shown.part.state.output = JSON.stringify(preview(artifact, frozen.sha256, opts))
+    for (const note of data.events.filter(event => "text" in event.part && typeof event.part.text === "string" && event.part.text.includes('"decision":"auto_post"'))) {
+      const value = JSON.parse((note.part as { text: string }).text)
+      value.digest = frozen.sha256
+      Object.assign(note.part, { text: JSON.stringify(value) })
+    }
+    const writer = traceTools(data.events).find(event => event.part.tool === "subagent")!
+    const descriptor = JSON.parse((writer.part.state.input as { prompt: string }).prompt)
+    descriptor.POST_ARTIFACT.expected_sha256 = frozen.sha256
+    Object.assign(writer.part.state.input, { prompt: JSON.stringify(descriptor) })
+  })
+  expect(result.exitCode).toBe(5)
+  expect(result.rows.find(row => row.check === "light presentation integrity")?.detail).toContain("generic light banner retained")
+})
 
 /** Use only for a deliberately successful fixture revision, before any negative mutation. */
 function refreshWrite(data: ReviewFixture, op: string, path: string, input?: object) {

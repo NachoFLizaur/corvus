@@ -1,0 +1,157 @@
+import { describe, expect, test } from "bun:test"
+import { evaluateRules } from "../evaluate-rules"
+import { buildFixedDenyPolicies, enforceFixedDenies, FIXED_DENY_AGENTS } from "../fixed-denies"
+import plugin from "../index"
+import { loadAgents } from "../load-agents"
+import { agentDir } from "../paths"
+import { PROTECTED_AGENTS } from "../protected-agents"
+import { renameAction, toV2Permissions } from "../to-v2-permissions"
+import { enforceProtected } from "../v2/enforce-protected"
+import { registerAgents } from "../v2/register-agents"
+import { createFakeContext, type EvaluationInput } from "./fake-context"
+import { LIGHT_BASH_DENIES, LIGHT_MUTATIONS, LIGHT_READS } from "./fixtures/review-light"
+
+const light = "corvus-review-light", detector = "pr-light-reviewer", model = "test-provider/user-chosen-fast-model"
+const corpus = loadAgents(agentDir)
+type Config = Parameters<NonNullable<Awaited<ReturnType<typeof plugin>>["config"]>>[0]
+// v1's SDK type predates native wildcard/question/task permissions. Model those
+// authored keys as data and assert fidelity only at the config-hook boundary.
+type TestConfig = Omit<Config, "agent"> & { agent: Record<string,
+  Omit<NonNullable<NonNullable<Config["agent"]>[string]>, "permission"> & { permission?: Record<string, unknown> }> }
+
+/** Oracle: test-owned action cases and packaged policy read before host overrides.
+ * Fake host changes are test-local. Widening, model loss or extra-denial loss fails;
+ * no environment flag disables these assertions. Teardown alone disables v2 hooks. */
+describe("light fixed denies (AC1, AC7)", () => {
+  test("derives only denies from the packaged block and fails closed on malformed policy", () => {
+    expect(PROTECTED_AGENTS).toEqual(["pr-code-reviewer", "security-reviewer", "pr-light-reviewer", "pr-comment-writer"])
+    expect(PROTECTED_AGENTS).not.toContain(light)
+    const policies = buildFixedDenyPolicies(corpus), policy = policies.get(light)!
+    expect(policy.rules).toHaveLength(20)
+    expect(toV2Permissions(corpus[light].permission)).toHaveLength(22)
+    expect([...policies.keys()]).toEqual([...FIXED_DENY_AGENTS])
+    expect(policy.rules).toEqual([
+      { action: "question", resource: "*", effect: "deny" },
+      ...LIGHT_BASH_DENIES.map(resource => ({ action: "shell", resource, effect: "deny" as const })),
+    ])
+    for (const command of LIGHT_MUTATIONS) expect(evaluateRules(policy.rules, "shell", command), command).toBe("deny")
+    for (const command of LIGHT_READS) expect(evaluateRules(policy.rules, "shell", command), command).toBeUndefined()
+    const missing = { ...corpus }
+    delete missing[light]
+    expect(() => buildFixedDenyPolicies(missing)).toThrow()
+    for (const permission of [{}, { question: "allow", bash: { "git push*": "deny" } },
+      { question: "deny", bash: { "*": "allow" } }, { question: "deny", bash: { "git push*": "bogus" } }])
+      expect(() => buildFixedDenyPolicies({ ...corpus, [light]: { ...corpus[light], permission } })).toThrow()
+
+    const bash = corpus[light].permission!.bash as Record<string, unknown>
+    const extended = { ...corpus, [light]: { ...corpus[light], permission: { ...corpus[light].permission,
+      bash: { ...bash, "git synthetic-mutation*": "deny" } } } }
+    const derived = buildFixedDenyPolicies(extended).get(light)!
+    expect(evaluateRules(derived.rules, "shell", "git synthetic-mutation probe")).toBe("deny")
+    const tightened = enforceFixedDenies(extended, corpus)[light] as typeof corpus[string]
+    expect(evaluateRules(toV2Permissions(tightened.permission), "shell", "git synthetic-mutation probe")).toBe("deny")
+  })
+
+  test("tightening is pure and preserves other agent references", () => {
+    const merged: typeof corpus = { ...corpus, [light]: { ...corpus[light], model,
+      permission: { "*": "allow", question: "allow", bash: "allow", task: { "pr-comment-writer": "deny" } } } }
+    const before = JSON.stringify(merged), packaged = JSON.stringify(corpus)
+    const tightened = enforceFixedDenies(corpus, merged)
+    expect(JSON.stringify(merged)).toBe(before)
+    expect(JSON.stringify(corpus)).toBe(packaged)
+    expect(tightened[light]).not.toBe(merged[light])
+    for (const name of Object.keys(corpus).filter(name => name !== light)) expect(tightened[name]).toBe(merged[name])
+  })
+
+  test.each(["map", "allow", "deny", "ask"] as const)("v1 user %s override cannot widen fixed denies; additional denies/model survive", async kind => {
+    const hooks = await plugin({} as Parameters<typeof plugin>[0])
+    if (!hooks.config) throw new Error("Missing config hook")
+    const bash = kind === "map" ? { "*": "allow" as const,
+      ...Object.fromEntries(LIGHT_BASH_DENIES.map(pattern => [pattern, "allow" as const])),
+      "git push origin*": "allow" as const, "git log*": "deny" as const } : kind
+    const config: TestConfig = { agent: {
+      [light]: { model, permission: { "*": "allow", question: "allow", bash, task: { "pr-comment-writer": "deny" }, edit: "deny" } },
+      [detector]: { model, prompt: "Untrusted replacement", permission: { "*": "allow", edit: "allow", write: "allow", bash: "allow" } },
+      researcher: { model, permission: { question: "allow", bash: "ask", task: { "pr-comment-writer": "deny" } } },
+    } }
+    await hooks.config(config as unknown as Config)
+    const agent = config.agent![light]!, rules = toV2Permissions(agent.permission)
+    expect(agent.model).toBe(model)
+    expect(evaluateRules(rules, "question", "*")).toBe("deny")
+    expect(evaluateRules(rules, "subagent", "pr-comment-writer")).toBe("deny")
+    expect(evaluateRules(rules, "edit", "src/file.ts")).toBe("deny")
+    for (const command of LIGHT_MUTATIONS) expect(evaluateRules(rules, "shell", command), command).toBe("deny")
+    for (const command of LIGHT_READS) expect(evaluateRules(rules, "shell", command), command)
+      .toBe(kind === "map" ? command.startsWith("git log") ? "deny" : "allow" : kind)
+    expect(config.agent![detector]!.permission).toEqual(corpus[detector].permission)
+    expect(config.agent![detector]!.prompt).toBe(corpus[detector].prompt)
+    expect(config.agent![detector]!.model).toBe(model)
+    for (const name of Object.keys(corpus).filter(name => ![light, detector].includes(name))) {
+      const expected = name === "researcher" ? { ...corpus[name].permission,
+        question: "allow", bash: "ask", task: { "pr-comment-writer": "deny" } } : corpus[name].permission
+      expect(config.agent![name]!.permission, name).toEqual(expected)
+    }
+    const beforeReplay = JSON.stringify(config.agent![light]!.permission)
+    await hooks.config(config as unknown as Config)
+    expect(JSON.stringify(config.agent![light]!.permission)).toBe(beforeReplay)
+  })
+
+  test("v2 request hook denies later user allows without replacing permission arrays or model choices", async () => {
+    const fake = createFakeContext()
+    await registerAgents(fake.ctx)
+    const cleanup = await enforceProtected(fake.ctx)
+    if (!cleanup) throw new Error("Missing cleanup")
+    try {
+      const agent = fake.agents.get(light)!
+      agent.model = { providerID: "test-provider", id: "user-chosen-fast-model" } as unknown as typeof agent.model
+      agent.permissions.push({ action: "question", resource: "*", effect: "allow" },
+        { action: "shell", resource: "*", effect: "allow" }, { action: "shell", resource: "git push origin*", effect: "allow" },
+        { action: "subagent", resource: "pr-comment-writer", effect: "deny" }, { action: "shell", resource: "git log*", effect: "deny" })
+      const beforeRules = JSON.stringify(agent.permissions), beforeModel = JSON.stringify(agent.model)
+      // Mirror the host's deny short circuit: already-denied requests never reach
+      // the evaluate hook. Only allow/ask decisions can be tightened there.
+      const request = async (action: string, resources: string[]) => {
+        const effects = resources.map(resource => evaluateRules(agent.permissions, action, resource))
+        if (effects.includes("deny")) return { effect: "deny" }
+        return fake.evaluate({ agent: light, action, resources, effect: effects.includes("ask") ? "ask" : "allow" })
+      }
+      const cases: [string, string[]][] = [["question", ["*"]], ...LIGHT_MUTATIONS.map((command): [string, string[]] => ["shell", [command]]),
+        ["shell", [LIGHT_READS[0], LIGHT_MUTATIONS[2]]]]
+      for (const [action, resources] of cases) {
+        expect(evaluateRules(agent.permissions, action, resources.at(-1)!)).toBe("allow")
+        expect((await request(action, resources)).effect).toBe("deny")
+      }
+      expect((await request("subagent", ["pr-comment-writer"])).effect).toBe("deny")
+      for (const command of LIGHT_READS) expect((await request("shell", [command])).effect).toBe(command.startsWith("git log") ? "deny" : "allow")
+      for (const effect of ["allow", "ask"] as const) for (const action of ["shell", "bash"])
+        for (const command of LIGHT_MUTATIONS)
+          expect((await fake.evaluate({ agent: light, action, resources: [command], effect })).effect, command).toBe("deny")
+      expect((await fake.evaluate({ agent: light, action: "question", resources: [], effect: "allow" })).effect).toBe("deny")
+      expect((await fake.evaluate({ agent: light, action: "read", resources: ["file"], effect: "ask" })).effect).toBe("ask")
+      expect((await fake.context({ agent: light })).system).toEqual([])
+      expect(JSON.stringify(agent.permissions)).toBe(beforeRules)
+      expect(JSON.stringify(agent.model)).toBe(beforeModel)
+
+      const child = fake.agents.get(detector)!
+      child.permissions.push({ action: "edit", resource: "*", effect: "allow" })
+      expect(evaluateRules(child.permissions, "edit", "src/file.ts")).toBe("allow")
+      expect((await fake.evaluate({ agent: detector, action: "edit", resources: ["src/file.ts"], effect: "allow" })).effect).toBe("deny")
+      const restored = await fake.context({ agent: detector })
+      expect(restored.system.map(part => part.text)).toEqual([corpus[detector].prompt!])
+      const marker = corpus[detector].prompt!.split("\n", 1)[0]
+      expect(Object.values(corpus).filter(config => config.prompt!.includes(marker))).toHaveLength(1)
+
+      for (const name of Object.keys(corpus).filter(name => name !== light))
+        for (const action of ["question", "shell", "bash", "read", "edit", "subagent", "corvus_review_post"])
+          for (const resource of ["*", LIGHT_MUTATIONS[2], LIGHT_READS[0], "src/file.ts", "pr-comment-writer"])
+            for (const effect of ["allow", "ask"] as const) {
+              const authored = PROTECTED_AGENTS.some(id => id === name) ? evaluateRules(toV2Permissions(corpus[name].permission), renameAction(action), resource) : undefined
+              const expected = authored === "deny" ? "deny" : effect === "allow" && authored === "ask" ? "ask" : effect
+              const input: EvaluationInput = { agent: name, action, resources: [resource], effect }
+              expect((await fake.evaluate(input)).effect, JSON.stringify(input)).toBe(expected)
+            }
+      expect((await fake.evaluate({ action: "shell", resources: [LIGHT_MUTATIONS[2]], effect: "allow" })).effect).toBe("allow")
+    } finally { await cleanup() }
+    expect((await fake.evaluate({ agent: light, action: "question", resources: ["*"], effect: "allow" })).effect).toBe("allow")
+  })
+})

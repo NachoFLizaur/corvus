@@ -14,7 +14,7 @@ import { createFakeContext, type FakeContext } from "./fake-context"
  * seam below the loaders, so a change made in one path — an added agent, a
  * renamed command, a skill directory that stops being discovered — can leave the
  * other silently short. Nothing else in the suite compares the two: the v1 tests
- * count 16/4/1 and the v2 tests count 16/4/18, and both pass while disagreeing
+ * count 18/4/1 and the v2 tests count 18/4/19, and both pass while disagreeing
  * about WHICH names those are.
  *
  * WHY NAMES AND NOT VALUES: the two hosts want genuinely different shapes (v1
@@ -92,7 +92,7 @@ describe("v1 / v2 registration parity", () => {
   test("both entries contribute the same agent names", () => {
     const names = Object.keys(v1.agent).sort()
 
-    expect(names).toHaveLength(16)
+    expect(names).toHaveLength(18)
     expect([...v2.agents.keys()].sort()).toEqual(names)
   })
 
@@ -110,7 +110,7 @@ describe("v1 / v2 registration parity", () => {
 
     const ids = skillIdsUnder(v1.skills.paths[0])
 
-    expect(ids).toHaveLength(18)
+    expect(ids).toHaveLength(19)
     expect([...v2.skills.keys()].sort()).toEqual(ids)
   })
 })

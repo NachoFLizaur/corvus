@@ -6,6 +6,7 @@ import { createLockExecutor } from "../review-lock"
 import { createPrExecutor, isPrCallerAllowed } from "../review-pr"
 import { createVerdictExecutor } from "../review-verdict"
 import { createSyncExecutor } from "../review-sync"
+import { isReviewCallerAllowed } from "../review-callers"
 import type { Registrar, SetupContext } from "./types"
 
 type ToolDraft = Parameters<Parameters<SetupContext["tool"]["transform"]>[0]>[0]
@@ -43,10 +44,10 @@ export const registerTools: Registrar = async (ctx) => {
         additionalProperties: false,
       },
       options: { codemode: false },
-      /** Host ctx.agent is read before payload I/O; only the two review orchestrators pass. Missing/unknown callers fail closed, and no argument or option disables the check. */
+      /** Host ctx.agent is read before payload I/O; the shared review-callers roster admits orchestrators and fails closed for missing/unknown callers, without an argument bypass. */
       execute: async (args: unknown, ctx) => {
-        if (!["corvus-review", "corvus-review-auto"].includes(ctx?.agent)) return { content: JSON.stringify({ ok: false, reason: "caller-not-allowed" }) }
-        return { content: review.payload(args) }
+        if (!isReviewCallerAllowed("corvus_review_payload", ctx?.agent, args)) return { content: JSON.stringify({ ok: false, reason: "caller-not-allowed" }) }
+        return { content: review.payload(args, ctx?.agent) }
       },
     })
     draft.add({
@@ -116,10 +117,10 @@ export const registerTools: Registrar = async (ctx) => {
         additionalProperties: true,
       },
       options: { codemode: false },
-      /** Host ctx.agent is read before state I/O; only the two review orchestrators pass. Missing/unknown callers fail closed, and no argument or option disables the check. */
+      /** Host ctx.agent and op/target/ID are checked against review-callers before state I/O; light is candidate-only. Missing/unknown callers fail closed, without a bypass. */
       execute: async (args: unknown, ctx) => {
-        if (!["corvus-review", "corvus-review-auto"].includes(ctx?.agent)) return { content: JSON.stringify({ ok: false, reason: "caller-not-allowed" }) }
-        return { content: persist(args) }
+        if (!isReviewCallerAllowed("corvus_review_persist", ctx?.agent, args)) return { content: JSON.stringify({ ok: false, reason: "caller-not-allowed" }) }
+        return { content: persist(args, ctx?.agent) }
       },
     })
     draft.add({
@@ -138,15 +139,15 @@ export const registerTools: Registrar = async (ctx) => {
         additionalProperties: true,
       },
       options: { codemode: false },
-      /** Host ctx.agent is read before lock I/O; only the two review orchestrators pass. Missing/unknown callers fail closed, and no argument or option disables the check. */
+      /** Host ctx.agent is read before lock I/O; the shared review-callers roster admits orchestrators and fails closed for missing/unknown callers, without an argument bypass. */
       execute: async (args: unknown, ctx) => {
-        if (!["corvus-review", "corvus-review-auto"].includes(ctx?.agent)) return { content: JSON.stringify({ ok: false, reason: "caller-not-allowed" }) }
-        return { content: lock(args) }
+        if (!isReviewCallerAllowed("corvus_review_lock", ctx?.agent, args)) return { content: JSON.stringify({ ok: false, reason: "caller-not-allowed" }) }
+        return { content: lock(args, ctx?.agent) }
       },
     })
     draft.add({
       name: "corvus_review_pr",
-      description: "Read GitHub PR data with validated, fixed operations. metadata/head/diff/reviews/checks take owner, name, pr; files also requires paginate:true and accepts include_corvus/names_only booleans (include_corvus implies names-only). Files and diffs exclude .corvus by default and report excluded_corvus; local changed_files stays unfiltered. metadata/head/local return raw head_sha and code_head skipping state commits. config takes owner, name, ref (base SHA); identity takes no fields; repo resolves owner/name from gh or origin with optional cwd (defaults to the session directory). find takes optional cwd/branch to discover the current or named branch's PR; local takes optional cwd/base for a bounded local diff including tracked uncommitted changes, branch (null when detached), default_branch, merge_base, ahead, changed_files, stat, dirty and oversized. Caller policy uses the host agent: pr-comment-writer may call only head, diff, files, reviews; pr-code-reviewer and security-reviewer may call only metadata, head, files, diff, reviews, checks; corvus-review, corvus-review-auto and pr-context-gatherer may call any op. Unknown callers return caller-not-allowed.",
+      description: "Read GitHub PR data with validated, fixed operations. metadata/head/diff/reviews/checks take owner, name, pr; files also requires paginate:true and accepts include_corvus/names_only booleans (include_corvus implies names-only). Files and diffs exclude .corvus by default and report excluded_corvus; local changed_files stays unfiltered. metadata/head/local return raw head_sha and code_head skipping state commits. config takes owner, name, ref (base SHA); identity takes no fields; repo resolves owner/name from gh or origin with optional cwd (defaults to the session directory). find takes optional cwd/branch to discover the current or named branch's PR; local takes optional cwd/base for a bounded local diff including tracked uncommitted changes, branch (null when detached), default_branch, merge_base, ahead, changed_files, stat, dirty and oversized. Caller policy (host agent): pr-comment-writer: head/diff/files/reviews; pr-code-reviewer, security-reviewer, pr-light-reviewer: metadata/head/files/diff/reviews/checks; corvus-review, corvus-review-auto, corvus-review-light, pr-context-gatherer: all ops. Unknown callers: caller-not-allowed.",
       input: {
         type: "object",
         properties: {
@@ -202,9 +203,9 @@ export const registerTools: Registrar = async (ctx) => {
         additionalProperties: false,
       },
       options: { codemode: false },
-      /** Host agent identity is read before state I/O; unknown/non-review callers reject, with no argument bypass. */
+      /** Host ctx.agent is read against review-callers before state I/O; unknown/non-review callers reject, with no argument bypass. */
       execute: async (args: unknown, ctx) => {
-        if (!["corvus-review", "corvus-review-auto"].includes(ctx?.agent)) return { content: JSON.stringify({ ok: false, reason: "caller-not-allowed" }) }
+        if (!isReviewCallerAllowed("corvus_review_verdict", ctx?.agent, args)) return { content: JSON.stringify({ ok: false, reason: "caller-not-allowed" }) }
         return { content: verdict(args) }
       },
     })
@@ -227,9 +228,9 @@ export const registerTools: Registrar = async (ctx) => {
         additionalProperties: false,
       },
       options: { codemode: false },
-      /** Host agent identity is checked before sync I/O; only the two review orchestrators pass. Missing/unknown callers fail closed, without an argument bypass. */
+      /** Host ctx.agent and op are checked against review-callers before sync I/O; light gets resolve only. Missing/unknown callers fail closed with zero git calls; no argument bypass. */
       execute: async (args: unknown, ctx) => {
-        if (!["corvus-review", "corvus-review-auto"].includes(ctx?.agent)) return { content: JSON.stringify({ synced: false, reason: "caller-not-allowed", git_calls: 0 }) }
+        if (!isReviewCallerAllowed("corvus_review_sync", ctx?.agent, args)) return { content: JSON.stringify({ synced: false, reason: "caller-not-allowed", git_calls: 0 }) }
         return { content: await sync(args) }
       },
     })

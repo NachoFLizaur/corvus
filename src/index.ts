@@ -4,6 +4,7 @@ import type { Plugin } from "@opencode-ai/plugin"
 import { z } from "zod"
 import { agentDir, commandDir, skillDir } from "./paths"
 import { loadAgents } from "./load-agents"
+import { enforceFixedDenies } from "./fixed-denies"
 import { loadCommands } from "./load-commands"
 import { hostOmitsOutputLimit, resolveOutputBudget } from "./output-budget"
 import { createReviewToolExecutors } from "./review-payload"
@@ -13,6 +14,7 @@ import { createLockExecutor } from "./review-lock"
 import { createPrExecutor, isPrCallerAllowed } from "./review-pr"
 import { createVerdictExecutor } from "./review-verdict"
 import { createSyncExecutor } from "./review-sync"
+import { isReviewCallerAllowed } from "./review-callers"
 
 /**
  * Extended config type that includes the `skills` field.
@@ -132,10 +134,10 @@ const plugin: Plugin = async (input) => {
           artifactPath: z.string().min(1).optional(),
           expectedSha256: z.string().regex(/^[a-f0-9]{64}$/).optional(),
         },
-        /** Host ctx.agent is read before payload I/O; only the two review orchestrators pass. Missing/unknown callers fail closed, and no argument or option disables the check. */
+        /** Host ctx.agent is read before payload I/O; the shared review-callers roster admits orchestrators and fails closed for missing/unknown callers, without an argument bypass. */
         execute: async (args, ctx) => {
-          if (!["corvus-review", "corvus-review-auto"].includes(ctx?.agent)) return JSON.stringify({ ok: false, reason: "caller-not-allowed" })
-          return review.payload(args)
+          if (!isReviewCallerAllowed("corvus_review_payload", ctx?.agent, args)) return JSON.stringify({ ok: false, reason: "caller-not-allowed" })
+          return review.payload(args, ctx?.agent)
         },
       },
       corvus_review_post: {
@@ -187,10 +189,10 @@ const plugin: Plugin = async (input) => {
           value: z.json().optional(),
           chunk: z.json().optional(),
         },
-        /** Host ctx.agent is read before state I/O; only the two review orchestrators pass. Missing/unknown callers fail closed, and no argument or option disables the check. */
+        /** Host ctx.agent and op/target/ID are checked against review-callers before state I/O; light is candidate-only. Missing/unknown callers fail closed, without a bypass. */
         execute: async (args, ctx) => {
-          if (!["corvus-review", "corvus-review-auto"].includes(ctx?.agent)) return JSON.stringify({ ok: false, reason: "caller-not-allowed" })
-          return persist(args)
+          if (!isReviewCallerAllowed("corvus_review_persist", ctx?.agent, args)) return JSON.stringify({ ok: false, reason: "caller-not-allowed" })
+          return persist(args, ctx?.agent)
         },
       },
       corvus_review_lock: {
@@ -202,14 +204,14 @@ const plugin: Plugin = async (input) => {
           force: z.boolean().optional(),
           mode: z.enum(["delete", "complete"]).optional(),
         },
-        /** Host ctx.agent is read before lock I/O; only the two review orchestrators pass. Missing/unknown callers fail closed, and no argument or option disables the check. */
+        /** Host ctx.agent is read before lock I/O; the shared review-callers roster admits orchestrators and fails closed for missing/unknown callers, without an argument bypass. */
         execute: async (args, ctx) => {
-          if (!["corvus-review", "corvus-review-auto"].includes(ctx?.agent)) return JSON.stringify({ ok: false, reason: "caller-not-allowed" })
-          return lock(args)
+          if (!isReviewCallerAllowed("corvus_review_lock", ctx?.agent, args)) return JSON.stringify({ ok: false, reason: "caller-not-allowed" })
+          return lock(args, ctx?.agent)
         },
       },
       corvus_review_pr: {
-        description: "Read GitHub PR data with validated, fixed operations. metadata/head/diff/reviews/checks take owner, name, pr; files also requires paginate:true and accepts include_corvus/names_only booleans (include_corvus implies names-only). Files and diffs exclude .corvus by default and report excluded_corvus; local changed_files stays unfiltered. metadata/head/local return raw head_sha and code_head skipping state commits. config takes owner, name, ref (base SHA); identity takes no fields; repo resolves owner/name from gh or origin with optional cwd (defaults to the session directory). find takes optional cwd/branch to discover the current or named branch's PR; local takes optional cwd/base for a bounded local diff including tracked uncommitted changes, branch (null when detached), default_branch, merge_base, ahead, changed_files, stat, dirty and oversized. Caller policy uses the host agent: pr-comment-writer may call only head, diff, files, reviews; pr-code-reviewer and security-reviewer may call only metadata, head, files, diff, reviews, checks; corvus-review, corvus-review-auto and pr-context-gatherer may call any op. Unknown callers return caller-not-allowed.",
+        description: "Read GitHub PR data with validated, fixed operations. metadata/head/diff/reviews/checks take owner, name, pr; files also requires paginate:true and accepts include_corvus/names_only booleans (include_corvus implies names-only). Files and diffs exclude .corvus by default and report excluded_corvus; local changed_files stays unfiltered. metadata/head/local return raw head_sha and code_head skipping state commits. config takes owner, name, ref (base SHA); identity takes no fields; repo resolves owner/name from gh or origin with optional cwd (defaults to the session directory). find takes optional cwd/branch to discover the current or named branch's PR; local takes optional cwd/base for a bounded local diff including tracked uncommitted changes, branch (null when detached), default_branch, merge_base, ahead, changed_files, stat, dirty and oversized. Caller policy (host agent): pr-comment-writer: head/diff/files/reviews; pr-code-reviewer, security-reviewer, pr-light-reviewer: metadata/head/files/diff/reviews/checks; corvus-review, corvus-review-auto, corvus-review-light, pr-context-gatherer: all ops. Unknown callers: caller-not-allowed.",
         args: {
           op: z.enum(["metadata", "head", "files", "diff", "reviews", "checks", "identity", "config", "repo", "find", "local"]),
           cwd: z.string().optional(),
@@ -251,9 +253,9 @@ const plugin: Plugin = async (input) => {
           config: z.object({}).passthrough(),
           forceDelta: z.boolean().optional(),
         },
-        /** Host agent identity is read before state I/O; unknown/non-review callers reject, with no argument bypass. */
+        /** Host ctx.agent is read against review-callers before state I/O; unknown/non-review callers reject, with no argument bypass. */
         execute: async (args, ctx) => {
-          if (!["corvus-review", "corvus-review-auto"].includes(ctx?.agent)) return JSON.stringify({ ok: false, reason: "caller-not-allowed" })
+          if (!isReviewCallerAllowed("corvus_review_verdict", ctx?.agent, args)) return JSON.stringify({ ok: false, reason: "caller-not-allowed" })
           return verdict(args)
         },
       },
@@ -269,9 +271,9 @@ const plugin: Plugin = async (input) => {
           root: z.string().optional(),
           head_sha: z.string().optional(),
         },
-        /** Host agent identity is checked before sync I/O; only the two review orchestrators pass. Missing/unknown callers fail closed, without an argument bypass. */
+        /** Host ctx.agent and op are checked against review-callers before sync I/O; light gets resolve only. Missing/unknown callers fail closed with zero git calls; no argument bypass. */
         execute: async (args, ctx) => {
-          if (!["corvus-review", "corvus-review-auto"].includes(ctx?.agent)) return JSON.stringify({ synced: false, reason: "caller-not-allowed", git_calls: 0 })
+          if (!isReviewCallerAllowed("corvus_review_sync", ctx?.agent, args)) return JSON.stringify({ synced: false, reason: "caller-not-allowed", git_calls: 0 })
           return sync(args)
         },
       },
@@ -285,9 +287,9 @@ const plugin: Plugin = async (input) => {
           agents,
           (existingAgents ?? {}) as PlainObject,
         )
-        config.agent = enforceProtectedAgents(
+        config.agent = enforceFixedDenies(
           agents,
-          merged,
+          enforceProtectedAgents(agents, merged),
         ) as NonNullable<typeof config.agent>
       }
 

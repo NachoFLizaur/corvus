@@ -78,7 +78,7 @@ describe("registerAgents", () => {
     await registerAgents(fake.ctx)
 
     expect([...fake.agents.keys()].sort()).toEqual(ids)
-    expect(fake.agents.size).toBe(16)
+    expect(fake.agents.size).toBe(18)
     expect(fake.registrations.map((registration) => registration.kind)).toEqual(["agent.transform"])
   })
 

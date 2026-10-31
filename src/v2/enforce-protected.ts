@@ -1,4 +1,5 @@
 import { evaluateRules } from "../evaluate-rules"
+import { buildFixedDenyPolicies, isFixedDenied } from "../fixed-denies"
 import { loadAgents } from "../load-agents"
 import { agentDir } from "../paths"
 import { PROTECTED_AGENTS } from "../protected-agents"
@@ -9,7 +10,7 @@ import type { Registrar, Rule, SetupContext } from "./types"
  * The v2 protected-agent security boundary. THIS FILE IS THE OWNING LOCATION for
  * the rationale below; README and other code point here rather than restating it.
  *
- * Protected agents (`pr-code-reviewer`, `security-reviewer`, `pr-comment-writer`)
+ * Protected agents (the roster in `src/protected-agents.ts`)
  * consume untrusted PR content — diffs, comments, issue text — so their
  * "mechanically read-only" capability limit is a security guarantee, not a
  * preference. Under v1 corvus enforced it by deep-replacing `permission` and
@@ -41,9 +42,10 @@ import type { Registrar, Rule, SetupContext } from "./types"
  * Fail direction per consumer: a PROTECTED agent fails CLOSED. Any authored `deny`
  * matching a requested resource forces `e.effect = "deny"`; otherwise an authored
  * `ask` downgrades an `allow` to `ask`. `evaluateRules` returning `undefined`
- * ("corvus has no opinion") leaves the host decision intact. A NON-PROTECTED agent
- * — and a request the host reports without an agent id — is returned untouched, so
- * this hook can never affect the other thirteen agents. At setup the same direction
+ * ("corvus has no opinion") leaves the host decision intact. The light primary's
+ * deny-only policy is owned by `src/fixed-denies.ts` and shares this evaluate hook;
+ * it has no context/prompt protection. Other NON-PROTECTED agents — and requests
+ * without an agent id — are untouched. At setup the same direction
  * applies: a protected agent missing from the corpus, or carrying no permission
  * rules, THROWS and aborts `setup()`, because an empty policy would silently
  * degrade into a hook that tightens nothing.
@@ -83,7 +85,7 @@ interface ProtectedPolicy {
    * e.g. `# PR Code Reviewer - Read-Only Detection Agent`.
    *
    * Derived rather than injected on purpose. Each protected agent's first body
-   * line is already distinctive AND unique across all 16 corpus agents (verified),
+   * line is already distinctive AND unique across the corpus,
    * so no `agent/*.md` needs a synthetic marker line — the corpus stays untouched
    * and the marker cannot drift away from the prompt it guards, because it is
    * literally cut from it. It is a PRESENCE probe, not an integrity check: it
@@ -135,10 +137,18 @@ export const enforceProtected: Registrar = async (ctx) => {
   const policies = new Map<string, ProtectedPolicy>(
     PROTECTED_AGENTS.map((agent) => [agent, buildPolicy(agent, corpus[agent])]),
   )
+  const fixedDenies = buildFixedDenyPolicies(corpus)
 
   const permission = await ctx.permission.hook("evaluate", (e) => {
     const agent = e.agent
     if (agent === undefined) return
+
+    const fixed = fixedDenies.get(agent)
+    if (fixed !== undefined && isFixedDenied(fixed, e.action, e.resources)) {
+      e.effect = "deny"
+      e.message = `corvus: ${agent}; ${e.action} is denied by the plugin's fixed-deny boundary.`
+      return
+    }
 
     const policy = policies.get(agent)
     if (policy === undefined) return

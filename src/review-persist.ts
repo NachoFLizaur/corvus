@@ -5,6 +5,8 @@ import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path
 import { isDeepStrictEqual } from "node:util"
 import yaml from "js-yaml"
 import { measure, type CandidateRequest, type ReviewPayloadFs } from "./review-payload"
+import { isReviewCallerAllowed, REVIEW_CALLERS } from "./review-callers"
+import { hostRelativePath, isLightClassPath, LIGHT_REVIEW_DIRECTORY, reviewNamespaceOf } from "./review-storage-class"
 
 export type ReviewPersistFs = Omit<ReviewPayloadFs, "writeFileSync"> & {
   writeFileSync(path: string, data: Uint8Array, options: { flag: "wx"; mode: number }): void
@@ -36,7 +38,7 @@ export type PersistRejection = {
     | "not-regular-file" | "symlink-target" | "write-error" | "read-error" | "encoding-error"
     | "readback-mismatch" | "cleanup-error" | "unknown-record" | "not-found"
     | "unknown-staging" | "incomplete-staging" | "chunk-too-large" | "heading-conflict"
-    | "part-count-conflict" | "part-type-conflict" | "merge-conflict"
+    | "part-count-conflict" | "part-type-conflict" | "merge-conflict" | "caller-not-allowed"
   expectedBytes?: number
   actualBytes?: number
   length?: number
@@ -142,6 +144,44 @@ export const isReviewPath = (path: string): boolean =>
     && !path.split("/").some(part => part === ".." || part === ".")
 export const isLegacyReviewPath = (path: string): boolean =>
   /(?:^|\/)reviews\/(?:local__[^/]+|[^/]+__[^/]+__pr[1-9][0-9]*)(?:\/|$)/.test(path)
+export { LIGHT_REVIEW_DIRECTORY } from "./review-storage-class"
+
+function reviewLocation(reviewRoot: string, reviewStateRoot: string, fs: DirectoryFs) {
+  const configured = resolve(reviewStateRoot)
+  const conventional = basename(configured) === "reviews" && basename(dirname(configured)) === ".corvus"
+  const workspaceRoot = basename(configured) === ".corvus"
+  const anchor = conventional ? dirname(dirname(configured)) : dirname(configured)
+  const realAnchor = fs.realpathSync(anchor)
+  const root = resolve(realAnchor, relative(anchor, configured))
+  const absolute = resolve((conventional || workspaceRoot) && reviewRoot.startsWith(".corvus/") ? anchor : configured, reviewRoot)
+  return { configured, conventional, workspaceRoot, anchor, realAnchor, root, absolute }
+}
+
+/**
+ * The canonical new-layout namespace is read before creating the tool-owned
+ * class. Callers supply the shared root, never a class or descendant. A real,
+ * direct class child is required; aliases reject even inside the host root.
+ * Failure withholds all light writes; no input can disable this routing.
+ */
+export function resolveLightReviewDirectory(reviewRoot: string, reviewStateRoot: string, fs: DirectoryFs, create: boolean): string {
+  const namespace = (hostRoot: string, path: string) => {
+    const hostRel = hostRelativePath(hostRoot, path)
+    return hostRel !== null && reviewNamespaceOf(hostRel) === hostRel
+  }
+  const location = reviewLocation(reviewRoot, reviewStateRoot, fs)
+  const requested = hostRelativePath(location.configured, location.absolute, location.root)
+  if (requested === null || reviewNamespaceOf(requested) !== requested) {
+    throw new ReviewDirectoryError("path-outside-root", reviewRoot)
+  }
+  const { root, path: parent } = resolveReviewDirectory(reviewRoot, reviewStateRoot, fs, create)
+  if (!namespace(root, parent)) {
+    throw new ReviewDirectoryError("path-outside-root", reviewRoot)
+  }
+  const expected = resolve(parent, LIGHT_REVIEW_DIRECTORY)
+  const path = resolveReviewDirectory(expected, reviewStateRoot, fs, create).path
+  if (path !== expected || fs.lstatSync(expected).isSymbolicLink()) throw new ReviewDirectoryError("path-outside-root", expected)
+  return path
+}
 
 /**
  * The host workspace and real directory chain are the containment oracle. Check
@@ -161,14 +201,8 @@ export function resolveReviewDirectory(reviewRoot: string, reviewStateRoot: stri
     || /[\u0000-\u001f\u007f]/.test(reviewStateRoot)) reject("invalid-review-state-root")
   if (!reviewRoot || /[\\\u0000-\u001f\u007f]/.test(reviewRoot) || reviewRoot.split("/").includes("..")) reject("path-outside-root")
   try {
-    const configured = resolve(reviewStateRoot)
-     const conventional = basename(configured) === "reviews" && basename(dirname(configured)) === ".corvus"
-     const workspaceRoot = basename(configured) === ".corvus"
-     const anchor = conventional ? dirname(dirname(configured)) : dirname(configured)
-    const realAnchor = fs.realpathSync(anchor)
-    if (!fs.statSync(realAnchor).isDirectory()) reject("path-resolution-error", anchor)
-    const root = resolve(realAnchor, relative(anchor, configured))
-     const absolute = resolve((conventional || workspaceRoot) && reviewRoot.startsWith(".corvus/") ? anchor : configured, reviewRoot)
+     const { configured, conventional, workspaceRoot, anchor, realAnchor, root, absolute } = reviewLocation(reviewRoot, reviewStateRoot, fs)
+     if (!fs.statSync(realAnchor).isDirectory()) reject("path-resolution-error", anchor)
      const base = inside(configured, absolute) ? configured : inside(root, absolute) ? root : undefined
      if (!base || absolute === base) return reject("path-outside-root")
      if (workspaceRoot && !isReviewPath(relative(base, absolute))) return reject("path-outside-root")
@@ -1044,17 +1078,30 @@ export const status = (input: unknown, opts: PersistOptions): StagingResult => e
 export function createPersistExecutor(
   reviewStateRoot: string,
   options: Omit<PersistOptions, "reviewStateRoot"> = {},
-): (input: unknown) => string {
+): (input: unknown, caller?: string) => string {
   const opts: PersistOptions = { fs: options.fs, reviewStateRoot }
-  return input => {
+  return (input, caller) => {
     try {
       const value = snapshot(input)
       if (!isRecord(value)) fail("invalid-arguments")
       const { op, ...args } = value
+      if (caller === REVIEW_CALLERS.lightOrchestrator) {
+        if (!isReviewCallerAllowed("corvus_review_persist", caller, value)) fail("caller-not-allowed")
+        if (typeof args.reviewRoot !== "string" || !args.reviewRoot) fail("invalid-arguments")
+        args.reviewRoot = resolveLightReviewDirectory(args.reviewRoot, reviewStateRoot, opts.fs ?? nodeFs, op === "begin" || op === "write_candidate")
+      } else if (typeof args.reviewRoot === "string") {
+        // Same coordinate construction as containment, before any directory or
+        // record write. Full callers reject the private class; library APIs keep
+        // their existing contract and no tool argument disables this guard.
+        const { configured, conventional, root, absolute } = reviewLocation(args.reviewRoot, reviewStateRoot, opts.fs ?? nodeFs)
+        const hostRel = hostRelativePath(conventional ? dirname(configured) : configured, absolute, conventional ? dirname(root) : root)
+        if (hostRel !== null && isLightClassPath(hostRel)) fail("path-outside-root")
+      }
       if (typeof op === "string" && Object.hasOwn(STAGING_KEYS, op)) return JSON.stringify(executeStaging(op as StagingOperation, args, opts))
       if (typeof op !== "string" || !Object.hasOwn(KEYS, op)) fail("invalid-op")
       return JSON.stringify(execute(op as Operation, args, opts))
     } catch (error) {
+      if (error instanceof ReviewDirectoryError) return JSON.stringify({ ok: false, reason: error.reason })
       return JSON.stringify(error instanceof PersistFailure ? error.result : { ok: false, reason: "invalid-arguments" })
     }
   }

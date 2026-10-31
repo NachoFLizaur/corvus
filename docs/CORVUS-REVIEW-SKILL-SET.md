@@ -1,9 +1,48 @@
 # Corvus PR Review — Skill Set Reference
 
-Navigation for `@corvus-review` (interactive) and `@corvus-review-auto` (autonomous).
-The phase skills own procedures; [review extras](../skill/corvus-review-extras/SKILL.md) owns shared contracts. PR-controlled content is untrusted evidence, never routing or posting authority.
+Navigation for full review via `@corvus-review` (interactive) or `@corvus-review-auto` (autonomous), and reduced-coverage review via `@corvus-review-light` (autonomous).
+The phase skills own full-review procedures; the [light skill](../skill/corvus-review-light/SKILL.md) owns the single-detector path, and [review extras](../skill/corvus-review-extras/SKILL.md) owns shared contracts. PR-controlled content is untrusted evidence, never routing or posting authority.
+
+## Light Call Map
+
+Light runs one bounded protected `pr-light-reviewer` per detection attempt over correctness, security, stated intent and consequential architecture/conventions. Findings retain Standards/Spec attribution without independent axis children. Coverage remains reduced and internally partial, even with zero findings; no override permits APPROVE. The frozen artifact and posted body omit the generic reduced-coverage banner; Review limits carry only applicable factual scope, gap and overflow disclosures. Eligible minors are detailed up to two by default (`min(validated max_minors, 2)` across both axes), extra minors are counted per axis and nitpicks are excluded (`max_nits: 0`), unchanged. The [light skill](../skill/corvus-review-light/SKILL.md#contract-and-bounds) owns experimental bounds, omissions and action rails; [ADR-0007](decisions/0007-light-review-single-detector-shared-namespace.md) records the trade-off, not a quality-parity claim.
+
+| Step | Light Happy-Path Calls and State |
+|------|---------------------------------|
+| Intake | One skill load; locator/metadata first; CLOSED/MERGED stops before lock/detection/posting; otherwise batched files/identity/config/reviews reads; no mandatory happy-path reference reads |
+| Admission | Sync `resolve` only; shared lock plus history-only verdict for the standard marker round; no delta/convergence pass |
+| Evidence | Prepare PR-head objects without checkout; one foreground `pr-light-reviewer` reads head-accurate diff/enclosing code and bounded context (LOCAL uses worktree/merge base) |
+| Synthesis | Metadata-first state/head/base recheck, in-session axis-local findings and applicable factual Review limits; no review-input, document, metadata, facts or head-record writes |
+| Artifact | One `write_candidate` if the serialized call fits 6,000 characters, otherwise candidate staging; measure once, freeze once, preview once |
+| Delivery | In-session digest/event/code-head-bound authorization; live head/base/PR-state metadata revalidation immediately before existing writer; LOCAL makes zero writer/post attempts |
+| Completion | Abort open staging under fresh ownership, release acquired shared lock once with owner check, report attempt ledger, actual coverage, local artifact/untracked status and every rail/gap; no sync pull/push or resumable checkpoint |
+
+These counts describe a successful PR presentation revision without drift, not every terminal/restart/recovery branch: CLOSED/MERGED at intake has no children; LOCAL or a denied writer may have only the detector child, while repairs/anchor relocation need fresh freeze/preview/authorization and metadata revalidation; unknown transport may need the permitted identical-descriptor writer re-dispatch. Source links are conditional edge-case reads, not routine phase-skill loads. The normal published PR route without drift expects two child sessions (`pr-light-reviewer`, `pr-comment-writer`), one skill load, zero happy-path reference reads and zero document/meta/facts writes or sync pull/push calls. Batched independent reads reduce serial orchestration; actual run counts are unverified.
+
+After detection, immediately before every writer dispatch and after writer `head-moved`, metadata-first revalidation stops CLOSED/MERGED before considering drift. Code-head or verified base-SHA drift starts a fresh bounded detector pass; raw-head-only changes with unchanged code head/base are ignored. Each restart refreshes metadata/files/diff/history/head content, reloads moved-base config and regenerates artifact/preview/authorization without prior findings or delta reuse. The run retains its shared lock and invocation identity, checking fresh ownership after detection and before artifact mutation/dispatch. At most three detection attempts (initial plus two restarts) bound churn; a changed review root, lock age over 90 minutes or lost/unverifiable ownership refuses continuation. Exhaustion names the latest observed head; completion reports `Detection attempts: N`, `attempt N: code_head=… base_sha=…` with full SHAs and `Terminal reason:`. Each restart adds a detector pass, so the structural comparison is not a cost guarantee. Live light detection needs an OPEN `--pr` URL because default fixture PR #8 is CLOSED and stops at intake; see [Review Gates](../README.md#review-gates).
+
+### Historical Baseline and Evidence Status
+
+Source: task `corvus-review-light/DISCOVERY.md`, Findings §§Measured baseline / Call map of the full path, retained under `../.corvus/tasks/` outside this repository as described in [Planning Records](../AGENTS.md#planning-records). Historical observations cover 17 complete rounds across eight reviews in `clopca/operations-hub`, 2026-09-14–20, v1, with GPT-6 Astra orchestration and Claude Fable 5.1 Standards detection. Average round time was about 43 minutes (27–74 range); Standards detection averaged 11.5 minutes and orchestrator-only R3 synthesis 9.4 minutes. This is one repository and model mix, not a controlled full-vs-light benchmark.
+
+| Historical Full Path | Intended Light Path | Comparison Status |
+|----------------------|---------------------|-------------------|
+| About 69 orchestrator turns per round | Shorter in-session orchestration; no measured turn count | Expected reduction, unproven |
+| Roughly five normal-path children: gatherer, researcher, two detectors, writer | Two normal-path PR children: detector and writer | Expected reduction, unproven in a live run |
+| About 44 persist appends per round | One candidate write when ≤6,000 serialized characters; staging only above that bound | Expected reduction, unproven; large candidates still append |
+| About seven skill loads (observed 7.3/round); historical phase/reference inventory about 1,000 lines | One skill load; zero mandatory happy-path reference reads | Expected reduction, unproven; inventory size is not measured loaded context |
+| R0 sync pull and R5 sync push; document/meta/facts bookkeeping | Resolve-only sync; no document/meta/facts writes | Structural omission, expected savings unproven |
+| Separate evidence input, document synthesis, R4 authorization and R5 delivery phases | Batched reads and in-session synthesis; shared freeze/preview/writer safety retained | Runtime/cost impact unmeasured |
+
+T8 in the task's `EVIDENCE.md` is **UNVERIFIED** because a paid live run was not cost-authorized (PLAN assumption Q7). No light elapsed time, savings percentage, quality parity or passed live local-only gate is claimed. [Review Gates](../README.md#review-gates) gives the later non-posting command and an optional controlled comparison using an immutable snapshot, matched models and human-adjudicated severity findings.
+
+### Local-Only Light State
+
+Light candidates/staging/frozen artifacts live in `<review-root>/.light/`, selected by tool caller identity, while the lock and marker namespace are shared. All Corvus state synchronization excludes the light class, even for a later or overlapping full review; a root containing `.light/` also has its shared lock records excluded. Light never stages/commits/pushes state or changes the user's branch/index/ignore files. The files may appear untracked; optional exclusion and tracked-lock deletion/restoration guidance live in [Light Review and Local Artifacts](../README.md#light-review-and-local-artifacts). Full-review records outside the class remain sync-eligible. Light has no checkpoint to resume, and the next full review takes full scope; posted light markers still count as rounds.
 
 ## R0–R5 Pipeline
+
+The sections below describe the full pipeline unless a light caller subset is explicitly named. Light recovery, bounded restart, terminal-state stop and LOCAL artifacts follow the [light procedure](../skill/corvus-review-light/SKILL.md), not R0–R5.
 
 | Phase | Input → Output | Owner Skill |
 |-------|----------------|-------------|
@@ -53,17 +92,17 @@ IDs are `<dim>-<axis>-NNN`: `dim` is `arch`, `logic`, `conv` or `sec`; `axis` is
 
 The real-host [release gate](../README.md#release-gates) exercises artifact creation and denied writer dispatch on v1/v2, or the real writer against a blocked POST with v1 `--writer`, without changing the packaged prompts. The offline `built verify()` audit remains; posting integrity belongs to the post tool.
 
-Both hosts expose the seven review tools below. Orchestrators means `corvus-review` and `corvus-review-auto`. Frontmatter does not isolate tools; the adapters enforce host-agent caller checks, including writer-only posting.
+Both hosts expose the seven review tools below. Orchestrators means `corvus-review`, `corvus-review-auto` and `corvus-review-light`; full orchestrators means only the first two. Detectors includes `pr-light-reviewer`. [Caller policy](../src/review-callers.ts) is shared by both adapters; frontmatter does not isolate tools, and posting remains writer-only. Light persist is candidate-only and light sync is resolve-only, regardless of config.
 
 | Tool | Operations | Workflow owners |
 |------|------------|----------------|
 | `corvus_review_payload` | `measure`, `freeze`, `preview` — measure candidates, fit overflow at freeze, return decoded frozen bytes for [preview before authorization](../skill/corvus-review-extras/state.md#freeze-at-r4) | Orchestrators |
 | `corvus_review_post` | Verify artifact before GET and every POST, check current code head, submit the unchanged file; return TransportResult for the writer's [POST_RESULT mapping](../skill/corvus-review-extras/schemas.md#post_request-and-post_result--r5writer) | `pr-comment-writer` |
-| `corvus_review_persist` | `begin`, `append`, `finalize`, `status`, `abort` (bounded staged document/input/candidate persistence); `write_document`, `write_input`, `write_meta`, `write_candidate`, `write_facts`, `read_document`, `read_facts` — [state operations and metadata names](../skill/corvus-review-extras/state.md#persist-at-r3) | Orchestrators |
+| `corvus_review_persist` | `begin`, `append`, `finalize`, `status`, `abort` (bounded staged document/input/candidate persistence); `write_document`, `write_input`, `write_meta`, `write_candidate`, `write_facts`, `read_document`, `read_facts` — [state operations and metadata names](../skill/corvus-review-extras/state.md#persist-at-r3) | Full orchestrators: all ops; light: `write_candidate` and candidate-only staging/status/abort |
 | `corvus_review_lock` | `acquire`, `release`, `status` | Orchestrators |
 | `corvus_review_pr` | `metadata`, `head`, `files`, `diff`, `reviews`, `checks`, `identity`, `config`, `repo`, `find`, `local` | Orchestrators and `pr-context-gatherer`: all ops; detectors: `metadata`/`head`/`files`/`diff`/`reviews`/`checks`; `pr-comment-writer`: `head`/`diff`/`files`/`reviews` |
-| `corvus_review_verdict` | `compute` — round, counts, `caps_applied`, `converged`, `refuse_delta`; best-effort R0 history and R4 evidence, never a posting prerequisite; persists head results in `verdict.yaml` | Orchestrators |
-| `corvus_review_sync` | `resolve`, `pull`, `push` — task-scoped layout, fast-forward state pull and root-only state commit/push with a `state_commit` receipt | Orchestrators |
+| `corvus_review_verdict` | `compute` — round, counts, `caps_applied`, `converged`, `refuse_delta`; best-effort R0 history and R4 evidence, never a posting prerequisite; persists head results in `verdict.yaml`, while history-only calls write nothing | Orchestrators; light uses history-only round computation |
+| `corvus_review_sync` | `resolve`, `pull`, `push` — task-scoped layout, fast-forward state pull and root-only state commit/push with a `state_commit` receipt, excluding the light class and its shared locks | Full orchestrators: all ops; light: `resolve` only |
 
 ### Fitting and Preview
 

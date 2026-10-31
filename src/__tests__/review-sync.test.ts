@@ -3,10 +3,15 @@ import * as fs from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { files, local } from "../review-pr"
+import { createLockExecutor } from "../review-lock"
+import { createPersistExecutor } from "../review-persist"
+import { createReviewToolExecutors } from "../review-payload"
 import { createSyncExecutor, pull, push, resolve, type PushInput, type SyncExec, type SyncExecResult, type SyncPr } from "../review-sync"
 
 const PR: SyncPr = { owner: "example", name: "project", number: 42, isCrossRepository: false }
 const ROOT = ".corvus/tasks/feature/reviews/pr42"
+const PR_ROOTS = [".corvus/reviews/pr42", ROOT, ".corvus/tasks/.light/reviews/pr42"]
+const PULL_ROOTS = [...PR_ROOTS, ".corvus/tasks/.staging/reviews/pr42"]
 const BRANCH = "feature"
 const STATE = `${ROOT}/review.md`
 const STATE_BYTES = "Review state\n"
@@ -29,8 +34,9 @@ function assertAllowed(argv: string[]): void {
   const exact = (...forms: string[][]) => expect(forms).toContainEqual(args)
   const paths = args.slice(args.indexOf("--") + 1), root = paths[0]
   const reviewPaths = () => {
-    expect([ROOT, ".corvus/reviews/local-feature"]).toContain(root)
-    expect(paths).toEqual([root, `:(exclude)${root}/**/.staging/**`, `:(exclude)${root}/.staging/**`])
+    expect([...PR_ROOTS, ".corvus/reviews/local-feature"]).toContain(root)
+    const base = [root, `:(exclude)${root}/**/.staging/**`, `:(exclude)${root}/.staging/**`]
+    expect(paths).toEqual(paths.length === base.length ? base : [...base, ...lightPaths(root)])
   }
   switch (op) {
     case "remote":
@@ -48,7 +54,7 @@ function assertAllowed(argv: string[]): void {
       return
     case "config": exact([op, "--get", "user.name"], [op, "--get", "user.email"]); return
     case "--no-optional-locks":
-      if (root === ".corvus/") expect(paths).toEqual([root])
+      if (root === ".corvus/") expect([[root], ...PULL_ROOTS.map(namespace => [root, ...lightPaths(namespace)])]).toContainEqual(paths)
       else reviewPaths()
       exact([op, "status", "--porcelain", "-z", "--", ...paths]); return
     case "log":
@@ -72,8 +78,8 @@ function assertAllowed(argv: string[]): void {
       expect(args[5]).toMatch(sha)
       exact([op, "--no-commit-id", "--name-only", "-r", "-z", args[5], "--"]); return
     case "diff":
-      exact([op, "--quiet", "HEAD", "--", ".", `:(top,exclude)${ROOT}/**`],
-        [op, "--cached", "--quiet", "--", ".", `:(top,exclude)${ROOT}/**`],
+      exact(...PR_ROOTS.flatMap(namespace => [[op, "--quiet", "HEAD", "--", ".", `:(top,exclude)${namespace}/**`],
+        [op, "--cached", "--quiet", "--", ".", `:(top,exclude)${namespace}/**`]]),
         [op, "--name-only", "--diff-filter=U", "-z", "--"]); return
     case "rebase":
       if (args.length === 2) { exact([op, "--abort"]); return }
@@ -84,6 +90,9 @@ function assertAllowed(argv: string[]): void {
     default: throw new Error(`Unlisted sync argv: ${JSON.stringify(argv)}`)
   }
 }
+
+const lightPaths = (root: string) => [`:(exclude)${root}/.light/**`,
+  `:(exclude)${root}/lock.yaml`, `:(exclude)${root}/.lock`]
 
 async function withRepo(run: (fixture: Fixture) => Promise<void>): Promise<void> {
   const directory = fs.realpathSync(fs.mkdtempSync(join(tmpdir(), "corvus-review-sync-")))
@@ -157,16 +166,64 @@ function advance(f: Fixture, peer: string, path = "remote.txt", bytes = "Remote 
   f.git(peer, "push", "origin", `HEAD:${BRANCH}`)
   return f.git(peer, "rev-parse", "HEAD")
 }
-function assertStateCommit(f: Fixture, commit: string, parent: string): void {
+function assertStateCommit(f: Fixture, commit: string, parent: string, root = ROOT): void {
+  const state = `${root}/review.md`
   expect(commit).toMatch(sha)
   expect(f.git(f.origin, "rev-parse", BRANCH)).toBe(commit)
   expect(f.git(f.workspace, "rev-parse", `${commit}^`)).toBe(parent)
   expect(f.git(f.workspace, "rev-list", "--count", `${parent}..${commit}`)).toBe("1")
-  expect(f.git(f.workspace, "show", "--format=", "--name-only", commit)).toBe(STATE)
-  expect(f.git(f.workspace, "show", "--stat", "--format=", commit)).toContain(STATE)
+  expect(f.git(f.workspace, "show", "--format=", "--name-only", commit)).toBe(state)
+  expect(f.git(f.workspace, "show", "--stat", "--format=", commit)).toContain(state)
   expect(f.git(f.workspace, "log", "-1", "--format=%s", commit)).toBe(`corvus(review-state): pr42 @ ${f.head.slice(0, 7)} [skip ci]`)
-  expect(f.git(f.workspace, "show", `${commit}:${STATE}`)).toBe(STATE_BYTES.trim())
+  expect(f.git(f.workspace, "show", `${commit}:${state}`)).toBe(STATE_BYTES.trim())
 }
+
+// No-class argv oracle: git archive 24e63c973fc42ef318cf726b4f9896c34585cd70,
+// sync2.ts push/retry/dirty-pull/clean-pull probes. Hashes alone are normalized.
+const busyArgv = ["index.lock", "MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "rebase-merge", "rebase-apply"]
+  .map(name => ["git", "rev-parse", "--git-path", name])
+const entryArgv = [["git", "check-ref-format", "--branch", BRANCH], ["git", "rev-parse", "--show-toplevel"]]
+const pullStatus = ["git", "--no-optional-locks", "status", "--porcelain", "-z", "--", ".corvus/"]
+const normalizeArgv = (calls: Call[]) => calls.map(({ argv }) => argv.map(arg => arg
+  .replace(/[a-f0-9]{40}/g, "<sha>").replace(/@ [a-f0-9]{7}/g, "@ <s7>")))
+function basePushArgv(root: string): string[][] {
+  const paths = [root, `:(exclude)${root}/**/.staging/**`, `:(exclude)${root}/.staging/**`]
+  return [...entryArgv, ["git", "rev-parse", "HEAD"], ["git", "log", "-50", "--format=%H%x00%s", "-z", "<sha>", "--"],
+    ...busyArgv, ["git", "config", "--get", "user.name"], ["git", "config", "--get", "user.email"],
+    ["git", "--no-optional-locks", "status", "--porcelain", "-z", "--", ...paths], ["git", "add", "--", ...paths],
+    ["git", "commit", "--only", "-m", "corvus(review-state): pr42 @ <s7> [skip ci]", "--", ...paths],
+    ["git", "rev-parse", "HEAD"], ["git", "diff-tree", "--no-commit-id", "--name-only", "-r", "-z", "<sha>", "--"],
+    ["git", "push", "origin", `HEAD:${BRANCH}`]]
+}
+
+describe("no-class base synchronization equivalence", () => {
+  test.each(PR_ROOTS.flatMap(root => ["push", "retry", "dirty-pull", "clean-pull"].map(mode => ({ root, mode }))))(
+    "$mode keeps base argv/results for $root", ({ root, mode }) => withRepo(async f => {
+      const state = `${root}/review.md`
+      if (mode === "clean-pull") advance(f, f.peer(), state, STATE_BYTES)
+      if (mode === "retry") advance(f, f.peer())
+      if (mode !== "clean-pull") f.write(f.workspace, state, STATE_BYTES)
+      if (mode === "push") f.write(f.workspace, `${root}/.staging/x`, "Unfinished staging\n")
+      if (mode.endsWith("pull")) {
+        const result = await pull({ cwd: f.workspace, branch: BRANCH }, { exec: f.exec })
+        expect(result).toEqual(mode === "dirty-pull" ? { synced: false, reason: "dirty-review-state", git_calls: 3 } : { synced: true, git_calls: 12 })
+        expect(normalizeArgv(f.calls)).toEqual(mode === "dirty-pull" ? [...entryArgv, pullStatus]
+          : [...entryArgv, pullStatus, ...busyArgv, ["git", "fetch", "origin", BRANCH], pullStatus, ["git", "merge", "--ff-only", "FETCH_HEAD"]])
+      } else {
+        const result = await push({ ...pushInput(f), root }, { exec: f.exec })
+        expect(result).toMatchObject({ synced: true, git_calls: mode === "retry" ? 27 : 18 })
+        const expected = basePushArgv(root)
+        if (mode === "retry") expected.push(["git", "fetch", "origin", BRANCH], ["git", "rev-parse", "FETCH_HEAD"],
+          ["git", "diff", "--quiet", "HEAD", "--", ".", `:(top,exclude)${root}/**`],
+          ["git", "diff", "--cached", "--quiet", "--", ".", `:(top,exclude)${root}/**`], ["git", "rev-parse", "HEAD"],
+          ["git", "rebase", "--no-autostash", "--no-update-refs", "--onto", "<sha>", "<sha>"], ["git", "rev-parse", "HEAD"],
+          ["git", "diff-tree", "--no-commit-id", "--name-only", "-r", "-z", "<sha>", "--"], ["git", "push", "origin", `HEAD:${BRANCH}`])
+        expect(normalizeArgv(f.calls)).toEqual(expected)
+        expect(f.git(f.origin, "rev-parse", BRANCH)).toBe(result.state_commit!)
+      }
+    }),
+  )
+})
 
 describe("review sync layout", () => {
   test.each([
@@ -221,6 +278,35 @@ describe("review sync layout", () => {
 })
 
 describe("review sync pull", () => {
+  test.each(PULL_ROOTS)("clean checks find the direct light class without skipping task names: %s", root => withRepo(async f => {
+    f.write(f.workspace, `${root}/.light/post-request.json`, "Local bytes\n")
+    f.write(f.workspace, `${root}/lock.yaml`, "Private lock bytes\n")
+    f.write(f.workspace, `${root}/.lock`, "Private legacy lock bytes\n")
+    const tip = advance(f, f.peer())
+    expect(await pull({ cwd: f.workspace, branch: BRANCH }, { exec: f.exec })).toEqual({ synced: true, git_calls: 12 })
+    const status = ["git", "--no-optional-locks", "status", "--porcelain", "-z", "--", ".corvus/", ...lightPaths(root)]
+    expect(callsFor(f, "--no-optional-locks").map(({ argv }) => argv)).toEqual([status, status])
+    expect(f.git(f.workspace, "rev-parse", "HEAD")).toBe(tip)
+    expect(fs.readFileSync(join(f.workspace, `${root}/.light/post-request.json`), "utf8")).toBe("Local bytes\n")
+  }))
+  test("ignores untracked light artifacts and a deleted tracked terminal lock in both clean checks", () => withRepo(async f => {
+    const lock = createLockExecutor(join(f.workspace, ".corvus"))
+    expect(JSON.parse(lock({ op: "acquire", reviewRoot: ROOT, runId: "full" }, "corvus-review"))).toMatchObject({ ok: true })
+    expect(JSON.parse(lock({ op: "release", reviewRoot: ROOT, runId: "full", mode: "complete" }, "corvus-review"))).toMatchObject({ ok: true })
+    f.git(f.workspace, "add", "--", `${ROOT}/lock.yaml`)
+    f.git(f.workspace, "commit", "-m", "corvus(review-state): prior terminal lock")
+    f.git(f.workspace, "push", "origin", `HEAD:${BRANCH}`)
+    const tip = advance(f, f.peer())
+    expect(JSON.parse(lock({ op: "acquire", reviewRoot: ROOT, runId: "light" }, "corvus-review-light"))).toMatchObject({ ok: true })
+    expect(JSON.parse(lock({ op: "release", reviewRoot: ROOT, runId: "light", mode: "delete" }, "corvus-review-light"))).toMatchObject({ ok: true })
+    f.write(f.workspace, `${ROOT}/.light/post-request.json`, "Local light bytes\n")
+    expect(await pull({ cwd: f.workspace, branch: BRANCH }, { exec: f.exec })).toMatchObject({ synced: true })
+    expect(f.git(f.workspace, "rev-parse", "HEAD")).toBe(tip)
+    expect(callsFor(f, "--no-optional-locks")).toHaveLength(2)
+    expect(fs.readFileSync(join(f.workspace, `${ROOT}/.light/post-request.json`), "utf8")).toBe("Local light bytes\n")
+    expect(fs.existsSync(join(f.workspace, `${ROOT}/lock.yaml`))).toBe(false)
+  }))
+
   test("fetches and fast-forwards a clean tree using the selected remote", () => withRepo(async f => {
     const tip = advance(f, f.peer(), STATE, STATE_BYTES)
     f.git(f.workspace, "remote", "rename", "origin", "publish")
@@ -253,6 +339,68 @@ describe("review sync pull", () => {
 })
 
 describe("review sync push", () => {
+  test.each(PR_ROOTS)("nested head/class-named directories stay ordinary state during conflict replay: %s", root => withRepo(async f => {
+    const nested = `${root}/${f.head}/.light/x`
+    const tip = advance(f, f.peer(), nested, "Remote ordinary bytes\n")
+    f.write(f.workspace, nested, "Local ordinary bytes\n")
+    // A direct class exists too, so the pathspec must not exclude nested names.
+    f.write(f.workspace, `${root}/.light/candidate.json`, "Private bytes\n")
+    const result = await push({ ...pushInput(f), root }, { exec: f.exec })
+    expect(result).toMatchObject({ synced: true })
+    expect(f.git(f.origin, "rev-parse", BRANCH)).toBe(result.state_commit!)
+    expect(f.git(f.workspace, "rev-parse", `${result.state_commit}^`)).toBe(tip)
+    expect(f.git(f.workspace, "show", "--format=", "--name-only", result.state_commit!)).toBe(nested)
+    expect(f.git(f.workspace, "show", `${result.state_commit}:${nested}`)).toBe("Local ordinary bytes")
+    expect(callsFor(f, "-c")).toHaveLength(1)
+  }))
+  test("replay snapshots and conflict repair leave the light class untouched", () => withRepo(async f => {
+    const tip = advance(f, f.peer(), STATE, "Concurrent full state\n")
+    f.write(f.workspace, `${ROOT}/.light/post-request.json`, "Local light bytes\n")
+    fs.symlinkSync(join(f.workspace, "product.txt"), join(f.workspace, `${ROOT}/.light/snapshot-must-not-read`))
+    f.write(f.workspace, STATE, STATE_BYTES)
+    const result = await push(pushInput(f), { exec: f.exec })
+    expect(result).toMatchObject({ synced: true })
+    assertStateCommit(f, result.state_commit!, tip)
+    expect(f.git(f.workspace, "ls-tree", "-r", "--name-only", "HEAD", "--", `${ROOT}/.light`)).toBe("")
+    expect(fs.readFileSync(join(f.workspace, `${ROOT}/.light/post-request.json`), "utf8")).toBe("Local light bytes\n")
+    expect(fs.lstatSync(join(f.workspace, `${ROOT}/.light/snapshot-must-not-read`)).isSymbolicLink()).toBe(true)
+    expect(callsFor(f, "push")).toHaveLength(2)
+    expect(callsFor(f, "-c")).toHaveLength(1)
+  }))
+
+  test.each(PR_ROOTS.flatMap(root => ["active", "deleted"].map(mode => ({ root, mode }))))("mixed light→full $root excludes light artifacts and $mode shared lock changes", ({ root, mode }) => withRepo(async f => {
+    const lock = createLockExecutor(join(f.workspace, ".corvus"))
+    const callLock = (args: object, caller = "corvus-review") => JSON.parse(lock({ reviewRoot: root, ...args }, caller))
+    expect(callLock({ op: "acquire", runId: "full" }).ok).toBe(true)
+    expect(callLock({ op: "release", runId: "full", mode: "complete" }).ok).toBe(true)
+    f.git(f.workspace, "add", "--", `${root}/lock.yaml`)
+    f.git(f.workspace, "commit", "-m", "corvus(review-state): prior terminal lock")
+    f.git(f.workspace, "push", "origin", `HEAD:${BRANCH}`)
+    const parent = f.git(f.workspace, "rev-parse", "HEAD")
+    const previousLock = fs.readFileSync(join(f.workspace, `${root}/lock.yaml`), "utf8")
+    expect(callLock({ op: "acquire", runId: "light" }, "corvus-review-light").ok).toBe(true)
+    expect(callLock({ op: "acquire", runId: "overlap" })).toMatchObject({ ok: false, state: "held" })
+    const persist = createPersistExecutor(join(f.workspace, ".corvus"))
+    const candidate = { commit_id: f.head, event: "COMMENT", body: "> Reduced coverage\nLight review", comments: [] }
+    expect(JSON.parse(persist({ op: "write_candidate", reviewRoot: root, candidate }, "corvus-review-light")).ok).toBe(true)
+    const frozen = JSON.parse(createReviewToolExecutors(f.workspace).payload({ op: "freeze", candidatePath: `${root}/.light/candidate.json`, artifactPath: `${root}/.light/post-request.json` }, "corvus-review-light"))
+    expect(frozen.ok).toBe(true)
+    f.write(f.workspace, `${root}/.light/.staging/candidate/manifest.json`, "Unfinished light staging\n")
+    const privateFiles = ["candidate.json", "post-request.json", ".staging/candidate/manifest.json"]
+    const before = privateFiles.map(name => fs.readFileSync(join(f.workspace, root, ".light", name)))
+    if (mode === "deleted") expect(callLock({ op: "release", runId: "light", mode: "delete" }, "corvus-review-light").ok).toBe(true)
+    expect(await pull({ cwd: f.workspace, branch: BRANCH }, { exec: f.exec })).toMatchObject({ synced: true })
+    f.write(f.workspace, `${root}/review.md`, STATE_BYTES)
+    const result = await push({ ...pushInput(f), root }, { exec: f.exec })
+    expect(result).toMatchObject({ synced: true })
+    assertStateCommit(f, result.state_commit!, parent, root)
+    expect(f.git(f.workspace, "ls-tree", "-r", "--name-only", "HEAD", "--", `${root}/.light`)).toBe("")
+    expect(f.git(f.workspace, "show", `HEAD:${root}/lock.yaml`)).toBe(previousLock.trim())
+    expect(privateFiles.map(name => fs.readFileSync(join(f.workspace, root, ".light", name)))).toEqual(before)
+    expect(f.git(f.workspace, "show", "--format=", "--name-only", result.state_commit!)).not.toMatch(/\/(?:lock\.yaml|\.lock)$/m)
+    if (mode === "active") expect(callLock({ op: "release", runId: "light", mode: "delete" }, "corvus-review-light").ok).toBe(true)
+  }))
+
   test("pushes only non-staging paths while leftover input and document staging stays local", () => withRepo(async f => {
     const leftovers = [`${ROOT}/.staging/input/manifest.json`, `${ROOT}/${f.head}/.staging/document/chunk.part`]
     for (const path of leftovers) f.write(f.workspace, path, "Unfinished staging\n")

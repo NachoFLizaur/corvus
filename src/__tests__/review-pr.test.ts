@@ -30,7 +30,7 @@ function recordingExec(...responses: Array<PrExecResult | Promise<PrExecResult>>
 
 describe("review PR metadata, head and files", () => {
   test("detectors can recover PR evidence but cannot read invocation controls", () => {
-    for (const caller of ["pr-code-reviewer", "security-reviewer"]) {
+    for (const caller of ["pr-code-reviewer", "security-reviewer", "pr-light-reviewer"]) {
       for (const op of ["metadata", "head", "files", "diff", "reviews", "checks"]) expect(isPrCallerAllowed(caller, op)).toBe(true)
       for (const op of ["identity", "config", "find", "local", "repo", "post", undefined]) expect(isPrCallerAllowed(caller, op)).toBe(false)
     }
@@ -444,6 +444,20 @@ describe("review local changes", () => {
   test("marks nonempty porcelain output dirty", async () => {
     const { result } = await runLocal({ status: success(" M src/example.ts\n?? note.txt\n") })
     expect(result).toMatchObject({ ok: true, dirty: true })
+  })
+
+  test("AC10: LOCAL patch covers tracked staged and unstaged bytes against the trusted merge base, not HEAD", async () => {
+    const stagedAndUnstaged = "diff --git a/src/example.ts b/src/example.ts\n@@ -1 +1 @@\n-merge-base bytes\n+staged and unstaged worktree bytes\n"
+    const { result, calls } = await runLocal({ patch: success(stagedAndUnstaged), status: success("MM src/example.ts\n") })
+    expect(result).toMatchObject({ ok: true, merge_base: BASE_SHA, dirty: true, diff: stagedAndUnstaged, api_calls: 0 })
+    const diffs = calls.filter(argv => argv[1] === "diff")
+    expect(diffs).toEqual([commands.stat, commands.names, commands.patch])
+    for (const argv of diffs) {
+      expect(argv).toContain(BASE_SHA)
+      expect(argv).not.toContain(HEAD_SHA)
+      expect(argv).not.toContain("--cached")
+      expect(argv).not.toContain("HEAD")
+    }
   })
 
   test.each(["main", "master"] as const)("falls back to local %s in main-then-master order when origin HEAD is unavailable", async branch => {
