@@ -14,6 +14,7 @@ import { createLockExecutor } from "./review-lock"
 import { createPrExecutor, isPrCallerAllowed } from "./review-pr"
 import { createVerdictExecutor } from "./review-verdict"
 import { createSyncExecutor } from "./review-sync"
+import { createWorktreeExecutor } from "./review-worktree"
 import { isReviewCallerAllowed } from "./review-callers"
 
 /**
@@ -110,6 +111,7 @@ const plugin: Plugin = async (input) => {
   const pr = createPrExecutor({ cwd: directory })
   const verdict = createVerdictExecutor(reviewStateRoot)
   const sync = createSyncExecutor({ cwd: directory })
+  const worktree = createWorktreeExecutor({ cwd: directory })
   const corvusAgents = new Set(existsSync(agentDir) ? Object.keys(loadAgents(agentDir)) : [])
   return {
     /**
@@ -211,7 +213,7 @@ const plugin: Plugin = async (input) => {
         },
       },
       corvus_review_pr: {
-        description: "Read GitHub PR data with validated, fixed operations. metadata/head/diff/reviews/checks take owner, name, pr; files also requires paginate:true and accepts include_corvus/names_only booleans (include_corvus implies names-only). Files and diffs exclude .corvus by default and report excluded_corvus; local changed_files stays unfiltered. metadata/head/local return raw head_sha and code_head skipping state commits. config takes owner, name, ref (base SHA); identity takes no fields; repo resolves owner/name from gh or origin with optional cwd (defaults to the session directory). find takes optional cwd/branch to discover the current or named branch's PR; local takes optional cwd/base for a bounded local diff including tracked uncommitted changes, branch (null when detached), default_branch, merge_base, ahead, changed_files, stat, dirty and oversized. Caller policy (host agent): pr-comment-writer: head/diff/files/reviews; pr-code-reviewer, security-reviewer, pr-light-reviewer: metadata/head/files/diff/reviews/checks; corvus-review, corvus-review-auto, corvus-review-light, pr-context-gatherer: all ops. Unknown callers: caller-not-allowed.",
+        description: "Read GitHub PR data with validated, fixed operations. metadata/head/diff/reviews/checks take owner/name/pr; files requires paginate:true. files paths selects exact patch records plus missing_paths: <=50 normalized repository-relative strings, <=1,024 chars each, deduplicated; rejects names_only/include_corvus true. include_corvus implies names-only. Files/diffs exclude .corvus by default (excluded_corvus); local changed_files stays unfiltered. metadata/head/local return raw head_sha and code_head skipping state commits. config takes owner/name/ref (base SHA); identity takes no fields; repo resolves gh/origin with optional cwd (session default). find takes optional cwd/branch; local takes optional cwd/base for a bounded tracked working diff. Host caller policy: pr-comment-writer: head/diff/files/reviews; pr-code-reviewer, security-reviewer, pr-light-reviewer: metadata/head/files/diff/reviews/checks; corvus-review, corvus-review-auto, corvus-review-light, pr-context-gatherer: all ops. Unknown callers: caller-not-allowed.",
         args: {
           op: z.enum(["metadata", "head", "files", "diff", "reviews", "checks", "identity", "config", "repo", "find", "local"]),
           cwd: z.string().optional(),
@@ -223,6 +225,7 @@ const plugin: Plugin = async (input) => {
           paginate: z.literal(true).optional(),
           include_corvus: z.boolean().optional(),
           names_only: z.boolean().optional(),
+          paths: z.array(z.string().min(1).max(1_024)).max(50).optional(),
           ref: z.string().optional(),
         },
         /**
@@ -276,6 +279,18 @@ const plugin: Plugin = async (input) => {
           if (!isReviewCallerAllowed("corvus_review_sync", ctx?.agent, args)) return JSON.stringify({ synced: false, reason: "caller-not-allowed", git_calls: 0 })
           return sync(args)
         },
+      },
+      corvus_review_worktree: {
+        description: "Light-only create/remove of an exact-head sibling worktree. Supply op/pr/code_head/runId; cwd defaults to the session directory. Raw blob population avoids hooks, filters and live symlinks. Removal verifies the derived path and detached registration/HEAD; never prunes others.",
+        args: {
+          op: z.enum(["create", "remove"]),
+          cwd: z.string().optional(),
+          pr: z.number().int().positive(),
+          code_head: z.string().regex(/^[a-f0-9]{40}$/),
+          runId: z.string().min(1),
+        },
+        /** Host ctx.agent is checked before I/O by the shared executor; no input bypasses light-only admission. */
+        execute: async (args, ctx) => worktree(args, ctx?.agent),
       },
     },
     config: async (config) => {

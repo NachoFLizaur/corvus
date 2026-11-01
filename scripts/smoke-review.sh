@@ -120,7 +120,8 @@ prepare_light_fixture() {
 }
 
 # Capture/check before harness-only ignore opt-in and full sync mutation. Exact
-# snapshot equality is the oracle; failure aborts with retained evidence. Dry
+# snapshot equality (including git worktree list --porcelain and sibling-tree
+# absence relative to baseline) is the oracle; failure aborts with retained evidence. Dry
 # preflights use the same snapshot/setup, not a model run or a success substitution.
 light_snapshot() {
   SMOKE_SNAPSHOT="$1" bun -e '
@@ -137,7 +138,7 @@ light_compare() {
     const rows = checkLightSnapshots(await Bun.file(root + "/light-before.json").json(), await Bun.file(root + "/light-after.json").json())
     console.log("LIGHT_LOCAL_EVIDENCE " + JSON.stringify(rows))
     if (rows.some(row => !row.ok)) process.exit(1)
-  ' || die 5 'light agent changed fixture bytes/index/branch/HEAD/ignores/commits/remote refs'
+  ' || die 5 'light agent changed fixture bytes/index/branch/HEAD/worktree list/sibling directories/ignores/commits/remote refs'
 }
 
 # Model-free full-review push over the same namespace, AFTER the agent comparison.

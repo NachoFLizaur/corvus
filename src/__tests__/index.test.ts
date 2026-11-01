@@ -28,7 +28,7 @@ describe("plugin entry point", () => {
     expect(result).toHaveProperty("config")
     expect(typeof result.config).toBe("function")
     expect(typeof result["chat.params"]).toBe("function")
-    expect(Object.keys(result.tool ?? {})).toEqual(["corvus_review_payload", "corvus_review_post", "corvus_review_persist", "corvus_review_lock", "corvus_review_pr", "corvus_review_verdict", "corvus_review_sync"])
+    expect(Object.keys(result.tool ?? {})).toEqual(["corvus_review_payload", "corvus_review_post", "corvus_review_persist", "corvus_review_lock", "corvus_review_pr", "corvus_review_verdict", "corvus_review_sync", "corvus_review_worktree"])
     expect(Object.keys(result.tool!.corvus_review_payload.args)).toEqual(["op", "candidatePath", "artifactPath", "expectedSha256"])
     expect(z.safeParse(result.tool!.corvus_review_payload.args.op, "verify").success).toBe(false)
     expect(result.tool).not.toHaveProperty("corvus_review_verify")
@@ -56,6 +56,7 @@ describe("plugin entry point", () => {
       ["corvus_review_pr", ["metadata", "head", "files", "diff", "reviews", "checks", "identity", "config", "repo", "find", "local"], ["op"]],
       ["corvus_review_verdict", ["compute"], ["op", "reviewRoot", "priorReviews", "config"]],
       ["corvus_review_sync", ["resolve", "pull", "push"], ["op"]],
+      ["corvus_review_worktree", ["create", "remove"], ["op", "pr", "code_head", "runId"]],
     ] as const) {
       const tool = result.tool![name]
       expect(z.toJSONSchema(z.object(tool.args))).toMatchObject({ properties: { op: { enum: ops } }, required })
@@ -83,6 +84,14 @@ describe("plugin entry point", () => {
     }
     expect(result.tool!.corvus_review_pr.description).toContain("find takes optional cwd/branch")
     expect(result.tool!.corvus_review_pr.description).toContain("local takes optional cwd/base")
+    expect(z.toJSONSchema(z.object(result.tool!.corvus_review_pr.args))).toMatchObject({ properties: {
+      paths: { type: "array", maxItems: 50, items: { type: "string", minLength: 1, maxLength: 1_024 } },
+    } })
+    const filteredArgs = { op: "files", owner: "o", name: "r", pr: 1, paginate: true, paths: ["src/anchor.ts"] }
+    expect(z.safeParse(z.object(result.tool!.corvus_review_pr.args), filteredArgs)).toMatchObject({ success: true, data: filteredArgs })
+    for (const paths of [[""], ["a".repeat(1_025)], Array.from({ length: 51 }, () => "a.ts")]) {
+      expect(z.safeParse(z.object(result.tool!.corvus_review_pr.args), { ...filteredArgs, paths }).success).toBe(false)
+    }
     const post = result.tool!.corvus_review_post
     expect(post.description).toContain("Paths are relative to the session directory or absolute")
     const postFields = ["artifactPath", "expectedSha256", "repo", "prNumber", "headSha", "event"]
@@ -235,33 +244,36 @@ describe("plugin entry point", () => {
   })
 })
 
-type ReviewToolName = "corvus_review_payload" | "corvus_review_post" | "corvus_review_persist" | "corvus_review_lock" | "corvus_review_pr" | "corvus_review_verdict" | "corvus_review_sync"
+type ReviewToolName = "corvus_review_payload" | "corvus_review_post" | "corvus_review_persist" | "corvus_review_lock" | "corvus_review_pr" | "corvus_review_verdict" | "corvus_review_sync" | "corvus_review_worktree"
 type ToolCall = (name: ReviewToolName, args: Record<string, unknown>, agent?: unknown) => Promise<Record<string, unknown>>
-async function withReviewTools(host: "v1" | "v2", run: (directory: string, call: ToolCall) => Promise<void>) {
+type RawToolCall = (name: ReviewToolName, args: Record<string, unknown>, agent?: unknown) => Promise<string>
+async function withReviewTools(host: "v1" | "v2", run: (directory: string, call: ToolCall, rawCall: RawToolCall) => Promise<void>) {
   const directory = realpathSync(mkdtempSync(join(tmpdir(), "corvus-tool-hooks-")))
   let cleanup: (() => Promise<void> | void) | void = undefined
   try {
     mkdirSync(join(directory, ".corvus/reviews/pr"), { recursive: true })
     if (host === "v1") {
       const hooks = await plugin({ directory, worktree: "/unrelated-worktree" } as Parameters<typeof plugin>[0])
-      await run(directory, async (name, args, agent) => {
+      const rawCall: RawToolCall = async (name, args, agent) => {
         const tool = hooks.tool![name]
         if (!tool) throw new Error(`Unknown review tool: ${name}`)
         const output = await tool.execute(args, { agent } as Parameters<typeof tool.execute>[1])
         expect(typeof output).toBe("string")
-        return JSON.parse(output as string)
-      })
+        return output as string
+      }
+      await run(directory, async (name, args, agent) => JSON.parse(await rawCall(name, args, agent)), rawCall)
     } else {
       const fake = createFakeContext(directory)
       cleanup = await registerTools(fake.ctx)
       expect(fake.registrations.map(registration => registration.kind)).toEqual(["tool.transform"])
-      await run(directory, async (name, args, agent) => {
+      const rawCall: RawToolCall = async (name, args, agent) => {
         const tool = fake.tools.get(name)
         if (!tool) throw new Error(`Unknown review tool: ${name}`)
         const output = await tool.execute(args, { agent } as Parameters<typeof tool.execute>[1])
         expect(typeof output.content).toBe("string")
-        return JSON.parse(output.content as string)
-      })
+        return output.content as string
+      }
+      await run(directory, async (name, args, agent) => JSON.parse(await rawCall(name, args, agent)), rawCall)
     }
   } finally {
     await cleanup?.()
@@ -270,6 +282,69 @@ async function withReviewTools(host: "v1" | "v2", run: (directory: string, call:
 }
 
 describe("review tool hooks", () => {
+  test.each(["v1", "v2"] as const)("%s filters complete PR patches and keeps unfiltered JSON byte-identical", async host => {
+    await withReviewTools(host, async (directory, call, rawCall) => {
+      // A local gh double serves fixed pages; no network or PR code executes.
+      const bin = join(directory, "bin")
+      mkdirSync(bin)
+      const anchor = { filename: "src/anchor.ts", status: "added", additions: 2, deletions: 0, patch: "@@ -0,0 +1,2 @@\n+first\n+second" }
+      const binary = { filename: "image.png", status: "added", additions: 0, deletions: 0 }
+      const state = { filename: ".corvus/reviews/pr15/input.md", status: "modified", additions: 1, deletions: 0, patch: "+state" }
+      writeFileSync(join(bin, "gh.files"), JSON.stringify([anchor]) + "\n" + JSON.stringify([binary, state]) + "\n")
+      writeFileSync(join(bin, "gh"), '#!/bin/sh\nexec /bin/cat "$0.files"\n', { mode: 0o755 })
+      const beforePath = process.env.PATH
+      process.env.PATH = `${bin}:${beforePath ?? ""}`
+      try {
+        const input = { op: "files", owner: "example", name: "project", pr: 15, paginate: true }
+        const snapshots: Array<[Record<string, boolean>, string]> = [
+          [{}, '{"ok":true,"files":[{"filename":"src/anchor.ts","status":"added","additions":2,"deletions":0,"has_patch":true,"patch":"@@ -0,0 +1,2 @@\\n+first\\n+second"},{"filename":"image.png","status":"added","additions":0,"deletions":0,"has_patch":false}],"excluded_corvus":1,"complete_pagination":true,"api_calls":2}'],
+          [{ names_only: true }, '{"ok":true,"files":["src/anchor.ts","image.png"],"excluded_corvus":1,"complete_pagination":true,"api_calls":2}'],
+          [{ include_corvus: true }, '{"ok":true,"files":["src/anchor.ts","image.png",".corvus/reviews/pr15/input.md"],"excluded_corvus":0,"complete_pagination":true,"api_calls":2}'],
+          [{ include_corvus: true, names_only: false }, '{"ok":true,"files":["src/anchor.ts","image.png",".corvus/reviews/pr15/input.md"],"excluded_corvus":0,"complete_pagination":true,"api_calls":2}'],
+        ]
+        for (const [flags, before] of snapshots) {
+          expect(await rawCall("corvus_review_pr", { ...input, ...flags }, "pr-comment-writer")).toBe(before)
+        }
+        expect(await call("corvus_review_pr", { ...input, paths: [anchor.filename, "missing.ts", anchor.filename] }, "pr-comment-writer")).toEqual({
+          ok: true, files: [{ ...anchor, has_patch: true }], excluded_corvus: 1,
+          missing_paths: ["missing.ts"], complete_pagination: true, api_calls: 2,
+        })
+      } finally {
+        if (beforePath === undefined) delete process.env.PATH
+        else process.env.PATH = beforePath
+      }
+    })
+  })
+
+  test.each(["v1", "v2"] as const)("%s rejects invalid file selectors before PR I/O on either adapter", async host => {
+    await withReviewTools(host, async (_directory, call) => {
+      const input = { op: "files", owner: "o", name: "r", pr: 1, paginate: true }
+      for (const extra of [
+        { paths: ["./src/anchor.ts"] }, { paths: ["src/../anchor.ts"] }, { paths: ["/src/anchor.ts"] },
+        { paths: ["src\\anchor.ts"] }, { paths: ["src/\0anchor.ts"] }, { paths: ["a".repeat(1_025)] },
+        { paths: Array.from({ length: 51 }, () => "a.ts") }, { paths: ["a.ts"], names_only: true },
+        { paths: ["a.ts"], include_corvus: true },
+      ]) {
+        expect(await call("corvus_review_pr", { ...input, ...extra }, "pr-comment-writer")).toEqual({
+          ok: false, reason: "invalid-input:paths", complete_pagination: false, api_calls: 0,
+        })
+      }
+    })
+  })
+
+  test("both hosts describe the same bounded file selector within the prior description length", async () => {
+    const hooks = await plugin({} as Parameters<typeof plugin>[0])
+    const fake = createFakeContext()
+    const cleanup = await registerTools(fake.ctx)
+    try {
+      const description = hooks.tool!.corvus_review_pr.description
+      expect(fake.tools.get("corvus_review_pr")!.description).toBe(description)
+      expect(description.length).toBeLessThanOrEqual(1_149)
+      expect(description).toContain("files paths selects exact patch records plus missing_paths")
+      expect(description).toContain("rejects names_only/include_corvus true")
+    } finally { await cleanup?.() }
+  })
+
   test.each(["v1", "v2"] as const)("%s treats corvus_review_verify calls as unknown tools", async host => {
     await withReviewTools(host, async (directory, call) => {
       // Deliberately cross the typed-name boundary to exercise registration lookup.

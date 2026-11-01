@@ -23,7 +23,7 @@
 #                        but INERT with --tarball: every one of those assertions
 #                        requires a host boot, which that mode forbids.
 #   --refs               evaluate sibling reference reads from registered agent
-#                        maps with the local host matcher, AND probe all seven review
+#                        maps with the local host matcher, AND probe all eight review
 #                        tools (including payload/preview and post rejection) on
 #                        both hosts via `scripts/probe-tools.ts` (included in
 #                        --full). The v2 protocol has no tool listing
@@ -123,7 +123,7 @@ Usage: bash scripts/smoke-v2.sh [--full] [--refs] [--tarball | --registry <spec>
   --full              also assert the whole packaged corpus is registered
                       (agents, commands, skills, default MCP server, and refs;
                       accepted but INERT with --tarball)
-  --refs              probe sibling reference reads and all seven review tools on
+  --refs              probe sibling reference reads and all eight review tools on
                       both hosts (also INERT with --tarball)
   --tarball           npm-specifier resolution emulation (no host boot)
   --registry <spec>   POST-PUBLISH ONLY real-host load of an npm specifier
@@ -675,7 +675,7 @@ assert_reference_readability() {
     die "reference-readability probe failed"
 }
 
-# All seven review tools on both hosts. No host listing exists for plugin tools (see
+# All eight review tools on both hosts. No host listing exists for plugin tools (see
 # the --refs note in the header), so the oracle is the loaded install root's own
 # built bundles driven through the registration tests' host double, plus a
 # functional measure → fitted freeze → preview → wrong-digest post rejection in a

@@ -15,7 +15,7 @@ import { isLightClassPath, LIGHT_REVIEW_DIRECTORY } from "../src/review-storage-
 
 type RecordValue = Record<string, unknown>
 type Row = { check: string; ok: boolean; code: number; detail: string }
-type Tool = { index: number; name: string; callID: string; parentID: string; input: RecordValue; output: RecordValue; state: RecordValue }
+type Tool = { index: number; name: string; callID: string; parentID: string; input: RecordValue; output: RecordValue; state: RecordValue; turn?: string }
 export type { Row, Tool }
 export type Inputs = {
   agent?: "auto" | "light"
@@ -84,7 +84,8 @@ export function toolsFromEvents(events: RecordValue[]): Tool[] {
     const part = record(event.part)
     const state = record(part.state)
     return [{ index, name: text(part.tool), callID: text(part.callID) || text(part.id),
-      parentID: text(event.sessionID) || text(part.sessionID), input: record(state.input), output: toolOutput(state.output), state }]
+      parentID: text(event.sessionID) || text(part.sessionID), input: record(state.input), output: toolOutput(state.output), state,
+      turn: text(part.messageID) || text(event.messageID) || undefined }]
   })
 }
 
@@ -94,7 +95,8 @@ export function toolsFromParts(parts: RecordValue[], sessionID = ""): Tool[] {
     if (part.type !== "tool") return []
     const state = record(part.state)
     return [{ index, name: text(part.tool), callID: text(part.callID) || text(part.id),
-      parentID: text(part.sessionID) || sessionID, input: record(state.input), output: toolOutput(state.output), state }]
+      parentID: text(part.sessionID) || sessionID, input: record(state.input), output: toolOutput(state.output), state,
+      turn: text(part.messageID) || undefined }]
   })
 }
 
@@ -217,11 +219,13 @@ const fixtureGit = (cwd: string, ...args: string[]) => execFileSync("git", ["-C"
 export type LightSnapshot = {
   branch: string; head: string; index: string; indexFlags: string; cachedDiffSha256: string
   sentinels: Record<string, string>; ignores: Record<string, string | null>; localLog: string; remoteRefs: string
+  worktrees: string; siblingWorktrees: string[]
 }
 /** Disposable-fixture oracle: capture after setup and immediately after host shutdown,
  * before the harness's ignore opt-in/full push probe. Exact bytes (base64), complete
  * index entries/cached diff, branch/head and commit/ref inventories must agree.
- * Missing sentinels or unreadable Git evidence throw; no flag disables light checks. */
+ * New sibling leaks fail independently of Git registration; pre-existing siblings
+ * remain byte-for-byte in the inventory. Missing evidence throws; no bypass. */
 export function snapshotLightFixture(fixture: string, bare: string): LightSnapshot {
   const bytes = (path: string) => readFileSync(join(fixture, path)).toString("base64")
   return { branch: fixtureGit(fixture, "branch", "--show-current").trim(), head: fixtureGit(fixture, "rev-parse", "HEAD").trim(),
@@ -230,14 +234,19 @@ export function snapshotLightFixture(fixture: string, bare: string): LightSnapsh
     cachedDiffSha256: createHash("sha256").update(execFileSync("git", ["-C", fixture, "diff", "--cached", "--binary", "--no-ext-diff", "--no-textconv"])).digest("hex"),
     sentinels: Object.fromEntries([".smoke-light-staged", ".smoke-light-unstaged"].map(path => [path, bytes(path)])),
     ignores: Object.fromEntries([".gitignore", ".git/info/exclude"].map(path => [path, existsSync(join(fixture, path)) ? bytes(path) : null])),
-    localLog: fixtureGit(fixture, "log", "--all", "--format=%H %s"), remoteRefs: fixtureGit(bare, "show-ref") }
+     localLog: fixtureGit(fixture, "log", "--all", "--format=%H %s"), remoteRefs: fixtureGit(bare, "show-ref"),
+     worktrees: fixtureGit(fixture, "worktree", "list", "--porcelain"),
+     siblingWorktrees: readdirSync(dirname(realpathSync(fixture))).filter(name => name.startsWith(`${basename(realpathSync(fixture))}.corvus-review-pr`)).sort() }
 }
 
 export function checkLightSnapshots(before: LightSnapshot, after: LightSnapshot): Row[] {
   const same = (a: unknown, b: unknown) => isDeepStrictEqual(a, b)
   return [
     ["sentinel bytes/index unchanged", same(before.sentinels, after.sentinels) && before.index === after.index && before.indexFlags === after.indexFlags && before.cachedDiffSha256 === after.cachedDiffSha256],
-    ["branch/HEAD unchanged", before.branch === after.branch && before.head === after.head],
+     ["branch/HEAD unchanged", before.branch === after.branch && before.head === after.head],
+     ["worktree list unchanged", typeof before.worktrees === "string" && before.worktrees === after.worktrees],
+     ["sibling worktree directories absent", Array.isArray(before.siblingWorktrees) && Array.isArray(after.siblingWorktrees)
+       && same(before.siblingWorktrees, after.siblingWorktrees)],
     ["ignore files unchanged", same(before.ignores, after.ignores)],
     ["zero local state commits", before.localLog === after.localLog],
     ["remote refs unchanged", before.remoteRefs === after.remoteRefs],
@@ -568,7 +577,8 @@ export function checkLightSync(input: Inputs, events: RecordValue[], tools: Tool
     const after = JSON.parse(read(join(work, "light-after.json"))) as LightSnapshot
     for (const snapshot of [before, after]) {
       if (!snapshot.branch || !/^[a-f0-9]{40}$/.test(snapshot.head) || !/^[a-f0-9]{64}$/.test(snapshot.cachedDiffSha256)
-        || typeof snapshot.index !== "string" || typeof snapshot.indexFlags !== "string" || typeof snapshot.localLog !== "string" || typeof snapshot.remoteRefs !== "string"
+         || typeof snapshot.index !== "string" || typeof snapshot.indexFlags !== "string" || typeof snapshot.localLog !== "string" || typeof snapshot.remoteRefs !== "string"
+         || typeof snapshot.worktrees !== "string" || !Array.isArray(snapshot.siblingWorktrees) || !snapshot.siblingWorktrees.every(name => typeof name === "string")
         || ![".smoke-light-staged", ".smoke-light-unstaged"].every(path => typeof snapshot.sentinels?.[path] === "string")
         || ![".gitignore", ".git/info/exclude"].every(path => Object.hasOwn(snapshot.ignores, path))) throw new Error("invalid light snapshots")
     }
@@ -593,7 +603,7 @@ export function checkLightSync(input: Inputs, events: RecordValue[], tools: Tool
       && fixtureGit(input.bare, "rev-parse", `refs/heads/${input.branch}`).trim() === sha,
       `model-free state_commit=${sha}; paths=${JSON.stringify(paths)}`)
   } catch (error) {
-    for (const check of ["sentinel bytes/index unchanged", "branch/HEAD unchanged", "ignore files unchanged", "zero local state commits",
+     for (const check of ["sentinel bytes/index unchanged", "branch/HEAD unchanged", "worktree list unchanged", "sibling worktree directories absent", "ignore files unchanged", "zero local state commits",
       "remote refs unchanged", "state commit scope", "state commit count", "Git push isolation", "mixed full push excludes light",
       ...(input.crossRepo ? ["fork bare unchanged"] : [])]) if (!rows.some(row => row.check === check)) add(check, false, String(error), check === "Git push isolation" ? 6 : 5)
     // A late malformed receipt/unsafe-remote failure cannot leave the probe row green.
@@ -1084,15 +1094,21 @@ export function checkOrchestratorShell(tools: Tool[], input: Pick<Inputs, "fixtu
     allowed.delete(`gh pr checkout ${input.pr} --repo ${input.owner}/${input.repo} --detach`)
     const root = reviewRoot(input)
     allowed.delete(`shasum -a 256 ${root}/post-request.json`)
-    for (const command of [`git ls-files -- ${root}/lock.yaml`, "git remote",
-      `git fetch --no-tags https://github.com/${input.owner}/${input.repo}.git pull/${input.pr}/head`,
+     for (const command of [`git ls-files -- ${root}/lock.yaml`, `git ls-files -- '${root}/lock.yaml'`, `git ls-files -- "${root}/lock.yaml"`, "git remote",
       `shasum -a 256 ${root}/${LIGHT_REVIEW_DIRECTORY}/post-request.json`]) allowed.add(command)
     for (const head of validatedHeads.filter(head => /^[a-f0-9]{40}$/.test(head))) {
       for (const expression of [`'${head}^{commit}'`, `"${head}^{commit}"`, `${head}^{commit}`]) allowed.add(`git cat-file -e ${expression}`)
     }
     for (const remote of ["origin", "github"]) for (const literal of [remote, `'${remote}'`, `"${remote}"`]) allowed.add(`git remote get-url ${literal}`)
-    for (const remote of ["github", "'github'", '"github"']) for (const ref of [`pull/${input.pr}/head`, `'pull/${input.pr}/head'`, `"pull/${input.pr}/head"`]) {
-      allowed.add(`git fetch --no-tags ${remote} ${ref}`)
+     const remotes = new Set(["origin", "github", `https://github.com/${input.owner}/${input.repo}.git`])
+     for (const tool of tools.filter(tool => shell(tool) && tool.state.status === "completed" && text(tool.input.command) === "git remote")) {
+       for (const remote of lines(text(tool.state.output)).filter(remote => /^(?!-)[A-Za-z0-9._-]+$/.test(remote))) remotes.add(remote)
+     }
+     for (const remote of remotes) for (const literal of [remote, `'${remote}'`, `"${remote}"`]) {
+       allowed.add(`git remote get-url ${literal}`)
+       for (const ref of [`pull/${input.pr}/head`, `'pull/${input.pr}/head'`, `"pull/${input.pr}/head"`]) {
+         allowed.add(`git fetch --no-tags ${literal} ${ref}`)
+       }
     }
   }
   const forbidden = tools.filter(tool => shell(tool) && !allowed.has(text(tool.input.command)))
@@ -1334,7 +1350,7 @@ export function checkPluginLoaded(input: Pick<Inputs, "host" | "hostlog" | "agen
         ["name", agent.name === agentName],
         ["native=false", agent.native === false],
         ["Corvus prompt", text(agent.prompt).startsWith(input.agent === "light" ? "# Corvus Review Light" : "# Corvus Review Auto")],
-        ["review tools", ["corvus_review_payload", "corvus_review_post", "corvus_review_persist", "corvus_review_lock", "corvus_review_pr", "corvus_review_verdict", "corvus_review_sync"].every(name => tools[name] === true)
+        ["review tools", ["corvus_review_payload", "corvus_review_post", "corvus_review_persist", "corvus_review_lock", "corvus_review_pr", "corvus_review_verdict", "corvus_review_sync", ...(input.agent === "light" ? ["corvus_review_worktree"] : [])].every(name => tools[name] === true)
           && tools[["corvus", "review", "verify"].join("_")] !== true],
         [input.writer ? "writer allow" : "writer deny", input.writer ? writerRule(agent) === "allow" : writerDenyRule(agent)],
         ["sandbox install permission", rules.some(rule => rule.pattern === install || text(rule.pattern).startsWith(install + "/"))],
@@ -1398,13 +1414,59 @@ export function checkPluginLoaded(input: Pick<Inputs, "host" | "hostlog" | "agen
  * Exit precedence remains 6 (posting barrier), 3 (host), 4 (fixture), 5 (evidence), else 0.
  * N/A-PASS does not remove a row. There is no blanket checkpoint-failed row waiver.
  * Light adds: light detector roster; light attempt controls; light presentation
- * integrity; light staging cleanup; posting artifacts; owned state writes; light
- * coverage/action; light metrics; light class isolation and the snapshot/probe rows.
+  * integrity; light staging cleanup; posting artifacts; owned state writes; light
+  * worktree route; light render structure; light coverage/action; light metrics;
+  * light class isolation and the snapshot/probe rows (including worktree leaks).
  * Light terminal routes omit unproduced presentations through bookkeepingRow;
  * aggregates propagate contradictions before N/A. Its writer harness stays denied.
  */
-type LightAttempt = { number: number; head: string; base: string; dispatch: Tool; metadata: Tool; end: number }
+type LightAttempt = { number: number; head: string; base: string; firstDispatch: Tool; dispatch: Tool; dispatches: Tool[]; metadata: Tool; end: number }
 type LightPresentation = { attempt: LightAttempt; producer: Tool; value: RecordValue; frozen?: Tool; preview?: Tool; digest?: string }
+
+/** The frozen/posted body is read before scoring, never reconstructed to bless it.
+ * These expressions mirror the skill's sole literal template; its extracted,
+ * instantiated template is a regression oracle. Missing structure fails closed.
+ * LOCAL changes only the title identity. Auto never consumes this predicate. */
+export function lightRenderErrors(body: string, local = false): string[] {
+  const errors: string[] = []
+  const content = body.split(/\r?\n/).slice(1).join("\n")
+  const title = local ? /^## Corvus Light Review — .+$/m : /^## Corvus Light Review — #\d+ .+$/m
+  if (!title.test(content) || !content.startsWith("## Corvus Light Review — ")) errors.push("missing literal opening heading")
+  if (!/^\*\*(COMMENT|REQUEST_CHANGES) · `[a-f0-9]{7}` · (\d+|null) files, \+(\d+|null)\/−(\d+|null) · Standards \d+ · Spec \d+ · inline \d+\*\*$/m.test(content)) errors.push("missing literal action/count line")
+  const axes = [...content.matchAll(/^## (Standards|Spec)\n\*\*[^\n]+\*\* · [^\n]+$/gm)]
+  if (axes.length !== 2 || axes[0]?.[1] !== "Standards" || axes[1]?.[1] !== "Spec"
+    || [...content.matchAll(/^## (Standards|Spec)$/gm)].length !== 2) errors.push("missing ordered axis headlines/counts")
+  if (/reduced[ -]coverage\s+(?:light )?review|generic reduced.coverage|\[!WARNING\]/i.test(content)) errors.push("generic light banner retained")
+  if (/^(?:[-*] )?(?:reviewed|inspected|selected|omitted|unavailable)[ _-]*(?:paths|files|scope inventory)\s*[:=]|^(?:assessment|strategy|evidence_reads|reviewed_scope|trigger|impact|introduced_by_pr|narrow_fix|evidence)\s*:/im.test(content)) errors.push("local inventory/evidence fields rendered")
+  if ([...content.matchAll(/^(#{1,6}) Review limits\s*$/gm)].some(match => match[1] !== "##")) errors.push("Review limits must be review-wide")
+  const limits = content.split(/^## Review limits\s*$/m)
+  if (limits.length > 2 || limits.length === 2 && (lines(limits[1]).length > 3 || lines(limits[1]).some(line => !/^- \S/.test(line)))) errors.push("Review limits exceeds three factual bullets")
+  const findingLines = [...content.matchAll(/^\*\*.*\*\* \((?:standards|spec)\/[^\n]*$/gm)]
+  for (const [index, finding] of findingLines.entries()) {
+    const line = finding[0]
+    if (!/^\*\*(?:blocker|critical|major|minor|praise|thought|note)\*\* \((standards|spec)\/(architecture|correctness|conventions|security), (?:ls|lsp)-(?:arch|logic|conv|sec)-(?:standards|spec)-\d{3}\): \S.{0,79}$/.test(line)) errors.push("invalid compact finding identity")
+    const axis = /\((standards|spec)\//.exec(line)?.[1]
+    const position = finding.index, standards = axes[0]?.index ?? Infinity, spec = axes[1]?.index ?? Infinity
+    if (axis === "standards" ? position < standards || position > spec : position < spec) errors.push("finding in wrong axis section")
+    if (index > 0 && findingLines[index - 1][0].includes(`(${axis}/`) && !/\n[\t ]*\n$/.test(content.slice(0, position))) errors.push("consecutive body findings lack blank-line separation")
+  }
+  return errors
+}
+
+/** Trusted prompt keys and terminal-ledger fields are read before route scoring.
+ * Decode quoted JSON or bare colon/equal forms, stripping presentation wrappers
+ * and terminal prose punctuation without normalizing owned paths;
+ * duplicate/missing/mismatched values fail closed at consumers. Presence is
+ * checked separately on fallback routes, including malformed/empty values.
+ * The skill owns the literals; these light-only parsers have no override. */
+const lightFieldPresent = (value: string, key: string) => new RegExp(`\\b${key}"?\\s*[:=]`, "i").test(value)
+function lightFieldValues(value: string, key: string): string[] {
+  const pattern = new RegExp(`\\b${key}"?\\s*[:=]\\s*("(?:\\\\.|[^"\\\\])*"|[^;,\\r\\n]*?)(?=\\s+\\b[a-z_]+"?\\s*[:=]|[;,\\r\\n]|\\s*}|$)`, "gi")
+  return [...value.matchAll(pattern)].map(match => {
+    const raw = match[1].trim().replace(/[.,)]+$/, "")
+    try { return raw.startsWith('"') ? text(JSON.parse(raw)) : raw.replace(/^[`']+|[`'".,)]+$/g, "") } catch { return "" }
+  })
+}
 
 /** Decode in-session authorization objects, not child prose or summary claims. */
 function lightObjects(value: string): RecordValue[] {
@@ -1475,24 +1537,42 @@ export async function checkLightAttempts(input: Inputs, events: RecordValue[], t
     && tool.index > acquired.index && tool.index < released.index && correlated(tool)
   const detectorCalls = tools.filter(tool => ["task", "subagent"].includes(tool.name) && (tool.input.agent ?? tool.input.subagent_type) === "pr-light-reviewer")
   const writerCalls = tools.filter(writer), detectorChildren = descendants.filter(child => child.agent === "pr-light-reviewer")
+  const rosterErrors: string[] = []
+  const rosterError = (message: string) => { rosterErrors.push(message); errors.push(message) }
+  const groups = new Map<number, Tool[]>()
+  for (const dispatch of detectorCalls) {
+    const number = Number(/\battempt[\s"_:=-]+(\d+)\b/i.exec(text(dispatch.input.prompt))?.[1])
+    if (!Number.isSafeInteger(number) || number < 1 || number > 3) { rosterError("invalid detector attempt control"); continue }
+    groups.set(number, [...(groups.get(number) ?? []), dispatch])
+  }
   const attempts: LightAttempt[] = []
-  for (const [index, dispatch] of detectorCalls.entries()) {
-    const source = local ? intake : metadata.findLast(tool => tool.index < dispatch.index && validOpen(tool))
-    if (!source) { errors.push(`attempt ${index + 1}: no validated OPEN head/base`); continue }
+  for (const [index, [number, dispatches]] of [...groups].entries()) {
+    const firstDispatch = dispatches[0], dispatch = dispatches.at(-1)!
+    const axes = dispatches.map(tool => /\baxis[\s"_:=-]+(standards|spec_security)\b/i.exec(text(tool.input.prompt))?.[1])
+    const between = controls.filter(tool => tool.index >= firstDispatch.index && tool.index <= dispatch.index)
+    if (number !== index + 1 || dispatches.length !== 2 || new Set(axes).size !== 2 || axes.some(axis => !axis)
+      || between.length !== 2 || dispatches.some(tool => tool.input.background === true)
+      || new Set(dispatches.map(tool => tool.turn ?? stored.find(item => item.callID === tool.callID)?.turn).filter(Boolean)).size > 1) rosterError(`attempt ${number}: require two foreground distinct axis briefs in one batch`)
+    const source = local ? intake : metadata.findLast(tool => tool.index < firstDispatch.index && validOpen(tool))
+    if (!source) { rosterError(`attempt ${number}: no validated OPEN head/base`); continue }
     const head = text(source.output.code_head), base = text(local ? source.output.merge_base : source.output.baseRefOid)
-    const attempt = { number: index + 1, head, base, dispatch, metadata: source, end: detectorCalls[index + 1]?.index ?? Infinity }
+    const attempt = { number, head, base, firstDispatch, dispatch, dispatches, metadata: source, end: [...groups.values()][index + 1]?.[0].index ?? Infinity }
     attempts.push(attempt)
-    const child = detectorChildren.find(child => child.id === childResult(dispatch).sessionID && child.parentID === parentID)
-    const prompt = text(dispatch.input.prompt)
-    if (!underLock(dispatch) || childResult(dispatch).status !== "completed" || !child || !oid(head) || !oid(base)
-      || !prompt.includes(head) || !prompt.includes(base) || !new RegExp(`\\battempt[\\s\"_:=-]+${index + 1}\\b`, "i").test(prompt)) errors.push(`attempt ${index + 1}: dispatch/child/head/base accounting invalid`)
-    if (!local && child && !["metadata", "files", "diff"].every(op => child.tools.some(tool => prCall(tool, op) && ok(tool)))) errors.push(`attempt ${index + 1}: detector lacks fresh metadata/files/diff`)
+    for (const dispatch of dispatches) {
+      const child = detectorChildren.find(child => child.id === childResult(dispatch).sessionID && child.parentID === parentID)
+      const prompt = text(dispatch.input.prompt)
+      if (/\bmax_targeted_reads\b/.test(prompt) || lightFieldPresent(prompt, "read_budget")) rosterError(`attempt ${number}: retired read ceiling in detector control`)
+      if (!underLock(dispatch) || !["completed", "error", "cancelled"].includes(childResult(dispatch).status) || !child || !oid(head) || !oid(base)
+        || !prompt.includes(head) || !prompt.includes(base)) rosterError(`attempt ${number}: dispatch/child/head/base accounting invalid`)
+      if (!local && child && !["metadata", "files", "diff"].every(op => child.tools.some(tool => prCall(tool, op) && ok(tool)
+        && (op !== "metadata" || tool.output.code_head === head && tool.output.baseRefOid === base)))) rosterError(`attempt ${number}: detector lacks fresh metadata/files/diff`)
+    }
     const previous = attempts[index - 1]
     const start = previous?.dispatch.index ?? -1
-    if (previous && (source.index <= previous.dispatch.index || head === previous.head && base === previous.base
-      || !fresh(statusBefore(dispatch.index, previous.dispatch.index), 5400))) errors.push(`attempt ${index + 1}: restart lacks movement or fresh age-bounded ownership`)
+     if (previous && (source.index <= previous.dispatch.index || head === previous.head && base === previous.base
+       || !fresh(statusBefore(firstDispatch.index, previous.dispatch.index), 5400))) errors.push(`attempt ${index + 1}: restart lacks movement or fresh age-bounded ownership`)
     if (!local) {
-      const files = tools.findLast(tool => prCall(tool, "files") && tool.index > start && tool.index < dispatch.index
+       const files = tools.findLast(tool => prCall(tool, "files") && tool.index > start && tool.index < firstDispatch.index
         && ok(tool) && tool.input.paginate === true && tool.input.include_corvus === true && tool.input.names_only === true && tool.output.complete_pagination === true)
       const reviews = tools.findLast(tool => prCall(tool, "reviews") && tool.index > start && tool.index < dispatch.index && ok(tool))
       const resolution = tools.findLast(tool => tool.name === "corvus_review_sync" && tool.input.op === "resolve" && tool.index > start && tool.index < dispatch.index && ok(tool))
@@ -1518,14 +1598,85 @@ export async function checkLightAttempts(input: Inputs, events: RecordValue[], t
   const assigned = detectorCalls.map(tool => childResult(tool).sessionID)
   const writerChildren = descendants.filter(child => child.agent === "pr-comment-writer")
   const assignedWriters = writerCalls.filter(tool => tool.state.status === "completed").map(tool => childResult(tool).sessionID)
-  const rosterOK = detectorCalls.length <= 3 && detectorCalls.length === detectorChildren.length && new Set(assigned).size === assigned.length
+   const rosterOK = !rosterErrors.length && detectorCalls.length <= 6 && detectorCalls.length === detectorChildren.length && new Set(assigned).size === assigned.length
     && detectorChildren.every(child => assigned.includes(child.id))
     && writerChildren.length === assignedWriters.length && new Set(assignedWriters).size === assignedWriters.length && writerChildren.every(child => assignedWriters.includes(child.id))
-    && descendants.every(child => child.parentID === parentID && (child.agent === "pr-light-reviewer" || input.writer && child.agent === "pr-comment-writer"))
+     && descendants.every(child => child.parentID === parentID && (child.agent === "pr-light-reviewer" || input.writer && child.agent === "pr-comment-writer"))
   const countClaim = /\bdetection attempts\s*[:=]\s*(\d+)\b/i.exec(summary)
-  const ledgerOK = countClaim && Number(countClaim[1]) === detectorCalls.length && attempts.every(attempt => summary.split(/\r?\n/).some(line =>
+   const ledgerOK = countClaim && Number(countClaim[1]) === attempts.length && attempts.every(attempt => summary.split(/\r?\n/).some(line =>
     new RegExp(`\\battempt[\\s\"_:=-]+${attempt.number}\\b`, "i").test(line) && line.includes(attempt.head) && line.includes(attempt.base)))
-  add("light detector roster", !evidenceError && rosterOK && Boolean(ledgerOK), `${detectorChildren.length} detector sessions; ${detectorCalls.length} accounted dispatches (0 terminal, otherwise 1–3); summary must match every head/base`)
+   const rosterRow: Row = { check: "light detector roster", ok: !evidenceError && rosterOK && Boolean(ledgerOK), code: 5,
+     detail: !evidenceError && rosterOK && ledgerOK ? `${detectorChildren.length} detector sessions; ${detectorCalls.length} accounted dispatches (two per attempt, ≤6 total); ledger matches every head/base`
+       : `forged: ${evidenceError || rosterErrors.join("; ") || "detector/child/ledger cardinality mismatch"}` }
+  rows.push(rosterRow)
+
+  /** DB-matched create receipts establish ownership before dispatch. Remove uses
+   * that original tuple even after lock loss; a failed outcome must name its exact
+   * path/diagnostic and manual remedy in terminal text. Ordering/tuple/ledger
+   * contradictions fail forged; disclosed tool unavailability uses ADR-0006.
+   * No PR terminal/restart bypasses removal. LOCAL/pre-admission creates none. */
+  const treeCalls = tools.filter(tool => tool.name === "corvus_review_worktree")
+  const treeErrors: string[] = [], treeRows: Row[] = []
+  const creates = treeCalls.filter(tool => tool.input.op === "create")
+  const removals = treeCalls.filter(tool => tool.input.op === "remove")
+  const sameTuple = (a: Tool, b: Tool) => ["cwd", "pr", "code_head", "runId"].every(key => a.input[key] === b.input[key])
+  const worktreeLedgerMatches = (attempt: LightAttempt | undefined, path: string, cleanup: string) => !!attempt && summary.split(/\r?\n/).some(line =>
+    new RegExp(`\\battempt[\\s\"_:=-]+${attempt.number}\\b`, "i").test(line)
+      && isDeepStrictEqual(lightFieldValues(line, "worktree"), [path]) && isDeepStrictEqual(lightFieldValues(line, "cleanup"), [cleanup]))
+  for (const call of treeCalls) {
+    if (!correlated(call) || !["create", "remove"].includes(text(call.input.op))) treeErrors.push("uncorrelated/unknown worktree call")
+  }
+  if ((local || !acquired) && treeCalls.length) treeErrors.push("worktree activity on LOCAL/pre-admission route")
+  for (const [index, create] of creates.entries()) {
+    const attempt = attempts.find(attempt => create.index > attempt.metadata.index && create.index < attempt.firstDispatch.index
+      && create.input.code_head === attempt.head)
+    const prepared = tools.findLast(tool => shell(tool) && tool.index < create.index
+      && text(tool.input.command).startsWith("git cat-file -e ") && text(tool.input.command).includes(`${text(create.input.code_head)}^{commit}`))
+    const previous = creates[index - 1]
+    const previousRemoval = previous && removals.find(tool => tool.index > previous.index && tool.index < create.index && sameTuple(previous, tool) && ok(tool))
+    if (!acquired || !released || create.index <= acquired.index || create.index >= released.index || !prepared || prepared.index <= acquired.index
+      || !samePath(create.input.cwd, input.fixture) || create.input.pr !== Number(input.pr) || create.input.runId !== acquired.input.runId
+      || !attempt || creates.filter(tool => tool.index > attempt.metadata.index && tool.index < attempt.firstDispatch.index).length !== 1
+      || previous && ok(previous) && !previousRemoval) treeErrors.push("create lacks acquired/prepared attempt or previous cleanup")
+    if (index > 0 && (!fresh(statusBefore(create.index, previous?.index), 5400)
+      || previousRemoval && !fresh(statusBefore(previousRemoval.index, attempts[index - 1]?.dispatch.index), 5400))) treeErrors.push("restart removal/re-creation lacks fresh age-bounded admission")
+    const path = text(create.output.path)
+    if (ok(create)) {
+      if (!path || dirname(path) !== dirname(realpathSync(input.fixture))
+        || !basename(path).startsWith(`${basename(realpathSync(input.fixture))}.corvus-review-pr${input.pr}-${text(create.input.code_head).slice(0, 7)}-`)
+        || create.output.head !== create.input.code_head) treeErrors.push("successful create path/head contradicts sibling identity")
+      const remove = removals.find(tool => tool.index > create.index && sameTuple(create, tool))
+      const next = creates[index + 1]
+      if (!remove || !released || remove.index <= (attempt?.dispatch.index ?? create.index) || remove.index >= released.index || next && remove.index >= next.index) treeErrors.push("owned worktree not removed after dispatch and before release/re-creation")
+      if (remove && (remove.output.path !== path && ok(remove) || ok(remove) && !["removed", "absent"].includes(text(remove.output.state)))) treeErrors.push("remove contradicts owned path/absence outcome")
+      if (!worktreeLedgerMatches(attempt, path, remove && ok(remove) ? text(remove.output.state) : "failed")) treeErrors.push("worktree path/cleanup ledger mismatch")
+      for (const dispatch of attempt?.dispatches ?? []) if (!isDeepStrictEqual(lightFieldValues(text(dispatch.input.prompt), "head_worktree"), [path])) treeErrors.push("detector lacks verified worktree control")
+      if (remove && !ok(remove)) {
+        const disclosed = summary.split(/\r?\n/).some(line => /worktree remove/i.test(line) && line.includes(path) && /git worktree remove --force /.test(line))
+        treeRows.push(bookkeepingRow("light worktree cleanup", { op: "worktree remove", summary, consistent: false,
+          diagnostic: diagnostic(remove), contradiction: disclosed ? undefined : "cleanup failure lacks exact path/manual remedy", detail: "cleanup failed" }))
+        if (next) treeErrors.push("restart continued after failed removal")
+        if (tools.some(tool => tool.index > remove.index && (detectorCalls.includes(tool) || writer(tool) || tool.name === "corvus_review_payload" || tool.name === "corvus_review_persist" && !["abort", "status"].includes(text(tool.input.op))))) treeErrors.push("review continued after failed cleanup")
+      }
+    } else {
+      treeRows.push(bookkeepingRow("light worktree create", { op: "worktree create", summary, consistent: false,
+        diagnostic: diagnostic(create), detail: "object-read fallback" }))
+      if (!worktreeLedgerMatches(attempt, "none", "not-created")) treeErrors.push("uncreated worktree ledger mismatch")
+      if (attempt?.dispatches.some(tool => lightFieldPresent(text(tool.input.prompt), "head_worktree"))) treeErrors.push("failed create supplied head_worktree")
+      if (record(create.output.cleanup).ok === false && (!summary.includes(path) || !/manual|inspect/i.test(summary))) treeErrors.push("failed-create rollback path/manual inspection undisclosed")
+    }
+  }
+  if (local && attempts.some(attempt => !worktreeLedgerMatches(attempt, "none", "not-created")
+    || attempt.dispatches.some(tool => lightFieldPresent(text(tool.input.prompt), "head_worktree")))) treeErrors.push("LOCAL supplied worktree control or mismatched uncreated ledger")
+  if (!local && attempts.some(attempt => !creates.some(tool => tool.index > attempt.metadata.index && tool.index < attempt.firstDispatch.index))) treeErrors.push("PR attempt lacks worktree create outcome")
+  if (removals.some(remove => !creates.some(create => ok(create) && create.index < remove.index && sameTuple(create, remove)))) treeErrors.push("remove without successful owned create")
+  if (creates.some((create, index) => removals.filter(remove => remove.index > create.index && remove.index < (creates[index + 1]?.index ?? Infinity) && sameTuple(create, remove)).length > 1)) treeErrors.push("duplicate worktree removal")
+  const treeBase = bookkeepingRow("light worktree route", { op: "worktree lifecycle", summary,
+    consistent: !treeErrors.length && !evidenceError, contradiction: treeErrors.length ? treeErrors.join("; ") : evidenceError || undefined,
+    byContract: treeCalls.length === 0 && (local || !acquired), contractDisclosed: /terminal reason\s*[:=]/i.test(summary) && /LOCAL|local_mode|CLOSED|MERGED|held|denied/i.test(summary),
+    detail: `${creates.length} create outcomes; ${removals.length} owned removals before release/re-creation${local || !acquired ? "; no worktree on unadmitted/LOCAL route" : ""}` })
+  const treeRow = aggregateRow("light worktree route", [treeBase, ...treeRows], treeBase.detail)
+  rows.push(treeRow)
 
   const presentationCalls = tools.filter(tool => tool.name === "corvus_review_persist" && (tool.input.op === "write_candidate" || tool.input.op === "finalize"))
   const presentations: LightPresentation[] = []
@@ -1551,7 +1702,8 @@ export async function checkLightAttempts(input: Inputs, events: RecordValue[], t
       const marker = parseReviewMarker(text(value.body).split(/\r?\n/)[0])
       const history = tools.findLast(tool => tool.name === "corvus_review_verdict" && tool.index < producer.index && tool.index > (attempts[attempt.number - 2]?.dispatch.index ?? -1))
       if (!marker || marker.head !== attempt.head || (marker.path ? marker.path !== relativeRoot || !ok(history) || marker.round !== history?.output.round : ok(history) || !disclosure(summary, "round", diagnostic(history)))) throw new Error("attempt marker/history mismatch")
-      if (/reduced.coverage\s+light review/i.test(text(value.body))) throw new Error("generic light banner retained")
+       const renderErrors = lightRenderErrors(text(value.body), local)
+       if (renderErrors.length) throw new Error(renderErrors.join("; "))
       presentations.push({ attempt, producer, value })
     } catch (error) { presentationErrors.push(`${producer.index}: ${String(error)}`) }
   }
@@ -1577,9 +1729,11 @@ export async function checkLightAttempts(input: Inputs, events: RecordValue[], t
             || !samePath(call.input.candidatePath, candidate) || !samePath(call.input.artifactPath, artifact)) throw new Error("freeze without measurement/fresh ownership/paths")
           if (!ok(call)) continue
           const fitted = !measured.ok, fit = fitReview(value as CandidateRequest), expected = measure(fitted ? fit.request : value)
-          if ("reason" in expected || call.output.sha256 !== expected.sha256 || !reportedPathMatches(input.fixture, call.output.artifactPath, join(root, ".light"), "post-request.json")
+           if ("reason" in expected || call.output.sha256 !== expected.sha256 || !reportedPathMatches(input.fixture, call.output.artifactPath, join(root, ".light"), "post-request.json")
             || call.output.fitted !== fitted || !isDeepStrictEqual(call.output.measurements, expected.measurements)
-            || !isDeepStrictEqual(call.output.omitted, fitted ? fit.omitted : { comments: 0, findings: 0 })) throw new Error("freeze digest/fit/revision mismatch")
+             || !isDeepStrictEqual(call.output.omitted, fitted ? fit.omitted : { comments: 0, findings: 0 })) throw new Error("freeze digest/fit/revision mismatch")
+           const renderErrors = lightRenderErrors(text(record(fitted ? fit.request : value).body), local)
+           if (renderErrors.length) throw new Error(`frozen render: ${renderErrors.join("; ")}`)
           presentation.frozen = call; presentation.preview = undefined; presentation.digest = expected.sha256
         } else if (call.input.op === "preview") {
           const frozen = presentation.frozen
@@ -1621,8 +1775,9 @@ export async function checkLightAttempts(input: Inputs, events: RecordValue[], t
   const refusedAge = drift && statuses.find(tool => tool.index > drift.index && fresh(tool) && !fresh(tool, 5400))
   const rootChange = drift && tools.find(tool => tool.name === "corvus_review_sync" && tool.input.op === "resolve" && tool.index > drift.index && ok(tool) && tool.output.root !== relativeRoot)
   const held = acquisitions.find(tool => tool.output.state === "held" || denied(diagnostic(tool) ?? ""))
+  const cleanupFailure = removals.find(tool => !ok(tool))
   const reason = terminalMetadata ? text(terminalMetadata.output.state).toLowerCase() : lost ? "ownership" : drift && attempts.length === 3 ? "exhaustion"
-    : refusedAge ? "lock-age" : rootChange ? "namespace" : held ? "held/denied" : local ? "local_mode" : writerCalls.length ? "writer" : "unverified"
+    : refusedAge ? "lock-age" : rootChange ? "namespace" : held ? "held/denied" : local ? "local_mode" : writerCalls.length ? "writer" : cleanupFailure ? "cleanup" : "unverified"
   const stop = terminalMetadata ?? lost ?? (reason === "exhaustion" ? drift : undefined) ?? refusedAge ?? rootChange ?? held
   if (stop && tools.some(tool => tool.index > stop.index && (writer(tool) || detectorCalls.includes(tool) || tool.name === "corvus_review_payload"
     || tool.name === "corvus_review_persist" && !["abort", "status"].includes(text(tool.input.op))))) errors.push("detection/presentation/posting after DB terminal decision")
@@ -1693,9 +1848,12 @@ export async function checkLightAttempts(input: Inputs, events: RecordValue[], t
       const child = descendants.find(child => child.agent === "pr-comment-writer" && child.id === childResult(dispatch).sessionID)
       const result = extractPostResult([text(dispatch.state.output), ...(child?.texts ?? [])])
       const posts = child?.tools.filter(tool => tool.name === "corvus_review_post") ?? []
-      if (!child || dispatch.state.status !== "completed" || !presentation || !["not_posted", "local_only"].includes(text(result.status))
+      if (!child || dispatch.state.status !== "completed" || !presentation || !["posted", "not_posted", "local_only"].includes(text(result.status))
         || posts.some(post => post.input.expectedSha256 !== presentation.digest || post.input.headSha !== presentation.attempt.head
           || post.input.event !== presentation.value.event || !samePath(post.input.artifactPath, artifact))) errors.push("writer child/result differs from attempt descriptor")
+      if (result.status === "posted" || result.remote_state === "posted" || posts.some(post => post.output.outcome === "posted")) {
+        add("light posting barrier", false, "synthetic/live posted writer receipt crossed the smoke posting barrier", 6)
+      }
       if (result.reason === "head-moved" && (posts.length !== 1 || posts[0].output.outcome !== "rejected" || posts[0].output.reason !== "head-moved"
         || posts[0].output.tool_api_calls !== 1 || !metadata.some(tool => tool.index > dispatch.index && tool.index < (detectorCalls.find(tool => tool.index > dispatch.index)?.index ?? Infinity)))) errors.push("writer head-moved lacks mechanical rejection and metadata-first renewal")
     }
@@ -1705,19 +1863,20 @@ export async function checkLightAttempts(input: Inputs, events: RecordValue[], t
     || !new RegExp(`\\battempt[\\s_:=-]+${lastArtifact!.attempt.number}\\b`, "i").test(summary))) errors.push("retained superseded artifact not identified as inert by producing attempt")
   if (!/no (?:further )?posting|nothing (?:was )?posted|not posted/i.test(summary) && !input.writer) errors.push("no-post outcome not disclosed")
   const proof = errors.length ? `forged: ${errors.join("; ")}` : `${attempts.length} DB-validated attempts; terminal=${reason}; presentations=${presentations.length}${superseded ? "; retained artifact inert" : ""}`
-  const stateRow: Row = { check: "light attempt controls", ok: errors.length === 0, code: 5, detail: proof }
-  rows.push(stateRow)
-  add("child tool evidence", !evidenceError && (intakeStop ? descendants.length === 0 : attempts.length === detectorCalls.length), proof)
-  add("sync.resolve", intakeStop ? !tools.some(tool => tool.name === "corvus_review_sync") : errors.length === 0, proof)
-  add("lock released", cleanupOK && errors.length === 0, proof)
+   const stateRow = aggregateRow("light attempt controls", [{ check: "light attempt controls", ok: errors.length === 0, code: 5, detail: proof }, rosterRow, treeRow], proof)
+   rows.push(stateRow)
+   rows.push(aggregateRow("child tool evidence", [stateRow, rosterRow], proof))
+   rows.push(aggregateRow("sync.resolve", [stateRow], proof))
+   rows.push(aggregateRow("lock released", [stateRow, treeRow], proof))
   const presentationRow: Row = { check: "light presentation integrity", ok: !presentationErrors.length && retainedOK && builtOK, code: 5,
     detail: presentationErrors.length ? `forged: ${presentationErrors.join("; ")}` : `${presentations.length} revisions: independent candidate → measure → freeze → preview; last producing bytes retained` }
-  rows.push(presentationRow)
+   rows.push(presentationRow)
   const omitted = (check: string) => bookkeepingRow(check, { op: check, summary, consistent: false, detail: proof, byContract: true,
     contractDisclosed: /terminal reason\s*[:=]/i.test(summary) && /no (?:further )?posting|nothing (?:was )?posted|not posted/i.test(summary),
     contradiction: stateRow.ok && presentationRow.ok ? undefined : [stateRow, presentationRow].find(row => !row.ok)?.detail.replace(/^forged: /, "") })
-  for (const check of ["candidate producer", "posting artifacts", "tool chain", "SHA-256", "built verify()", "marker"]) rows.push(presentations.length
-    ? aggregateRow(check, [stateRow, presentationRow], presentationRow.detail) : omitted(check))
+   for (const check of ["candidate producer", "posting artifacts", "tool chain", "SHA-256", "built verify()", "marker"]) rows.push(presentations.length
+     ? aggregateRow(check, [stateRow, presentationRow], presentationRow.detail) : omitted(check))
+   rows.push(presentationCalls.length ? aggregateRow("light render structure", [presentationRow], "candidate and frozen bodies match the literal light template") : omitted("light render structure"))
   for (const check of ["owned state writes", "review-state tools", "artifacts"]) rows.push(aggregateRow(check, [stateRow, presentationRow], proof))
   const persistCalls = tools.filter(tool => tool.name === "corvus_review_persist")
   if (persistCalls.some(tool => !underLock(tool) || !samePath(tool.input.reviewRoot, root) || !["write_candidate", "begin", "append", "finalize", "abort", "status"].includes(text(tool.input.op))
@@ -1741,7 +1900,7 @@ export async function checkLightAttempts(input: Inputs, events: RecordValue[], t
       || /size[_ ]fit|fitted|for size/i.test(summary) && new RegExp(`\\bcomments\\s*[:=]\\s*${omitted.comments}\\b`, "i").test(summary)
         && new RegExp(`\\bfindings\\s*[:=]\\s*${omitted.findings}\\b`, "i").test(summary)
   }), "each fitted revision reproduces identity/event/omissions/digest; terminal size-fit counts disclosed")
-  if (!local) rows.push(writerCalls.length ? { check: input.writer ? "writer dispatched" : "writer denied", ok: errors.length === 0, code: 5, detail: proof } : omitted("writer denied"))
+   if (!local) rows.push(writerCalls.length ? aggregateRow(input.writer ? "writer dispatched" : "writer denied", [stateRow], proof) : omitted("writer denied"))
   add("light coverage/action", presentationRow.ok && (intakeStop || /synthesis.*counts/i.test(summary))
     && /actual (?:coverage|reviewed(?: scope| bounds)?)|reviewed (?:scope|bounds|files|changed lines)|\b(?:files|changed lines) reviewed\b/i.test(summary) && /untracked/i.test(summary), "no generic light banner or APPROVE; terminal actual-coverage/untracked disclosure")
   if (local) {
@@ -1911,7 +2070,7 @@ export async function checkReviewArtifacts(input: Inputs) {
      * tree before scoring, independently of executed Git trace. Match command verbs,
      * not the commit object expression in permitted cat-file reads. Missing evidence
      * fails closed; no terminal disclosure permits staging/commit/worktree mutation. */
-    const mutations = allTools.filter(tool => shell(tool) && /\bgit\s+(?:(?:-C|-c)\s+(?:'[^']*'|"[^"]*"|\S+)\s+)*(?:add|commit|push|checkout|switch|branch|update-ref|update-index|reset|restore|stash|rm)\b/i.test(text(tool.input.command)))
+    const mutations = allTools.filter(tool => shell(tool) && /\bgit\s+(?:(?:-C|-c)\s+(?:'[^']*'|"[^"]*"|\S+)\s+)*(?:add|commit|push|checkout|switch|branch|update-ref|update-index|reset|restore|stash|rm|worktree|read-tree)\b/i.test(text(tool.input.command)))
     add("light model Git mutations", !auditError && mutations.length === 0, 6,
       auditError || `${mutations.length} model staging/commit/push/worktree mutation attempts`)
     const writes = allTools.filter(tool => ["write", "edit", "patch", "apply_patch"].includes(tool.name))

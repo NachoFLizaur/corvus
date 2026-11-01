@@ -55,6 +55,11 @@ describe("shared review caller roster", () => {
     }
   })
 
+  test("worktree lifecycle belongs only to the light orchestrator, never argument identities", () => {
+    for (const caller of identities) for (const op of ["create", "remove", "invalid", undefined])
+      expect(isReviewCallerAllowed("corvus_review_worktree", caller, { op, caller: light, agent: light })).toBe(caller === light)
+  })
+
   test("restricted gates do not read argument accessors; non-writer post does not inspect arguments", () => {
     let reads = 0
     const input = { get op() { reads++; return "resolve" }, get target() { reads++; return "candidate" } }

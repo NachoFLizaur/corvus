@@ -2,11 +2,11 @@ import { Database } from "bun:sqlite"
 import { afterEach, expect, test } from "bun:test"
 import { createHash } from "node:crypto"
 import { execFileSync } from "node:child_process"
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { dump } from "js-yaml"
-import { REVIEW_INPUT_LINE_LIMIT, artifactTree, checkPluginLoaded, checkPluginState, checkReviewArtifacts, checkLightAttempts, checkLightSnapshots, countReviewMetrics, lightContractRow, lightFixtureMutations, snapshotLightFixture, reviewNamespace, reviewRoot, type Inputs } from "../../scripts/check-review-artifacts"
+import { REVIEW_INPUT_LINE_LIMIT, artifactTree, checkPluginLoaded, checkPluginState, checkReviewArtifacts, checkLightAttempts, checkLightSnapshots, countReviewMetrics, lightContractRow, lightFixtureMutations, lightRenderErrors, snapshotLightFixture, reviewNamespace, reviewRoot, type Inputs } from "../../scripts/check-review-artifacts"
 import { checkWriterRun } from "../../scripts/check-writer-run"
 import { canonicalize, freeze, measureFile, preview, type CandidateRequest } from "../review-payload"
 import { append, begin, finalize } from "../review-persist"
@@ -418,19 +418,23 @@ function seedGatherer(db: Database, local = false) {
  * light fixture changes only light expectations, never auto row-count assertions. */
 async function lightFixture(count = 1, options: LightReplayOptions = {}) {
   const data = await fixture(false, "url", "plain", "disabled")
-  const { input, root } = data, work = resolve(input.fixture, ".."), relative = reviewRoot(input)
+  const { input } = data, work = resolve(input.fixture, "..")
   git(input.fixture, "checkout", "-b", "smoke/light-unrelated", "main")
   for (const name of [".smoke-light-staged", ".smoke-light-unstaged"]) writeFileSync(join(input.fixture, name), "committed sentinel\n")
   git(input.fixture, "add", ".smoke-light-staged", ".smoke-light-unstaged")
   git(input.fixture, "commit", "-m", "Unrelated fixture")
   input.branch = "smoke/light-unrelated"
+  if (options.local) input.intake = "local"
   git(input.fixture, "push", "origin", `HEAD:refs/heads/${input.branch}`)
+  if (options.local) git(input.fixture, "branch", `--set-upstream-to=origin/${input.branch}`, input.branch)
   writeFileSync(join(input.fixture, ".smoke-light-staged"), "index sentinel\n")
   git(input.fixture, "add", ".smoke-light-staged")
   writeFileSync(join(input.fixture, ".smoke-light-staged"), "worktree staged sentinel\n")
   writeFileSync(join(input.fixture, ".smoke-light-unstaged"), "worktree unstaged sentinel\n")
   // Remove only fixture-owned full bookkeeping, retaining the built verifier.
-  rmSync(root, { recursive: true })
+  rmSync(data.root, { recursive: true })
+  const relative = reviewRoot(input), root = join(input.fixture, relative)
+  data.root = root
   mkdirSync(join(root, ".light"), { recursive: true })
   buildLightRestartTrace(data, count, options)
   input.agent = "light"
@@ -440,7 +444,7 @@ async function lightFixture(count = 1, options: LightReplayOptions = {}) {
   writeFileSync(join(work, "light-before.json"), JSON.stringify(before))
   writeFileSync(join(work, "light-after.json"), JSON.stringify(snapshotLightFixture(input.fixture, input.bare!)))
   writeFileSync(join(root, "probe-meta.yaml"), "model_free_probe: true\n")
-  const result = await push({ ...data.pushInput, head_sha: before.head, branch: input.branch })
+  const result = await push({ ...data.pushInput, root: relative, ...(options.local ? { pr: { name: input.repo, number: null, branch: input.branch! } } : {}), head_sha: before.head, branch: input.branch })
   if (!result.synced || !result.state_commit) throw new Error(JSON.stringify(result))
   const paths = git(input.bare!, "diff-tree", "--no-commit-id", "--name-only", "-r", result.state_commit).split("\n")
   writeFileSync(join(work, "light-push-probe.json"), JSON.stringify({ ok: true, root: relative, state_commit: result.state_commit, paths }))
@@ -536,10 +540,18 @@ type LightReplayOptions = {
   previews?: boolean; driftAfterPreview?: boolean; rawOnly?: boolean; baseOnly?: boolean; codeOnly?: boolean
   ownership?: boolean; takeover?: boolean; age?: boolean; root?: boolean; restartAge?: number
   held?: "lock.yaml" | ".lock"; denied?: boolean
+  local?: boolean; posted?: boolean; writerMoved?: boolean; cleanupFailure?: boolean; createFailure?: boolean
 }
 const lightHead = (number: number) => String(number).repeat(40)
 const lightBase = (number: number) => String(number + 4).repeat(40)
 const lightNote = (text: string) => ({ type: "text", sessionID: "ses_smoke", part: { text } })
+const lightLedgerTemplate = /`(attempt N:[^`\n]+)`/.exec(readFileSync(resolve(import.meta.dirname, "../../skill/corvus-review-light/SKILL.md"), "utf8"))?.[1] ?? ""
+function lightAttemptLedger(attempt: number, head: string, base: string, path: string | null, cleanup: string) {
+  const rendered = lightLedgerTemplate.replace("attempt N:", `attempt ${attempt}:`).replace("<40-hex>", head).replace("<40-hex>", base)
+    .replace("<path|none>", path ?? "none").replace("<removed|absent|failed|not-created>", cleanup)
+  expect(rendered.length > 0 && !/<[^>]+>/.test(rendered)).toBe(true)
+  return rendered
+}
 
 /** T3's stopped-host replay builders, not model-run evidence. Oracle: independently
  * recorded controls/receipts and DB-matched children, constructed before negative
@@ -548,42 +560,55 @@ const lightNote = (text: string) => ({ type: "text", sessionID: "ses_smoke", par
  * asymmetric matcher may replace a fixture field reused by later mutations. */
 function buildLightRestartTrace(data: ReviewFixture, count: number, options: LightReplayOptions) {
   const { input, root } = data, relative = reviewRoot(input)
+  if (options.local) input.intake = "local"
   const path = `${relative}/.light/candidate.json`, artifact = `${relative}/.light/post-request.json`
   const files: string[] = JSON.parse(readFileSync(join(input.fixture, "..", "changed-files.json"), "utf8"))
+  // Every light replay uses the same one-file/one-added-line product fixture;
+  // assert that oracle before reporting its actual scope, never a scope ceiling.
+  expect(files).toEqual(["x"])
   const opts = { reviewStateRoot: join(input.fixture, ".corvus") }, started = "2026-09-13T00:00:00Z"
   const pr = (op: string, output: object, extra = {}) => toolEvent("corvus_review_pr", { op, owner: "owner", name: "repo", pr: 8, ...extra }, output)
   const meta = (h: string, b: string, state = "OPEN", raw = h) => pr("metadata", { ok: true, number: 8, url: "https://github.com/owner/repo/pull/8", state, code_head: h, head_sha: raw, baseRefOid: b, isCrossRepository: false, api_calls: 1 })
   const status = (age = options.restartAge ?? 60, run = "run-1") => toolEvent("corvus_review_lock", { op: "status", reviewRoot: relative }, { held: age < 7200, holders: age < 7200 ? [{ path: join(root, "lock.yaml"), run_id: run, started_at: started, age_s: age }] : [], legacy_present: false })
-  const resolution = () => toolEvent("corvus_review_sync", { op: "resolve", cwd: input.fixture, pr: { owner: "owner", name: "repo", number: 8, isCrossRepository: false }, changed_files: files }, { ok: true, root: relative, remote: "github", task: null })
+  const resolution = () => toolEvent("corvus_review_sync", { op: "resolve", cwd: input.fixture, pr: options.local ? { name: "repo", number: null, branch: input.branch } : { owner: "owner", name: "repo", number: 8, isCrossRepository: false }, changed_files: files }, { ok: true, root: relative, remote: "github", task: null })
   const events: (ReturnType<typeof toolEvent> | ReturnType<typeof lightNote>)[] = []
-  const children: { id: string; tools: ReturnType<typeof toolEvent>[] }[] = []
-  const heads: { attempt: number; code_head: string; base_sha: string }[] = []
+  const children: { id: string; agent?: string; tools: ReturnType<typeof toolEvent>[] }[] = []
+  const heads: { attempt: number; code_head: string; base_sha: string; worktree: string | null; cleanup: string }[] = []
+  const treeTuple = (h: string) => ({ cwd: input.fixture, pr: 8, code_head: h, runId: "run-1" })
+  const treePath = (h: string) => resolve(realpathSync(input.fixture), "..", `fixture.corvus-review-pr8-${h.slice(0, 7)}-${createHash("sha256").update("run-1").digest("hex").slice(0, 6)}`)
+  const remove = (h: string, failed = false) => toolEvent("corvus_review_worktree", { op: "remove", ...treeTuple(h) }, failed
+    ? { ok: false, path: treePath(h), reason: "fixture-cleanup-failed" } : { ok: true, path: treePath(h), state: "removed" })
   let lastArtifact: { attempt: number; h: string } | undefined
   const headFor = (i: number) => lightHead(options.baseOnly ? 1 : i)
   const baseFor = (i: number) => lightBase(options.codeOnly ? 1 : i)
-  events.push(meta(headFor(1), baseFor(1), options.intake ?? "OPEN"))
-  if (!options.intake) events.push(pr("files", { ok: true, files, complete_pagination: true, api_calls: 1 }, { paginate: true, include_corvus: true, names_only: true }), resolution(),
+  events.push(options.local ? toolEvent("corvus_review_pr", { op: "local", cwd: input.fixture }, { ok: true, code_head: headFor(1), head_sha: headFor(1), merge_base: baseFor(1), changed_files: files, branch: input.branch }) : meta(headFor(1), baseFor(1), options.intake ?? "OPEN"))
+  if (!options.intake) events.push(...(!options.local ? [pr("files", { ok: true, files, complete_pagination: true, api_calls: 1 }, { paginate: true, include_corvus: true, names_only: true })] : []), resolution(),
     options.held ? toolEvent("corvus_review_lock", { op: "acquire", reviewRoot: relative, runId: "run-1" },
       options.denied ? {} : { ok: false, state: "held", holder: { path: join(root, options.held), run_id: "other-run", started_at: started, age_s: 60 } },
       options.denied ? "Permission denied: corvus_review_lock acquire" : undefined)
       : toolEvent("corvus_review_lock", { op: "acquire", reviewRoot: relative, runId: "run-1" }, { ok: true, state: "acquired", started_at: started }))
   for (let i = 1; !options.intake && !options.held && i <= count; i++) {
     const h = headFor(i), b = baseFor(i)
-    heads.push({ attempt: i, code_head: h, base_sha: b })
-    if (i > 1) events.push(status(options.restartAge ?? 60), pr("files", { ok: true, files, complete_pagination: true, api_calls: 1 }, { paginate: true, include_corvus: true, names_only: true }), resolution())
-    events.push(pr("reviews", { ok: true, reviews: [], complete_pagination: true, api_calls: 1 }))
-    if (i === 1 || !options.codeOnly) events.push(toolEvent("corvus_review_pr", { op: "config", owner: "owner", name: "repo", ref: b }, { ok: true, present: false, api_calls: 1 }))
-    events.push(toolEvent("corvus_review_verdict", { op: "compute", reviewRoot: relative, owner: "owner", name: "repo", pr: 8, priorReviews: {}, config: {} }, { ok: true, round: i }),
-      toolEvent("bash", { command: "git fetch --no-tags github pull/8/head" }, {}), toolEvent("bash", { command: `git cat-file -e '${h}^{commit}'` }, {}),
-      toolEvent("task", { subagent_type: "pr-light-reviewer", prompt: `attempt: ${i}; code_head: ${h}; base_sha: ${b}; fresh bounded light pass` }, { sessionID: `ses_light_${i}`, status: "completed" }),
-      status(options.ownership ? 7200 : options.restartAge ?? 60, options.takeover ? "other-run" : "run-1"))
-    children.push({ id: `ses_light_${i}`, tools: [meta(h, b), pr("files", { ok: true, files: [], complete_pagination: true, api_calls: 1 }, { paginate: true }), pr("diff", { ok: true, text: "", api_calls: 1 })] })
+    heads.push({ attempt: i, code_head: h, base_sha: b, worktree: options.local || options.createFailure ? null : treePath(h), cleanup: options.local || options.createFailure ? "not-created" : options.cleanupFailure && i === count ? "failed" : "removed" })
+    if (i > 1) events.push(status(options.restartAge ?? 60), ...(!options.createFailure ? [remove(headFor(i - 1))] : []), pr("files", { ok: true, files, complete_pagination: true, api_calls: 1 }, { paginate: true, include_corvus: true, names_only: true }), resolution())
+    if (!options.local) events.push(pr("reviews", { ok: true, reviews: [], complete_pagination: true, api_calls: 1 }))
+    if (!options.local && (i === 1 || !options.codeOnly)) events.push(toolEvent("corvus_review_pr", { op: "config", owner: "owner", name: "repo", ref: b }, { ok: true, present: false, api_calls: 1 }))
+    events.push(toolEvent("corvus_review_verdict", { op: "compute", reviewRoot: relative, owner: "owner", name: "repo", pr: 8, priorReviews: {}, config: {} }, { ok: true, round: i }))
+    if (!options.local) events.push(toolEvent("bash", { command: "git fetch --no-tags github pull/8/head" }, {}), toolEvent("bash", { command: `git cat-file -e '${h}^{commit}'` }, {}),
+      toolEvent("corvus_review_worktree", { op: "create", ...treeTuple(h) }, options.createFailure ? { ok: false, reason: "fixture-create-failed" }
+        : { ok: true, path: treePath(h), head: h, populated_files: 1, skipped: [], symlinks_as_files: [], preexisting_corvus_worktrees: [] }))
+    for (const axis of ["standards", "spec_security"]) {
+      const id = `ses_light_${i}_${axis}`
+      events.push(toolEvent("task", { subagent_type: "pr-light-reviewer", prompt: `attempt: ${i}; axis: ${axis}; code_head: ${h}; base_sha: ${b}; ${options.local || options.createFailure ? "" : `head_worktree: ${treePath(h)}; `}advisory_size_settings: {large_pr_threshold: 20, large_pr_strategy: warn} (advice only); fresh detector-led assessment and scope selection` }, { sessionID: id, status: "completed" }))
+      children.push({ id, tools: options.local ? [toolEvent("read", { filePath: join(input.fixture, ".smoke-light-unstaged") }, {})] : [meta(h, b), pr("files", { ok: true, files: [{ filename: "x", additions: 1, deletions: 0, changes: 1, patch: "@@ -0,0 +1 @@\n+line" }], complete_pagination: true, api_calls: 1 }, { paginate: true }), pr("diff", { ok: true, text: "diff --git a/x b/x\nnew file mode 100644\n--- /dev/null\n+++ b/x\n@@ -0,0 +1 @@\n+line\n", api_calls: 1 })] })
+    }
+    events.push(status(options.ownership ? 7200 : options.restartAge ?? 60, options.takeover ? "other-run" : "run-1"))
     if (options.ownership || options.takeover) break
     const nextH = headFor(i + 1), nextB = baseFor(i + 1)
     if (options.terminal && !options.driftAfterPreview) { events.push(meta(nextH, nextB, options.terminal)); break }
     if (options.exhaustion || i < count && !options.previews) { events.push(meta(nextH, nextB)); continue }
-    events.push(meta(h, b, "OPEN", options.rawOnly ? lightHead(4) : h))
-    const candidate: CandidateRequest = { commit_id: h, event: "COMMENT", body: `<!-- corvus-review v2 path=${relative} head=${h} round=${i} -->\nNo actionable findings in the reviewed scope.`, comments: [] }
+    if (!options.local) events.push(meta(h, b, "OPEN", options.rawOnly ? lightHead(4) : h))
+    const candidate: CandidateRequest = { commit_id: h, event: "COMMENT", body: `<!-- corvus-review v2 path=${relative} head=${h} round=${i} -->\n## Corvus Light Review — ${options.local ? "repo / smoke/light-unrelated" : "#8 Fixture"}\n**COMMENT · \`${h.slice(0, 7)}\` · 1 files, +1/−0 · Standards 0 · Spec 0 · inline 0**\n\n## Standards\n**No actionable findings in reviewed scope.** · 0 findings\n\n## Spec\n**No actionable findings in reviewed scope.** · 0 findings`, comments: [] }
     writeFileSync(join(input.fixture, path), canonicalize(candidate))
     const frozen = freeze(join(input.fixture, path), join(input.fixture, artifact), opts)
     // Assert before narrowing, rather than throwing from a parameterized setup.
@@ -594,33 +619,46 @@ function buildLightRestartTrace(data: ReviewFixture, count: number, options: Lig
       toolEvent("corvus_review_payload", { op: "measure", candidatePath: path }, measureFile(join(input.fixture, path), opts)),
       toolEvent("corvus_review_payload", { op: "freeze", candidatePath: path, artifactPath: artifact }, frozen),
       toolEvent("corvus_review_payload", { op: "preview", artifactPath: artifact, expectedSha256: frozen.sha256 }, preview(join(input.fixture, artifact), frozen.sha256, opts)),
-      lightNote(JSON.stringify({ decision: "auto_post", digest: frozen.sha256, event: "COMMENT", code_head: h, decision_reason: "autonomous", rails_applied: ["partial"], edits: [], rerun_scope: [] })))
+      ...(!options.local ? [lightNote(JSON.stringify({ decision: "auto_post", digest: frozen.sha256, event: "COMMENT", code_head: h, decision_reason: "autonomous", rails_applied: ["partial"], edits: [], rerun_scope: [] }))] : []))
+    if (options.local) break
     if (options.terminal) { events.push(meta(nextH, nextB, options.terminal)); break }
     if (options.age || options.root) {
       events.push(meta(nextH, nextB), status(options.age ? 5401 : 60))
       if (options.root) events.push(toolEvent("corvus_review_sync", { op: "resolve", cwd: input.fixture, pr: { owner: "owner", name: "repo", number: 8, isCrossRepository: false }, changed_files: [".corvus/tasks/moved/PLAN.md"] }, { ok: true, root: ".corvus/tasks/moved/reviews/pr8", remote: "github" }))
       break
     }
-    if (i < count) { events.push(meta(nextH, nextB)); continue }
+    if (i < count && !options.writerMoved) { events.push(meta(nextH, nextB)); continue }
     events.push(meta(h, b), status())
     const descriptor = { POST_ARTIFACT: { artifact_path: artifact, expected_sha256: frozen.sha256, repository: { owner: "owner", name: "repo" }, pr_number: 8, head_sha: h, event: "COMMENT" } }
-    events.push(toolEvent("subagent", { agent: "pr-comment-writer", prompt: JSON.stringify(descriptor) }, {}, "Subagent denied: pr-comment-writer"))
+    if (options.posted || options.writerMoved && i < count) {
+      const id = `ses_writer_${i}`, posted = options.posted === true
+      // Tool-state completion is the dispatch status; only POST_RESULT carries a
+      // status key in returned JSON, so extractPostResult cannot select an envelope.
+      events.push(toolEvent("subagent", { agent: "pr-comment-writer", prompt: JSON.stringify(descriptor) }, { sessionID: id, POST_RESULT: { status: posted ? "posted" : "local_only", remote_state: posted ? "posted" : "not_posted", review_url: posted ? "https://github.com/owner/repo/pull/8#pullrequestreview-1" : null, reason: posted ? null : "head-moved", inline_comments_posted: 0, comments_moved_to_body: 0, api_calls: 3 } }))
+      children.push({ id, agent: "pr-comment-writer", tools: [pr("head", { ok: true, code_head: h, api_calls: 1 }), pr("reviews", { ok: true, reviews: [], complete_pagination: true, api_calls: 1 }), toolEvent("corvus_review_post", { artifactPath: artifact, expectedSha256: frozen.sha256, repo: { owner: "owner", name: "repo" }, prNumber: 8, headSha: h, event: "COMMENT" }, posted ? { outcome: "posted", review_url: "https://github.com/owner/repo/pull/8#pullrequestreview-1", tool_api_calls: 2 } : { outcome: "rejected", reason: "head-moved", tool_api_calls: 1 })] })
+      if (!posted) { events.push(meta(nextH, nextB)); continue }
+    } else events.push(toolEvent("subagent", { agent: "pr-comment-writer", prompt: JSON.stringify(descriptor) }, {}, "Subagent denied: pr-comment-writer"))
   }
   if (!lastArtifact) { rmSync(join(input.fixture, path), { force: true }); rmSync(join(input.fixture, artifact), { force: true }) }
-  if (!options.intake && !options.held) events.push(toolEvent("corvus_review_lock", { op: "release", reviewRoot: relative, runId: "run-1", mode: "delete" }, options.takeover ? { ok: false, reason: "not-owner" } : { ok: true, state: "released" }))
+  if (!options.intake && !options.held) events.push(...(!options.local && !options.createFailure && heads.length ? [remove(heads.at(-1)!.code_head, options.cleanupFailure)] : []), toolEvent("corvus_review_lock", { op: "release", reviewRoot: relative, runId: "run-1", mode: "delete" }, options.takeover ? { ok: false, reason: "not-owner" } : { ok: true, state: "released" }))
   if (options.takeover) writeFileSync(join(root, "lock.yaml"), dump({ schema_version: 1, status: "active", started_at: started, run_id: "other-run" }))
   if (options.held) writeFileSync(join(root, options.held), dump({ schema_version: 1, status: "active", started_at: started, run_id: "other-run" }))
-  const reason = options.intake ?? options.terminal ?? (options.held ? "lock held/denied: other-run" : options.ownership || options.takeover ? "ownership expired/not-owner" : options.age ? "lock-age refusal" : options.root ? "namespace refusal" : options.exhaustion ? "exhaustion" : "writer denied")
+  const reason = options.intake ?? options.terminal ?? (options.local ? "local_mode" : options.held ? "lock held/denied: other-run" : options.ownership || options.takeover ? "ownership expired/not-owner" : options.age ? "lock-age refusal" : options.root ? "namespace refusal" : options.exhaustion ? "exhaustion" : options.posted ? "posted" : "writer denied")
   const inert = lastArtifact && (options.terminal || options.age || options.root) ? `Retained superseded artifact from attempt ${lastArtifact.attempt} head ${lastArtifact.h} is inert, not authorized for latest head.` : ""
-  events.push(lightNote(`Full-pipeline bookkeeping omitted by light contract.\nDetection attempts: ${heads.length}\n${heads.map(x => `attempt ${x.attempt}: code_head=${x.code_head} base_sha=${x.base_sha}`).join("\n")}\nTerminal reason: ${reason}; no posting. Latest observed head: ${options.exhaustion ? headFor(count + 1) : heads.at(-1)?.code_head ?? headFor(1)}.\nActual coverage: ${options.intake || options.held ? "zero reviewed at intake" : "reviewed bounds 20 files / 600 changed lines"}; synthesis counts: Standards 0, Spec 0. ${lastArtifact ? artifact : "Candidate and frozen artifact unavailable: no presentation produced."}; files may appear untracked. ${inert}`))
+  const coverage = options.intake || options.held
+    ? "Actual coverage: not assessed; reviewed 0 of null files (null changed lines); omitted null; unavailable null"
+    : "Actual coverage: all_diff_files; reviewed 1 of 1 files (1 changed lines); omitted 0; unavailable 0"
+  const cleanupNote = options.cleanupFailure ? `Worktree remove failed: fixture-cleanup-failed; path ${treePath(heads.at(-1)!.code_head)}; manual remedy: git worktree remove --force '${treePath(heads.at(-1)!.code_head)}'.` : ""
+  const createNote = options.createFailure ? "Worktree create failed: fixture-create-failed; object-read fallback." : ""
+  events.push(lightNote(`Full-pipeline bookkeeping omitted by light contract.\nDetection attempts: ${heads.length}\n${heads.map(x => lightAttemptLedger(x.attempt, x.code_head, x.base_sha, x.worktree, x.cleanup)).join("\n")}\nTerminal reason: ${reason}; ${options.posted ? "posted; no further posting" : "no posting"}. Latest observed head: ${options.exhaustion ? headFor(count + 1) : heads.at(-1)?.code_head ?? headFor(1)}.\n${coverage}; synthesis counts: Standards 0, Spec 0. ${lastArtifact ? artifact : "Candidate and frozen artifact unavailable: no presentation produced."}; files may appear untracked. ${inert} ${cleanupNote} ${createNote}`))
   data.events.splice(0, data.events.length, ...events)
-  input.writer = false // Post-time movement is protocol-pinned, not a denied-harness claim.
+  input.writer = options.posted || options.writerMoved || false // Synthetic writer receipts, never a live run.
   input.head = lightHead(4) // Intentionally not the live intake or any reviewed head.
   const db = new Database(input.db!)
   db.run("delete from part where session_id != 'ses_smoke'")
   db.run("delete from session where id != 'ses_smoke'")
   for (const child of children) {
-    db.run("insert into session (id, parent_id, agent, time_created) values (?, ?, ?, ?)", [child.id, "ses_smoke", "pr-light-reviewer", 2])
+    db.run("insert into session (id, parent_id, agent, time_created) values (?, ?, ?, ?)", [child.id, "ses_smoke", child.agent ?? "pr-light-reviewer", 2])
     for (const [index, event] of child.tools.entries()) db.run("insert into part (id, session_id, time_created, data) values (?, ?, ?, ?)", [`${child.id}_${index}`, child.id, index, JSON.stringify({ ...event.part, type: "tool", sessionID: child.id })])
   }
   db.close()
@@ -651,16 +689,32 @@ const lightRestartCases: readonly [string, number, LightReplayOptions][] = [
   ["restart refused when resolved root changes", 1, { root: true }],
   ["detector returns after 7200s freshness expiry", 1, { ownership: true }],
   ["detector returns after another run takes over", 1, { takeover: true }],
+  ["cleanup failure disclosed after denied posting", 1, { cleanupFailure: true }],
+  ["creation failure falls back to objects without removal", 1, { createFailure: true }],
 ]
 test.each(lightRestartCases)("AC4/AC6–AC10 replay: %s", async (_name, count, options) => {
   const { data, result } = await replayCase(count, options)
   expect(result.rows.filter(row => !row.ok)).toEqual([])
   expect(result.exitCode).toBe(0)
-  expect(result.rows).toHaveLength(64) // T3's common light row inventory, every route.
+   expect(result.rows).toHaveLength(68) // + worktree route/render structure + two snapshot rows; auto unchanged.
+  expect(lastNote(data.events)).toContain(options.intake
+    ? "Actual coverage: not assessed; reviewed 0 of null files (null changed lines); omitted null; unavailable null"
+    : "Actual coverage: all_diff_files; reviewed 1 of 1 files (1 changed lines); omitted 0; unavailable 0")
   const controls = result.rows.find(row => row.check === "light attempt controls")
   expect(controls?.ok).toBe(true)
-  expect(controls?.detail).toContain(`${count} DB-validated attempts`)
+   if (options.intake || options.cleanupFailure || options.createFailure) expect(rowOutcome(controls!)).toBe("N/A-PASS:")
+   else expect(controls?.detail).toContain(`${count} DB-validated attempts`)
   const tools = traceTools(data.events)
+  for (const call of tools.filter(tool => tool.part.tool === "task")) {
+    const prompt = (call.part.state.input as { prompt: string }).prompt
+     expect(prompt).toMatch(/axis: (standards|spec_security)/)
+     if (!options.createFailure) expect(prompt).toContain("head_worktree:")
+     else expect(prompt).not.toContain("head_worktree:")
+     expect(prompt).not.toContain("max_targeted_reads")
+    expect(prompt).toContain("advisory_size_settings: {large_pr_threshold: 20, large_pr_strategy: warn} (advice only)")
+    expect(prompt).toContain("fresh detector-led assessment and scope selection")
+    expect(prompt).not.toMatch(/max_files|max_changed_lines|reviewed bounds/)
+  }
   const presentations = tools.filter(tool => tool.part.tool === "corvus_review_payload" && (tool.part.state.input as { op?: string }).op === "preview")
   if (options.intake) {
     expect(tools.map(tool => tool.part.tool)).toEqual(["corvus_review_pr"])
@@ -694,6 +748,151 @@ test.each(lightRestartCases)("AC4/AC6–AC10 replay: %s", async (_name, count, o
 })
 
 test.each([
+  ["posted", { posted: true }], ["LOCAL", { local: true }],
+] as const)("T5 whole-checker %s route preserves worktree and rendering evidence", async (name, options) => {
+  const { data, result } = await replayCase(1, options)
+  expect(result.rows.filter(row => !row.ok).map(row => row.check)).toEqual(name === "posted" ? ["light posting barrier"] : [])
+  expect(result.exitCode).toBe(name === "posted" ? 6 : 0)
+  for (const check of ["light detector roster", "light worktree route", "light render structure", "lock released", "worktree list unchanged", "sibling worktree directories absent"]) {
+    expect(result.rows.find(row => row.check === check)?.ok).toBe(true)
+  }
+  const trees = traceTools(data.events).filter(tool => tool.part.tool === "corvus_review_worktree")
+  expect(trees.map(tool => (tool.part.state.input as { op: string }).op)).toEqual(name === "LOCAL" ? [] : ["create", "remove"])
+  if (name === "LOCAL") expect(rowOutcome(result.rows.find(row => row.check === "light worktree route")!)).toBe("N/A-PASS:")
+})
+
+test.each(["json", "colon", "equals", "backticked"] as const)("T5 %s head_worktree control passes with the skill-literal ledger", async form => {
+  const { data, result } = await replayCase(1, {}, data => {
+    const path = JSON.parse(operation(data.events, "corvus_review_worktree", "create").part.state.output).path as string
+    for (const call of traceTools(data.events).filter(tool => tool.part.tool === "task")) {
+      const input = call.part.state.input as { prompt: string }
+      const control = form === "json" ? JSON.stringify({ head_worktree: path }) : form === "backticked" ? `head_worktree: \`${path}\`` : `head_worktree${form === "colon" ? ": " : "="}${path}`
+      input.prompt = input.prompt.replace(`head_worktree: ${path};`, "") + `\n${control}`
+    }
+  })
+  expect(lastNote(data.events)).toContain(lightAttemptLedger(1, lightHead(1), lightBase(1), JSON.parse(operation(data.events, "corvus_review_worktree", "create").part.state.output).path, "removed"))
+  expect(result.rows.filter(row => !row.ok)).toEqual([])
+  expect(result.exitCode).toBe(0)
+})
+
+test.each(["inline backticks", "trailing period"] as const)("T5 %s around the ledger line preserves exact worktree/cleanup evidence", async form => {
+  const { data, result } = await replayCase(1, {}, data => {
+    const note = lastNote(data.events), ledger = /^attempt 1: .*$/m
+    expect(note).toMatch(ledger)
+    const changed = note.replace(ledger, line => form === "inline backticks" ? `\`${line}\`` : `${line}.`)
+    expect(changed).not.toBe(note)
+    terminalNote(data.events, changed)
+  })
+  const path = JSON.parse(operation(data.events, "corvus_review_worktree", "create").part.state.output).path as string
+  const ledger = lightAttemptLedger(1, lightHead(1), lightBase(1), path, "removed")
+  expect(lastNote(data.events)).toContain(form === "inline backticks" ? `\`${ledger}\`` : `${ledger}.`)
+  expect(result.rows.filter(row => !row.ok)).toEqual([])
+  expect(result.exitCode).toBe(0)
+})
+
+test.each(["json", "colon", "equals"] as const)("T5 failed create rejects a forged %s head_worktree control", async form => {
+  const { data, result } = await replayCase(1, { createFailure: true }, data => {
+    for (const call of traceTools(data.events).filter(tool => tool.part.tool === "task")) {
+      const input = call.part.state.input as { prompt: string }
+      input.prompt += `\n${form === "json" ? JSON.stringify({ head_worktree: "/forged/worktree" }) : `head_worktree${form === "colon" ? ": " : "="}/forged/worktree`}`
+    }
+  })
+  expect(lastNote(data.events)).toContain(lightAttemptLedger(1, lightHead(1), lightBase(1), null, "not-created"))
+  expect(result.exitCode).toBe(5)
+  expect(result.rows.find(row => row.check === "light worktree route")).toMatchObject({ ok: false, detail: expect.stringContaining("forged: failed create supplied head_worktree") })
+})
+
+test("T5 quoted retired read_budget control still fails the shared roster guard", async () => {
+  const { result } = await replayCase(1, {}, data => {
+    for (const call of traceTools(data.events).filter(tool => tool.part.tool === "task"))
+      (call.part.state.input as { prompt: string }).prompt += '\n{"read_budget": 8}'
+  })
+  expect(result.exitCode).toBe(5)
+  expect(result.rows.find(row => row.check === "light detector roster")?.detail).toContain("retired read ceiling")
+})
+
+test("T5 roster consumers share the per-child fresh-evidence predicate", async () => {
+  const data = await restartFixture(1)
+  const db = new Database(data.input.db!)
+  db.run("delete from part where session_id = 'ses_light_1_spec_security' and json_extract(data, '$.state.input.op') = 'diff'")
+  db.close()
+  const result = await checkReviewArtifacts(data.input)
+  for (const check of ["light detector roster", "child tool evidence", "light attempt controls", "owned state writes"]) {
+    expect(result.rows.find(row => row.check === check)?.ok).toBe(false)
+    expect(result.rows.find(row => row.check === check)?.detail).toContain("detector lacks fresh metadata/files/diff")
+  }
+})
+
+test.each(["diagnostic", "path", "remedy"] as const)("T5 cleanup failure cannot pass without its %s disclosure", async field => {
+  const { result } = await replayCase(1, { cleanupFailure: true }, data => {
+    let note = lastNote(data.events)
+    if (field === "diagnostic") note = note.replace("fixture-cleanup-failed", "unknown")
+    if (field === "path") note = note.replace(/Worktree remove failed:[\s\S]*$/, "Worktree remove failed: fixture-cleanup-failed; no path available.")
+    if (field === "remedy") note = note.replace(/manual remedy: git worktree remove --force '[^']+'/, "manual intervention needed")
+    terminalNote(data.events, note)
+  })
+  expect(result.exitCode).toBe(5)
+  expect(result.rows.find(row => row.check === "light worktree route")?.ok).toBe(false)
+})
+
+test("T5 render predicate accepts the skill's extracted literal template, not a parallel fixture format", () => {
+  const skill = readFileSync(resolve(import.meta.dirname, "../../skill/corvus-review-light/SKILL.md"), "utf8")
+  const template = /````markdown\n([\s\S]*?)\n````/.exec(skill)?.[1]
+  expect(template).toBeDefined()
+  if (!template) return
+  const values: Record<string, string> = {
+    marker: `<!-- corvus-review v2 path=.corvus/reviews/pr8 head=${lightHead(1)} round=1 -->`, N: "8", "PR title": "Fixture",
+    "COMMENT|REQUEST_CHANGES": "COMMENT", sha7: "1111111", files: "1", additions: "1", deletions: "0", n: "1", i: "0",
+    "one-sentence assessment headline": "Address the evidenced finding.", "counts by severity word; mark inline-only counts, e.g. 1 major (inline)": "1 major",
+    severity: "major", dimension: "correctness", id: "ls-logic-standards-001", title: "Keep the validated identity", path: "x", line: "1",
+    "≤3 short source lines of problem/impact": "The unchecked value loses the verified identity.",
+    "one ```suggestion``` block (≤~8 lines) or one-sentence fix": "Use the verified value instead.",
+    "approach/rationale only when not all diff files, or anything omitted/unavailable": "One context dependency was unavailable.",
+    "omitted/unavailable counts with one short reason; minor overflow count if present": "Unavailable context: 1 file; retrieval failed.",
+    "material intent/head/worktree/config/history/transport/brief gaps, only when present": "The missing dependency limits this conclusion.",
+  }
+  const example = template.replace(/<state_notices, only when present:>\n> \[!NOTE\]\n> <draft\/self-review\/identity unknown notice>\n/, "")
+    .replaceAll("<body-only findings, each:>\n", "").replace(/<([^>]+)>/g, (token, key: string) => values[key] ?? token)
+    .replace("(spec/correctness, ls-logic-standards-001)", "(spec/correctness, lsp-logic-spec-001)")
+  expect(example).not.toMatch(/<[^!][^>]*>/)
+  expect(example).toMatch(/^## Review limits$/m)
+  expect(lightRenderErrors(example)).toEqual([])
+  for (const label of ["blocker", "critical", "major", "minor", "praise", "thought", "note"])
+    expect(lightRenderErrors(example.replaceAll("**major**", `**${label}**`).replaceAll("· 1 major", `· 1 ${label}`))).toEqual([])
+  for (const label of ["issue", "issue (blocking)", "suggestion", "nitpick"])
+    expect(lightRenderErrors(example.replaceAll("**major**", `**${label}**`))).toContain("invalid compact finding identity")
+  expect(lightRenderErrors(example.replace("## Review limits", "### Review limits"))).toContain("Review limits must be review-wide")
+  const block = example.slice(example.indexOf("**major** (standards/"), example.indexOf("\n\n## Spec"))
+  expect(block).toContain("Use the verified value instead.")
+  const next = block.replace("ls-logic-standards-001", "ls-logic-standards-002")
+  const separated = example.replace(block, `${block}\n\n${next}`)
+  expect(lightRenderErrors(separated)).toEqual([])
+  expect(lightRenderErrors(example.replace(block, `${block}\n${next}`))).toContain("consecutive body findings lack blank-line separation")
+  const inlineOnly = example.replace(block, "").replace("· inline 0**", "· inline 1**").replace("· 1 major\n", "· 1 major (inline)\n")
+  expect(inlineOnly).toContain("· 1 major (inline)")
+  expect(inlineOnly).not.toContain("**major** (standards/")
+  expect(lightRenderErrors(inlineOnly)).toEqual([])
+  for (const broken of [example.replace("## Spec", "## Missing"), example.replace("**COMMENT ·", "COMMENT ·"), `${example}\n- Fourth limit.`,
+    `${example}\nReviewed paths: x, y`, example.replace("## Corvus Light Review", "## Other Review")]) expect(lightRenderErrors(broken).length).toBeGreaterThan(0)
+})
+
+test.each([
+  ["origin fetch", "git fetch --no-tags origin pull/8/head", true],
+  ["quoted fetch", "git fetch --no-tags 'github' 'pull/8/head'", true],
+  ["fallback fetch", "git fetch --no-tags 'https://github.com/owner/repo.git' pull/8/head", true],
+  ["head object", `git cat-file -e '${lightHead(1)}^{commit}'`, true],
+  ["tracked lock", "git ls-files -- '.corvus/reviews/pr8/lock.yaml'", true],
+  ["remote URL", "git remote get-url 'origin'", true],
+  ["timing literal", "date -u +%Y-%m-%dT%H:%M:%SZ", true],
+  ["nonliteral timing", "date +%s", false], ["worktree shell", "git worktree add --detach sibling HEAD", false],
+  ["read-tree shell", "git read-tree --reset -u HEAD", false], ["composed shell", "git remote; date -u +%Y-%m-%dT%H:%M:%SZ", false],
+] as const)("T5 light shell allow-list: %s", (_name, command, allowed) => {
+  const { directory } = sessionFixture()
+  const input = { ...auditInput(directory), agent: "light" as const }
+  expect(checkOrchestratorShell(toolsFromEvents([toolEvent("shell", { command }, {})]), input, "", [lightHead(1)]).ok).toBe(allowed)
+})
+
+test.each([
   ["lock.yaml", false], [".lock", false], ["lock.yaml", true], [".lock", true],
 ] as const)("light intake preserves foreign %s (acquire denied=%s)", async (held, denied) => {
   const data = await restartFixture(0, { held, denied }), path = join(data.root, held)
@@ -704,10 +903,12 @@ test.each([
   expect(result.rows.filter(row => !row.ok).map(row => row.check)).toEqual(denied ? ["unexpected denials"] : [])
   expect(result.exitCode).toBe(denied ? 5 : 0)
   expect(result.rows.find(row => row.check === "lock released")?.ok).toBe(true)
-  expect(result.rows.find(row => row.check === "light attempt controls")?.detail).toContain("terminal=held/denied")
+   expect(rowOutcome(result.rows.find(row => row.check === "light attempt controls")!)).toBe("N/A-PASS:")
+   expect(lastNote(data.events)).toContain("Terminal reason: lock held/denied")
   expect(result.rows.find(row => row.check === "light class isolation")?.ok).toBe(true)
   expect(readFileSync(path)).toEqual(before)
   expect(readDescendants(data.input.db!, "ses_smoke")).toEqual([])
+  expect(lastNote(data.events)).toContain("Actual coverage: not assessed; reviewed 0 of null files (null changed lines); omitted null; unavailable null")
   const tools = traceTools(data.events)
   expect(tools.map(tool => tool.part.tool)).toEqual(["corvus_review_pr", "corvus_review_pr", "corvus_review_sync", "corvus_review_lock"])
   expect(tools.filter(tool => tool.part.tool === "corvus_review_lock").map(tool => (tool.part.state.input as { op: string }).op)).toEqual(["acquire"])
@@ -743,6 +944,29 @@ test.each(["none", "writer", "post"])("light LOCAL %s retains posting-barrier co
 })
 
 const lightNegativeCases: readonly [string, string, (data: ReviewFixture) => void][] = [
+  ["both briefs use the same axis", "light detector roster", data => {
+    for (const call of traceTools(data.events).filter(tool => tool.part.tool === "task")) {
+      const input = call.part.state.input as { prompt: string }
+      input.prompt = input.prompt.replace("axis: spec_security", "axis: standards")
+    }
+  }],
+  ["dispatch before create", "light worktree route", data => {
+    const create = traceTools(data.events).find(tool => tool.part.tool === "corvus_review_worktree")!
+    data.events.splice(data.events.indexOf(create), 1)
+    const detector = traceTools(data.events).find(tool => tool.part.tool === "task")!
+    data.events.splice(data.events.indexOf(detector) + 1, 0, create)
+  }],
+  ["release before removal", "light worktree route", data => {
+    const remove = operation(data.events, "corvus_review_worktree", "remove")
+    data.events.splice(data.events.indexOf(remove), 1)
+    const release = operation(data.events, "corvus_review_lock", "release")
+    data.events.splice(data.events.indexOf(release) + 1, 0, remove)
+  }],
+  ["restart re-creates before removing", "light worktree route", data => {
+    const remove = traceTools(data.events).find(tool => tool.part.tool === "corvus_review_worktree" && (tool.part.state.input as { op: string }).op === "remove")!
+    data.events.splice(data.events.indexOf(remove), 1)
+  }],
+  ["worktree ledger lies", "light worktree route", data => terminalNote(data.events, lastNote(data.events).replaceAll("cleanup=removed", "cleanup=leaked"))],
   ["stale preview digest", "light presentation integrity", data => {
     const shown = traceTools(data.events).filter(event => event.part.tool === "corvus_review_payload" && (event.part.state.input as { op?: string }).op === "preview")
     Object.assign(shown.at(-1)!.part.state.input, { expectedSha256: (shown[0].part.state.input as { expectedSha256: string }).expectedSha256 })
@@ -767,7 +991,13 @@ const lightNegativeCases: readonly [string, string, (data: ReviewFixture) => voi
     output.state = "CLOSED"
     first.part.state.output = JSON.stringify(output)
   }],
-  ["generic summary without actual coverage", "light coverage/action", data => terminalNote(data.events, lastNote(data.events).replace("Actual coverage: reviewed bounds 20 files / 600 changed lines", "Reduced-coverage light review"))],
+  ["generic summary without actual coverage", "light coverage/action", data => {
+    const note = lastNote(data.events), coverage = /^Actual coverage:[^\n]+?(?=; synthesis counts:)/m
+    expect(note).toMatch(coverage)
+    const changed = note.replace(coverage, "Reduced-coverage light review")
+    expect(changed).not.toBe(note)
+    terminalNote(data.events, changed)
+  }],
   ["mutation after expired detector return", "light attempt controls", data => {
     const returned = traceTools(data.events).find(event => event.part.tool === "corvus_review_lock" && (event.part.state.input as { op?: string }).op === "status")!
     const output = JSON.parse(returned.part.state.output)

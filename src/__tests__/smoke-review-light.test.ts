@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from "bun:test"
 import { execFileSync } from "node:child_process"
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { checkLightSnapshots, snapshotLightFixture } from "../../scripts/check-review-artifacts"
@@ -39,6 +39,9 @@ test("light fixture keeps dirty sentinels and ignores unchanged until the model-
   expect(before.head).not.toBe(head)
   expect(before.branch).toStartWith("smoke/light-unrelated-")
   expect(checkLightSnapshots(before, after).every(row => row.ok)).toBe(true)
+  expect(before.worktrees).toContain(`worktree ${realpathSync(fixture)}`)
+  expect(before.siblingWorktrees).toEqual([])
+  expect(checkLightSnapshots(before, after).filter(row => /worktree/.test(row.check)).map(row => row.check)).toEqual(["worktree list unchanged", "sibling worktree directories absent"])
   expect(Buffer.from(before.ignores[".gitignore"], "base64").toString()).toBe(".corvus/\n")
   const probe = JSON.parse(readFileSync(join(work, "light-push-probe.json"), "utf8"))
   expect(probe).toMatchObject({ ok: true, root: ".corvus/reviews/pr8", paths: [".corvus/reviews/pr8/probe-meta.yaml"] })
@@ -47,6 +50,21 @@ test("light fixture keeps dirty sentinels and ignores unchanged until the model-
   expect(readFileSync(join(fixture, ".smoke-light-staged"), "utf8")).toBe("staged sentinel worktree bytes\n")
   // Snapshot helpers are read-only even after the probe.
   expect(snapshotLightFixture(fixture, join(work, "bare.git")).sentinels).toEqual(before.sentinels)
+  // A directory leak without a Git registration is independently observable.
+  const probed = snapshotLightFixture(fixture, join(work, "bare.git"))
+  const sibling = join(work, "fixture.corvus-review-pr8-1111111-abcdef")
+  mkdirSync(sibling)
+  const leakedDirectory = snapshotLightFixture(fixture, join(work, "bare.git"))
+  expect(checkLightSnapshots(probed, leakedDirectory).find(row => row.check === "sibling worktree directories absent")?.ok).toBe(false)
+  expect(checkLightSnapshots(probed, leakedDirectory).find(row => row.check === "worktree list unchanged")?.ok).toBe(true)
+  rmSync(sibling, { recursive: true })
+  // A registered leak is caught even when its HEAD already exists in localLog.
+  const stable = snapshotLightFixture(fixture, join(work, "bare.git"))
+  git("worktree", "add", "--detach", "--no-checkout", sibling, "HEAD")
+  const registered = snapshotLightFixture(fixture, join(work, "bare.git"))
+  for (const check of ["worktree list unchanged", "sibling worktree directories absent"]) expect(checkLightSnapshots(stable, registered).find(row => row.check === check)?.ok).toBe(false)
+  git("worktree", "remove", "--force", sibling)
+  expect(checkLightSnapshots(stable, snapshotLightFixture(fixture, join(work, "bare.git"))).every(row => row.ok)).toBe(true)
 })
 
 test("light rejects writer/full and preflight exits before run; auto remains the default", () => {

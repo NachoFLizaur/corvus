@@ -93,7 +93,7 @@ const externalSkillReferences = [
   "/custom/config/opencode/skills/corvus-review-extras/schemas.md",
 ]
 const externalSkillResources = externalSkillReferences.flatMap(path => [path, `${posix.dirname(path.replaceAll("\\", "/"))}/*`])
-const reviewTools = ["corvus_review_payload", "corvus_review_post", "corvus_review_persist", "corvus_review_lock", "corvus_review_pr", "corvus_review_verdict", "corvus_review_sync"]
+const reviewTools = ["corvus_review_payload", "corvus_review_post", "corvus_review_persist", "corvus_review_lock", "corvus_review_pr", "corvus_review_verdict", "corvus_review_sync", "corvus_review_worktree"]
 const fullDetectors = ["agent/pr-code-reviewer.md", "agent/security-reviewer.md"]
 const detectors = [...fullDetectors, "agent/pr-light-reviewer.md"]
 const leafReviewers = [...detectors, writer, "agent/pr-context-gatherer.md"]
@@ -445,14 +445,13 @@ describe("prompt structure", () => {
       [/\b1\.\s+\**Collapse\b|\b2\.\s+\**If still over budget\b|\b3\.\s+\**Never drop blockers\/critical/i, "1. Collapse findings for size"],
       [/content is unchanged, only placement|needs no new authorization/i, "content is unchanged, only placement"],
       [/State caps|safe cap|unknown-identity .*cap|COMMENT_ONLY cap/i, "State caps"],
-      [/\b(?:eight|8)[ -]+(?:review[ -]+)?tools?\b/i, "eight review tools"],
     ]
     for (const [path, text] of Object.entries(corpus)) for (const [forbidden, seed] of retired) {
       expect(text, path).not.toMatch(forbidden)
       expect(text + "\n" + seed, path).toMatch(forbidden)
     }
     const namedTools = [...new Set(Object.values(corpus).flatMap(text => text.match(/\bcorvus_review_[a-z_]+\b/g) ?? []))].sort()
-    expect(reviewTools).toHaveLength(7)
+    expect(reviewTools).toHaveLength(8)
     expect(namedTools).toEqual([...reviewTools].sort())
   })
   /** Oracle: the owning schema and precedence sections, read before seeding.
@@ -821,8 +820,10 @@ describe("prompt structure", () => {
     test("large-diff recovery keeps evidence, progress-based relocation and bounded persistence payloads", () => {
       const corpus = readCorpus(), schemas = "skill/corvus-review-extras/schemas.md"
       const cases: [string, string, RegExp, string, string][] = [
-        [writer, "3. Validate Inline Locations", /canonical diff.*oversized:true \(HTTP 406\/413\) or partial\/truncated diff text.*corvus_review_pr op files.*paginate: true/,
+        [writer, "3. Validate Inline Locations", /canonical diff.*oversized:true \(HTTP 406\/413\) or partial\/truncated diff text.*corvus_review_pr op files.*paginate: true, paths: <unique comment paths>.*only those per-file patches, missing_paths and complete_pagination.*batch at most 50 paths per call/,
           "oversized:true", "oversized:false"],
+        [writer, "3. Validate Inline Locations", /paths: <unique comment paths>/,
+          "paths: <unique comment paths>", "paths: <all PR paths>"],
         [writer, "3. Validate Inline Locations", /each file's complete patch.*path membership.*complete hunk counts.*added\/context RIGHT-side lines.*multi-line span in one hunk/,
           "added/context RIGHT-side lines", "estimated local lines"],
         [writer, "3. Validate Inline Locations", /absent patch.*truncated patch.*incomplete pagination makes that anchor unverifiable.*If ALL anchors verify, proceed; otherwise finish available anchor diagnostics and hand off to R5's relocation with status not_posted\s*, reason anchors-unverifiable\s*, and unverifiable_anchors: \[\{path,line_start,line_end\}\].*only unresolved anchors.*no POST attempted/,

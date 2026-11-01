@@ -27,8 +27,8 @@ describe("light fixed denies (AC1, AC7)", () => {
     expect(PROTECTED_AGENTS).toEqual(["pr-code-reviewer", "security-reviewer", "pr-light-reviewer", "pr-comment-writer"])
     expect(PROTECTED_AGENTS).not.toContain(light)
     const policies = buildFixedDenyPolicies(corpus), policy = policies.get(light)!
-    expect(policy.rules).toHaveLength(20)
-    expect(toV2Permissions(corpus[light].permission)).toHaveLength(22)
+    expect(policy.rules).toHaveLength(23)
+    expect(toV2Permissions(corpus[light].permission)).toHaveLength(25)
     expect([...policies.keys()]).toEqual([...FIXED_DENY_AGENTS])
     expect(policy.rules).toEqual([
       { action: "question", resource: "*", effect: "deny" },

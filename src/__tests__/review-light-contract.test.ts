@@ -9,12 +9,23 @@ const agent = readFileSync(resolve(root, "agent/corvus-review-light.md"), "utf8"
 const skill = readFileSync(resolve(root, "skill/corvus-review-light/SKILL.md"), "utf8")
 const detector = readFileSync(resolve(root, "agent/pr-light-reviewer.md"), "utf8")
 const state = readFileSync(resolve(root, "skill/corvus-review-extras/state.md"), "utf8")
+const writer = readFileSync(resolve(root, "agent/pr-comment-writer.md"), "utf8")
 const normalize = (text: string) => text.replace(/<!--[^]*?-->/g, "").replace(/[`*]/g, "").replace(/\s+/g, " ").trim()
+// Reuse prompt-structure's fence handling: template headings are data, not boundaries.
 const section = (text: string, heading: string) => {
-  const start = text.indexOf(`### ${heading}\n`)
-  if (start < 0) throw new Error(`Missing procedure section: ${heading}`)
-  const end = text.indexOf("\n### ", start + 1)
-  return normalize(text.slice(start, end < 0 ? undefined : end))
+  const rows = text.split("\n"), headings: { title: string; row: number }[] = []
+  let fence = ""
+  rows.forEach((line, row) => {
+    const marker = line.match(/^\s{0,3}(`{3,}|~{3,})/)
+    if (marker) {
+      if (!fence) fence = marker[1]
+      else if (marker[1][0] === fence[0] && marker[1].length >= fence.length && line.trim() === marker[1]) fence = ""
+    } else if (!fence && line.startsWith("### ")) headings.push({ title: line.slice(4), row })
+  })
+  const index = headings.findIndex(entry => entry.title === heading)
+  expect(index, `Missing procedure section: ${heading}`).toBeGreaterThanOrEqual(0)
+  if (index < 0) return ""
+  return normalize(rows.slice(headings[index].row, headings[index + 1]?.row).join("\n"))
 }
 
 /** Oracle: real prompt sections read before any in-memory mutation, plus these
@@ -29,12 +40,20 @@ const pin = (text: string, required: RegExp) => {
 }
 
 describe("light prompt contracts", () => {
-  test("AC1/AC3: autonomous identity and closed two-child roster without the phase pipeline", () => {
+  test.each(["````markdown", "~~~markdown"])("procedure sections keep fenced headings inside %s", fence => {
+    const marker = fence.replace("markdown", "")
+    const text = ["### Render", "Before.", fence, "## Standards", "## Review limits", "- A limit.", "### Template detail", "```suggestion", "Fix.", "```", marker, "After.", "### Next", "Other."].join("\n")
+    expect(section(text, "Render")).toBe(normalize(text.slice(0, text.indexOf("### Next"))))
+    expect(section(text, "Next")).toBe(normalize("### Next\nOther."))
+  })
+
+  test("AC2/AC7: autonomous identity and closed two-identity roster with two distinct detector briefs", () => {
     const fm = parseFrontmatter(agent).frontmatter
     expect(fm.mode).toBe("primary")
     expect(fm.permission).toHaveProperty("question", "deny")
     const roster = [...skill.matchAll(/^\| `([^`]+)` \|/gm)].map(match => match[1])
     expect(roster).toEqual(["pr-light-reviewer", "pr-comment-writer"])
+    pin(normalize(skill), /pr-light-reviewer \| Two concurrent read-only instances per attempt: Standards and Spec\/security briefs/)
     pin(normalize(agent), /Load skill corvus-review-light at intake/)
     pin(normalize(agent), /Inline shared-contract summaries suffice for the happy path/i)
     pin(normalize(agent), /Do not load other skills/)
@@ -49,7 +68,7 @@ describe("light prompt contracts", () => {
     }
     expect(skill).not.toMatch(/extras hub is optional/i)
     pin(normalize(skill), /closed roster/)
-    pin(normalize(skill), /no todos ceremony, phase-completion markers, context-gatherer\/researcher, review-input staging, document checkpoint\/read_document, head records, meta\/facts writes, convergence compute, sync pull\/push, checkout or resumable-state reuse/)
+    pin(normalize(skill), /no todos ceremony, phase-completion markers, context-gatherer\/researcher, review-input staging, document checkpoint\/read_document, head records, meta\/facts writes, convergence compute, sync pull\/push, user-checkout changes or resumable-state reuse/)
     const operativePhaseLoad = /\b(?:Load skill|skill\s*\()\s*[`"']?corvus-review-r[0-5]\b/i
     for (const text of [agent, skill]) {
       expect(text).not.toMatch(operativePhaseLoad)
@@ -72,10 +91,10 @@ describe("light prompt contracts", () => {
     pin(namespace, /Storage\/unreadable-lock errors retain analysis in memory and exact diagnostics; reattempt acquisition before candidate\/artifact mutation or writer dispatch only if this invocation has never acquired\. Held\/denied on that attempt uses the same outcome/)
     pin(namespace, /Before acquire, git ls-files -- <review_root>\/lock\.yaml records tracked status \(unknown on failure\) for step 10/)
     pin(namespace, /Every exit routes through step 10/)
-    pin(normalize(skill), /Await admission before head preparation\/detection/)
-    pin(section(skill, "5. Dispatch the Single Detector"), /Dispatch foreground literal pr-light-reviewer once per attempt: trusted attempt number\/mode\/identity/)
+    pin(normalize(skill), /await admission before fetch\/create\/detection/)
+    pin(section(skill, "5. Dispatch Both Axis Briefs in One Foreground Batch"), /Dispatch exactly TWO foreground literal pr-light-reviewer calls concurrently in ONE batch\/same turn, never sequentially: identical trusted attempt number\/mode\/identity/)
     const config = section(skill, "3. Load Verified Config and Marker History")
-    pin(config, /ref: base_sha.*defaults → valid base values → valid trusted invocation values → fixed light mode\/sync and bounds/)
+    pin(config, /ref: base_sha.*defaults → valid base values → valid trusted invocation values → fixed light mode\/sync and presentation caps/)
     pin(config, /WITHOUT code_head or headSha \(history-only, writes nothing\)\. Recompute per attempt; use only its round/)
     pin(normalize(skill), /state_sync: false is fixed for this identity regardless of base config or invocation overlays/)
     const persist = section(skill, "7. Persist Candidate, Freeze and Preview")
@@ -99,7 +118,7 @@ describe("light prompt contracts", () => {
     const results = section(skill, "9. Map Writer Results and Relocate Unverifiable Anchors")
     pin(results, /step 7 re-stages → re-freezes → re-previews, step 8 renews authorization and repeats live metadata before dispatch/)
     pin(results, /unknown positions are invalid diagnostics, never guessed relocations/)
-    pin(results, /entire body\/identity\/suggestion unchanged, preserving other comments\/order, findings, marker\/event and notices/)
+    pin(results, /original identity \+ ≤3 problem\/impact lines \+ one suggestion\/fix unchanged, with original path\/range; preserve other comments\/order, findings, marker\/event and notices/)
     expect(skill).not.toMatch(/Call corvus_review_post/)
   })
 
@@ -144,8 +163,8 @@ describe("light prompt contracts", () => {
     pin(movement, /No prior findings\/config from a different base\/delta are reused/)
     pin(section(skill, "3. Load Verified Config and Marker History"), /Reuse resolved config within the same base; on a moved base reload and reapply this chain/)
     pin(section(skill, "3. Load Verified Config and Marker History"), /if overlapping activity changes the returned round, use that new round and disclose the change, never carry forward an assumed round/)
-    pin(section(skill, "5. Dispatch the Single Detector"), /increment and record \{attempt, code_head, base_sha\}/)
-    pin(section(skill, "5. Dispatch the Single Detector"), /Detector freshly reads PR metadata\/diff\/files\/head code each attempt.*Send no earlier findings or delta evidence/)
+    pin(section(skill, "5. Dispatch Both Axis Briefs in One Foreground Batch"), /increment and record \{attempt, code_head, base_sha\}/)
+    pin(section(skill, "5. Dispatch Both Axis Briefs in One Foreground Batch"), /Each detector freshly reads PR metadata\/diff\/files\/head code each attempt.*Send no earlier findings or delta evidence/)
     pin(section(skill, "7. Persist Candidate, Freeze and Preview"), /Each attempt generates a new candidate\/freeze\/preview for its own marker\/head/)
   })
 
@@ -154,7 +173,7 @@ describe("light prompt contracts", () => {
     pin(namespace, /After successful acquire keep that lock\/runId across attempts; never reacquire or renew it/)
     pin(namespace, /call lock \{op: "status", reviewRoot: review_root\}; require a holder for the acquired path with run_id == runId, unchanged started_at, finite 0 <= age_s < 7200, and no other-run holder/)
     pin(namespace, /Missing\/expired\/other-run ownership or unverifiable status → step 10 with exact evidence, without further shared-artifact mutation or posting; no acquisition recovery after ownership loss/)
-    pin(section(skill, "5. Dispatch the Single Detector"), /After every detector return, require step 2's fresh ownership before synthesis/)
+    pin(section(skill, "5. Dispatch Both Axis Briefs in One Foreground Batch"), /After every detector return, require step 2's fresh ownership before synthesis/)
     pin(section(skill, "8. Authorize and Revalidate Every Writer Dispatch"), /Require step 2's fresh ownership before dispatch, including recovery dispatches; previous status is not sufficient/)
     const cleanup = section(skill, "10. Clean Up and Summarize")
     pin(cleanup, /If this run acquired, call release once.*its owner reread preserves another run's lock even after takeover \(report not-owner, never force\/delete it\)/)
@@ -171,13 +190,13 @@ describe("light prompt contracts", () => {
     pin(normalize(skill), /Light does not use the full pipeline's reviewability warning; report applicable factual limits instead/)
     pin(normalize(skill), /minor-detail cap min\(validated max_minors, 2\), max_nits: 0/)
     pin(text, /retain majors, cap minors and count overflow\.minors_counted plus additional overflow by axis without double counting/)
-    pin(text, /Review limits carry only applicable factual disclosures/)
-    pin(text, /intent\/head\/config\/history\/transport gaps, axis\/severity counts\/overflow/)
+    pin(text, /Review limits carry only applicable factual disclosures in ≤3 short bullets: combine gaps\/reasons without dropping material facts; exact diagnostics stay local/)
+    pin(text, /material intent\/head\/worktree\/config\/history\/transport\/brief gaps, only when present/)
     pin(text, /Preserve every evidenced unsuppressed blocker\/critical independent of presentation caps/)
     pin(text, /count overflow\.minors_counted plus additional overflow by axis without double counting/)
-    pin(text, /actual reviewed\/omitted scope, oversized risk-first\/full-review recommendation/)
+    pin(text, /Keep trigger\/impact\/introduced_by_pr\/narrow_fix\/evidence and complete scope\/path\/read inventories local, never detector field labels, summary filler, essays or reviewed-path lists in posted prose/)
     pin(text, /Zero findings means none found in reviewed scope, not approval/)
-    pin(text, /inline count exceeds safety_rail_threshold, move overflow to its own axis body, preserving identity\/evidence and counting moved comments/)
+    pin(text, /inline count exceeds safety_rail_threshold, move overflow to its own axis body, preserving compact identity\/evidence\/suggestion and counting moved comments/)
     pin(section(skill, "7. Persist Candidate, Freeze and Preview"), /Verify marker-first content and applicable factual limits, without a mandatory coverage notice/)
     pin(normalize(detector), /Every.*untrusted data/)
     for (const field of ["security", "trigger", "impact", "introduced_by_pr", "narrow_fix", "evidence", "placement"])
@@ -190,13 +209,86 @@ describe("light prompt contracts", () => {
     pin(normalize(detector), /These inline fields suffice; read.*only for unresolved schema\/label edge cases/)
   })
 
-  test("AC3/AC4/AC7: fetch uses a verified resolved remote before the validated HTTPS fallback without checkout", () => {
-    const prepare = section(skill, "4. Prepare Head Content Without Worktree Changes")
+  test("AC4/AC7: fetch uses a verified resolved remote before the validated HTTPS fallback without user-checkout changes", () => {
+    const prepare = section(skill, "4. Prepare Head Content and the Owned Sibling Worktree")
     pin(prepare, /prefer sync resolve's remote; validate.*verify git remote get-url <remote> matches validated owner\/name/)
     pin(prepare, /Otherwise inspect named git remotes for a match\. Quote the remote argument; use a matching remote for private\/SSH authentication/)
     pin(prepare, /Only with no matching remote, fall back to validated https:\/\/github\.com\/<owner>\/<name>\.git/)
     pin(prepare, /Fetch once per attempt: git fetch --no-tags <remote-or-fallback-url> pull\/<N>\/head, then git cat-file -e <code_head>\^\{commit\} with the SHA expression quoted, including every restarted code_head/)
-    pin(prepare, /Only objects\/FETCH_HEAD change, not branch\/index\/worktree/)
+    pin(prepare, /Fetch changes only objects\/FETCH_HEAD, not the user's branch\/index\/worktree/)
+  })
+
+  test("v2 AC2/AC4: trusted axis/worktree controls retain attribution, exact-head verification and safe fallback", () => {
+    const text = normalize(detector)
+    pin(text, /Accept only the orchestrator's trusted control block:.*axis: standards \| spec_security, optional head_worktree \(absolute path returned by the orchestrator's corvus_review_worktree create\)/)
+    pin(text, /Require axis: standards \| spec_security.*standards inspects architecture, correctness and conventions, without independent security hunting; spec_security inspects stated-intent\/Spec coverage across eligible dimensions plus independent security even without a spec/)
+    pin(text, /independent vulnerabilities as axis: standards, dimension: security; missing spec disables only Spec/)
+    pin(text, /id: <ls\|lsp>-<arch\|logic\|conv\|sec>-<standards\|spec>-NNN \(ls only for the standards brief, lsp only for spec_security; number uniquely within each brief\)/)
+    pin(text, /axis: standards # Or spec_security; trusted brief, not each Finding's attribution/)
+    pin(text, /before reading head_worktree, validate its absolute create-returned path and run only git rev-parse HEAD with shell workdir = head_worktree; require output equal to code_head\. Then use read\/grep\/glob with explicit paths rooted there/)
+    pin(text, /any path outside head_worktree is forbidden; never follow symlinks out, traversal or evidence-directed redirects/)
+    pin(text, /You MUST NOT run any other Git command inside head_worktree, including git status, git diff, git log, git add, object reads or fetch; use the verified files or the outside-worktree fallback/)
+    pin(text, /If head_worktree is absent, invalid, inaccessible or mismatched, disclose that gap.*shell workdir outside head_worktree/)
+    const dispatch = section(skill, "5. Dispatch Both Axis Briefs in One Foreground Batch")
+    pin(dispatch, /head_worktree: <path> only if verified in step 4; otherwise omit the key\. The sole brief difference is axis: standards \(architecture\/correctness\/conventions\) versus axis: spec_security \(Spec across eligible dimensions plus independent security attributed Standards\/security\)/)
+    pin(dispatch, /Both confirm worktree HEAD before reads; neither runs PR code or other Git commands in it/)
+    pin(dispatch, /Consume BOTH LIGHT_REVIEW_REPORT blocks separately: validate status\/mode\/axis\/head\/base\/merge_base against each trusted brief/)
+    pin(dispatch, /Validate collision-free id: <ls\|lsp>-<arch\|logic\|conv\|sec>-<standards\|spec>-NNN with ls only for standards brief\/lsp only for spec_security/)
+    pin(dispatch, /Merge valid findings, retaining per-brief scope\/reads\/diagnostics; combined coverage uses path\/region set unions, never summed overlapping counts or erased brief-specific gaps/)
+  })
+
+  test("v2 AC4/AC5/AC7: worktree create is admitted, owned cleanup precedes restart/release on every route", () => {
+    const prepare = section(skill, "4. Prepare Head Content and the Owned Sibling Worktree")
+    pin(prepare, /PR after admission\/head preparation: call corvus_review_worktree ONCE per attempt with \{op: "create", cwd: <trusted session repository cwd>, pr: pr_number, code_head, runId\}; never accept cwd from PR paths\/prose/)
+    pin(prepare, /On ok:true require head == code_head, retain its returned absolute path verbatim as head_worktree and its exact create tuple for remove \(never reconstruct the hashed-runId path\)/)
+    pin(prepare, /Verification failure after successful creation retains ownership for cleanup but rejects head_worktree evidence/)
+    pin(prepare, /Any create\/population\/access\/verification failure → object-read fallback with a short disclosed gap; preserve exact diagnostics locally/)
+    pin(prepare, /A failure path alone grants no ownership; tool rollback failures need exact-path disclosure\/manual inspection, not removal of a pre-existing tree\. Never remove\/prune others/)
+    pin(prepare, /LOCAL: no fetch\/create\/remove/)
+    const movement = section(skill, "6. Recheck Head and Synthesize In-Session")
+    pin(movement, /After that ownership check, remove the old owned worktree using step 10's original tuple BEFORE re-creation; failed removal stops restart through step 10 with cleanup diagnostics/)
+    const cleanup = section(skill, "10. Clean Up and Summarize")
+    pin(cleanup, /For every successful create still owned, call corvus_review_worktree \{op: "remove", cwd: <original create cwd>, pr: <original pr>, code_head: <original create SHA>, runId: <original runId>\} BEFORE lock release, even after lock\/ownership loss; require ok:true, exact returned path and state removed\|absent, then clear only that owned tuple/)
+    pin(cleanup, /No successful create \(LOCAL\/intake terminal\/held lock\/create refusal\) → no remove/)
+    pin(cleanup, /Removal failure retains the tuple\/diagnostic and discloses the exact path plus manual remedy git worktree remove --force <path> \(quote the literal path\); never execute the remedy, remove\/prune others or infer absence/)
+    pin(cleanup, /If this run acquired, call release once.*AFTER the owned removal outcome/)
+    pin(cleanup, /Retain each brief's assessment\/strategy\/coverage and complete scope\/evidence-read inventories with per-attempt create tuple; name stale preexisting_corvus_worktrees paths with the manual remedy above \(delete \+ git worktree prune if unregistered\)/)
+    pin(cleanup, /ONLY literal date -u \+%Y-%m-%dT%H:%M:%SZ.*otherwise unmeasured; never invent savings/)
+  })
+
+  test("v2 AC1/AC6/AC7: sole literal rendering is compact, inline-first and marker-led without anchor widening", () => {
+    const synthesis = section(skill, "6. Recheck Head and Synthesize In-Session")
+    // Extract the owning template, never author a competing presentation fixture.
+    const templates = [...skill.matchAll(/````markdown\n([^]*?)\n````/g)]
+    expect(templates).toHaveLength(1)
+    const template = normalize(templates[0]?.[1] ?? "")
+    pin(template, /^<marker> ## Corvus Light Review — #<N> <PR title>/)
+    pin(template, /<COMMENT\|REQUEST_CHANGES> · <sha7> · <files> files, \+<additions>\/−<deletions> · Standards <n> · Spec <n> · inline <i>/)
+    pin(template, /## Standards <one-sentence assessment headline> · <counts by severity word; mark inline-only counts, e\.g\. 1 major \(inline\)>.*## Spec <one-sentence assessment headline> · <counts by severity word; mark inline-only counts, e\.g\. 1 major \(inline\)>/)
+    for (const axis of ["standards", "spec"])
+      pin(template, new RegExp(`<severity> \\(${axis}/<dimension>, <id>\\): <title> <path>:<line> — <≤3 short source lines of problem/impact> <one suggestion block \\(≤~8 lines\\) or one-sentence fix>`))
+    pin(synthesis, /Separate consecutive body-only findings with a blank line\./)
+    pin(template, / ## Review limits - <approach\/rationale only when not all diff files, or anything omitted\/unavailable>/)
+    const limits = template.slice(template.indexOf(" ## Review limits") + 1)
+    expect(limits.split(" - ").slice(1)).toHaveLength(3)
+    pin(synthesis, /Derive each axis's one-sentence headline from valid findings, not copied detector summaries; zero findings uses No actionable findings in reviewed scope\./)
+    pin(synthesis, /Inline body = the same <severity> \(<axis>\/<dimension>, <id>\): <title> identity line \+ ≤3 short problem\/impact lines \+ one suggestion\/fix \(suggestion blocks ≤~8 lines\); location lives in the anchor/)
+    pin(synthesis, /Inline-first for detector-supplied evidenced RIGHT placements, passed through EXACTLY: never widen, shrink, shift, invent or derive spans from line_start\/line_end/)
+    pin(synthesis, /inline findings are NOT repeated in the body/)
+    pin(synthesis, /Render <severity> as Finding\.label's schema word: blocker\/critical\/major\/minor\/praise\/thought\/note; use the same words for axis counts, exclude nitpicks/)
+    pin(synthesis, /Counts include retained visible body \+ inline findings once; count overflow separately/)
+    pin(normalize(detector), /body is ≤3 short source lines of problem \+ impact, without headings or Trigger:\/Impact: labels/)
+    pin(normalize(detector), /summary is one sentence local to this brief's axis work, not for posting verbatim/)
+    const history = section(skill, "3. Load Verified Config and Marker History")
+    // normalize removes the hidden marker itself, so pin its tokens after stripping
+    // only the HTML delimiters; comments elsewhere cannot satisfy these guards.
+    const markers = normalize(skill.replace(/<!-- (corvus-review [^\n]*?) -->/g, "$1"))
+    pin(markers, /Marker: corvus-review v2 path=<root> head=<code_head> round=<n>/)
+    pin(markers, /Unknown round → corvus-review v1 head:<code_head>, disclose gap, never invent n/)
+    pin(history, /resolved root without trailing slash, positive safe integer tool round n/)
+    const anchors = section(writer, "3. Validate Inline Locations")
+    pin(anchors, /On oversized:true \(HTTP 406\/413\) or partial\/truncated diff text, call corvus_review_pr op files with \{owner, name, pr, paginate: true, paths: <unique comment paths>\} for only those per-file patches, missing_paths and complete_pagination; batch at most 50 paths per call/)
+    pin(anchors, /any anchor mismatch requests R5 relocation without changing the artifact/)
   })
 
   for (const fixture of LIGHT_EVIDENCE_CASES) test(`AC4/AC10 fixture: ${fixture.name} (prompt contract, not a model-run claim)`, () => {
@@ -204,14 +296,14 @@ describe("light prompt contracts", () => {
     if (fixture.mode === "pr") {
       expect(fixture.worktree_head).not.toBe(fixture.code_head)
       pin(evidence, /git show <code_head>:<path>.*gh api --method GET.*ref=<code_head>/)
-      pin(evidence, /Search callers at code_head.*not worktree grep\/glob/)
+      pin(evidence, /Then use read\/grep\/glob with explicit paths rooted there.*use git show <code_head>:<path> and read-only git grep <literal-symbol> <code_head> -- <literal-pathspec> from prepared objects with shell workdir outside head_worktree/)
       pin(evidence, /Never treat current-worktree bytes as PR-head evidence, even if its HEAD appears to match/)
       pin(evidence, /Deleted code uses base_sha\/merge_base with explicit base provenance/)
       if (fixture.head_content === "unavailable") {
         expect(fixture.pr_head_bytes).toBeNull()
         expect(fixture.diagnostic).toBeTruthy()
-        pin(section(skill, "4. Prepare Head Content Without Worktree Changes"), /failed fetch or verification sets head_content: unavailable with the exact preparation diagnostic/)
-        pin(evidence, /Failed head-content preparation lists affected paths as omitted scope/)
+        pin(section(skill, "4. Prepare Head Content and the Owned Sibling Worktree"), /failed fetch or verification sets head_content: unavailable with the exact preparation diagnostic/)
+        pin(evidence, /Failed head-content preparation lists affected paths as unavailable scope/)
         pin(normalize(skill), /failed preparation and affected scope stay disclosed even if fallback recovers some context/)
       } else expect(fixture.pr_head_bytes).not.toBe(fixture.worktree_bytes)
     } else {
@@ -227,14 +319,16 @@ describe("light prompt contracts", () => {
 
   test("AC7/AC9/AC10: all terminal branches abort staging, delete only owned lock and disclose local artifacts", () => {
     const text = section(skill, "10. Clean Up and Summarize")
-    pin(text, /On EVERY terminal branch, including closed\/merged, exhaustion, root\/lock-age refusal, ownership loss, LOCAL and failures, abort every still-open issued staging ID through persist only while step 2's fresh ownership holds; otherwise leave shared artifacts untouched and disclose outstanding IDs/)
+    pin(text, /On EVERY terminal branch, including posted, posting failure, closed\/merged after creation, exhaustion, root\/lock-age refusal, lock\/ownership loss, LOCAL and failures, abort every still-open issued staging ID through persist only while step 2's fresh ownership holds; otherwise leave shared artifacts untouched and disclose outstanding IDs/)
     pin(text, /op: "release", reviewRoot: review_root, runId, mode: "delete"/)
     pin(text, /Retain \.light even when empty.*shared lock changes out of later\/overlapping full-review synchronization/)
     pin(text, /no sync pull\/push or ignore\/index mutation/)
-    pin(text, /every rail\/fallback\/state notice, actual reviewed bounds and omitted scope \(local coverage disclosure; zero reviewed at intake stop\)/)
+    pin(text, /every rail\/fallback\/state notice, Actual coverage: <approach>; reviewed <n> of <m> files \(<lines> changed lines\); omitted <k>; unavailable <u>/)
+    pin(text, /n\/m\/k\/u are reviewed\/discovered\/omitted\/unavailable distinct-file counts; partial paths can overlap; unknown counts null/)
+    pin(text, /Include omitted\/unavailable paths\/regions and reasons; at intake stop use approach not assessed, zero reviewed and null undiscovered counts/)
     pin(text, /Name <review_root>\/\.light\/post-request\.json or exact persistence gap.*files may appear untracked; not ignored unless you add an exclusion/)
     pin(text, /LOCAL ends with this summary and zero writer\/post attempts/)
-    pin(text, /Print a compact ledger: Detection attempts: N, then one attempt N: code_head=<40-hex SHA> base_sha=<40-hex SHA> line per detection attempt, then Terminal reason: <reason>; use full lowercase 40-hex SHAs, never abbreviations\. Include latest observed head for exhausted drift, namespace\/lock-age\/ownership refusal evidence and round changes/)
+    pin(text, /Print a compact ledger: Detection attempts: N, then one attempt N: code_head=<40-hex> base_sha=<40-hex> worktree=<path\|none> cleanup=<removed\|absent\|failed\|not-created> line per detection attempt, then Terminal reason: <reason>; use full lowercase 40-hex SHAs, never abbreviations\. Use none\/not-created when no worktree was created\. Include latest observed head for exhausted drift, namespace\/lock-age\/ownership refusal evidence and round changes/)
     pin(text, /CLOSED\/MERGED or exhausted\/refused restart says no posting \(or no further posting if already attempted\)/)
     pin(text, /If a writer was already attempted, say no further posting and preserve its confirmed\/unknown remote truth/)
     pin(text, /If step 2 found tracked lock\.yaml and delete-mode release succeeded, report its deletion as a local working-tree change the user should not commit/)
@@ -243,5 +337,176 @@ describe("light prompt contracts", () => {
     const steps = skill.split(/^### \d+\. /m).slice(1)
     expect(steps).toHaveLength(10)
     for (const step of steps) expect(normalize(step)).toMatch(/Done when .+\.$/)
+  })
+})
+
+// These AC labels refer to the adaptive-scope plan; the existing group above
+// retains the preceding light/restart plan's labels and unchanged safety pins.
+describe("adaptive light scope contracts", () => {
+  test("AC1: neither light prompt reinstates a fixed file/line cutoff or size-derived oversized policy", () => {
+    const obsolete: [RegExp, string][] = [
+      [/\bmax_files\b/i, "max_files: 20"],
+      [/\bmax_changed_lines\b/i, "max_changed_lines: 600"],
+      [/\b600\b/, "At 600 changed lines omit scope."],
+      [/Oversized means/i, "Oversized means any PR above the bounds."],
+      [/oversized[^.\n]*(?:risk-first|recommend full review)/i, "Oversized → risk-first scope; recommend full review."],
+      [/\b(?:maximum|max|cap|limit)\s*[:=]?\s*\d+\s*(?:changed[- ]lines|files)\b/i, "Maximum 30 files."],
+      [/\b\d+[- ](?:file|changed[- ]line)\s+(?:maximum|cap|limit|cutoff)\b/i, "Use a 40-file cutoff."],
+    ]
+    for (const [name, prompt] of [["skill", skill], ["detector", detector]]) {
+      const text = normalize(prompt)
+      for (const [forbidden, seed] of obsolete) {
+        expect(text, name).not.toMatch(forbidden)
+        expect(text + " " + seed, name).toMatch(forbidden)
+      }
+    }
+    pin(normalize(skill), /detector chooses scope without file\/changed-line maxima/)
+    pin(normalize(detector), /Select all diff files, a self-chosen focus set or another justified scope without a fixed file\/line maximum/)
+  })
+
+  test("AC2/AC5: strategy schema exposes signals, mapped scope and a lean auditable coverage account", () => {
+    const text = normalize(detector)
+    pin(text, /Assess size\/complexity: files, changed lines, file types.*change concentration, risk surfaces.*PR intent.*evidence availability/)
+    pin(text, /When the whole diff is comfortably reviewable in one pass, choose all_diff_files with a one-line rationale and proceed; deliberate on the approach only otherwise\./)
+    pin(text, /Choose one approach with a rationale: all_diff_files, risk_focus, sampled_by_area or other; mapping: all_diff_files → scope_kind all_diff_files; risk_focus\/sampled_by_area → focus_set; other → other or focus_set as stated/)
+    pin(text, /Explicit scope determines actual coverage/)
+    pin(text, /Reassess independently each attempt; use no prior strategy/)
+    pin(text, /Within the chosen scope consider all eligible hunks, not just enough to fill a comment quota/)
+    pin(text, /List every omitted path or partial-file region with its reason; distinguish unavailable evidence from deliberate scope selection/)
+    const reports = [...detector.matchAll(/```yaml\n([\s\S]*?)\n```/g)]
+    expect(reports).toHaveLength(1)
+    const report = reports[0]?.[1] ?? ""
+    pin(report, /^LIGHT_REVIEW_REPORT:\n/m)
+    pin(report, /^  strategy:\n/m)
+    for (const field of ["assessment", "approach", "rationale", "scope_kind", "focus_set"])
+      pin(report, new RegExp(`^    ${field}:`, "m"))
+    pin(report, /^    approach: all_diff_files # Or risk_focus \| sampled_by_area \| other$/m)
+    pin(report, /^    scope_kind: all_diff_files # Or focus_set \| other, using the approach mapping$/m)
+    pin(report, /^    assessment: \{signals: \[<observed size\/complexity signals>\]\} # Size counts live only in counts\.discovered$/m)
+    pin(report, /^    focus_set: \[\] # Empty or omitted for all_diff_files; otherwise every selected inventory path$/m)
+    pin(report, /^  counts: # Each scope count is \{files: <n or null>, changed_lines: <n or null>\}$/m)
+    for (const field of ["discovered", "selected", "reviewed", "omitted", "unavailable"])
+      pin(report, new RegExp(`^    ${field}: \\{files: <n or null>, changed_lines: <n or null>\\}$`, "m"))
+    for (const field of ["inventory", "selected_scope", "reviewed_scope", "omitted_scope", "unavailable_scope", "evidence_reads"])
+      pin(report, new RegExp(`^  ${field}:`, "m"))
+    expect(report).not.toMatch(/^  files_(?:selected|reviewed):/m)
+    pin(report, /^  selected_scope: \[\] # Empty or omitted for all_diff_files; otherwise entries: \{path, regions\}$/m)
+    pin(report, /^  reviewed_scope: \[\] # Entries: \{path, regions: all_hunks or explicit old\/new changed-line ranges\}$/m)
+    expect(report).not.toMatch(/^  bounds:/m)
+    pin(text, /partial paths can overlap categories, so reconcile their path union with inventory rather than adding file counts/)
+    pin(text, /Reviewed\/omitted\/unavailable changed-line regions partition discovered hunks without double counting; context-only gaps carry no changed lines and stay disclosed/)
+    pin(text, /Selected scope contains reviewed scope and may contain unavailable regions/)
+    pin(text, /For all_diff_files with complete inventory and no inventory omissions\/unavailability, selected = reviewed = discovered counts, reviewed_scope covers each inventory path with regions: all_hunks, and omitted\/unavailable counts are zero/)
+    pin(text, /all_diff_files selects every inventory path\/hunk implicitly, otherwise focus_set equals selected_scope paths and is within inventory/)
+    pin(text, /Use regions: all_hunks for fully covered files in any scope list/)
+    pin(text, /Null-path global omissions, including \.corvus exclusions, stay disclosed outside inventory reconciliation and scope counts/)
+    pin(text, /Use null for unknown counts, not guessed totals, and disclose incomplete inventory\/global gaps/)
+  })
+
+  test("AC3: light size config is advice only and leaves full-pipeline semantics unchanged", () => {
+    pin(section(skill, "3. Load Verified Config and Marker History"), /large_pr_threshold\/large_pr_strategy are labelled advisory size settings for the detector only: never a cutoff, forced omission or no-post rule; full-pipeline semantics stay unchanged/)
+    pin(section(skill, "5. Dispatch Both Axis Briefs in One Foreground Batch"), /advisory_size_settings:\{large_pr_threshold,large_pr_strategy\} labelled advice only/)
+    pin(normalize(detector), /Accept large_pr_threshold\/large_pr_strategy only as labelled advice, never a cutoff, forced omission or no-post rule/)
+  })
+
+  test("AC3: supplementary reads use soft strategy guidance, no control or report ceiling", () => {
+    pin(normalize(skill), /detector chooses scope without file\/changed-line maxima or a supplementary-read ceiling/)
+    for (const prompt of [skill, detector]) {
+      const controls = normalize(prompt)
+      expect(controls).not.toMatch(/\b(?:max_targeted_reads|read_budget)\b/)
+      for (const seed of ["max_targeted_reads: 8", "read_budget: 8"])
+        expect(normalize(prompt + " " + seed)).toMatch(/\b(?:max_targeted_reads|read_budget)\b/)
+    }
+    const text = normalize(detector)
+    pin(text, /Stop supplementary investigation when further reads have low expected value for a light pass, not at a numeric ceiling; retain relevant regions and disclose unresolved context/)
+    pin(text, /Allocate targeted enclosing-code, caller, test and standards reads by the chosen strategy/)
+    pin(text, /Record each beyond-diff enclosing-code\/caller\/test\/standards\/issue read in evidence_reads, including failed attempts/)
+    pin(text, /inventory\/diff\/per-file patch retrieval and contract\/reference reads are not supplementary evidence reads/)
+    pin(text, /This inline contract suffices, so read source links only for an unresolved schema\/calibration edge case/)
+    pin(text, /evidence_reads lists exactly the counted beyond-diff attempts, including failures; targeted_reads equals its length, with no read ceiling/)
+  })
+
+  test("AC6: transport truncation falls back per file, then discloses unavailable evidence rather than judging size", () => {
+    pin(normalize(detector), /Diff truncation \(512,000-byte transport limit, oversized:true or HTTP 406\/413\) uses per-file files patches as fallback, optionally with a paths filter; incomplete pagination, absent patches and inaccessible regions remain unavailable evidence gaps, not an automatic size judgment/)
+    pin(normalize(detector), /Exclude \.corvus\/ as the default PR tools do; disclose the exclusion as a null-path global omission outside inventory reconciliation/)
+    pin(normalize(detector), /Done when every discovered changed path has hunks or a named evidence gap, with counts unknown rather than invented where retrieval is incomplete/)
+  })
+
+  test("AC7: consistency validation retains valid evidence and discloses gaps, never a repair detector pass", () => {
+    const text = section(skill, "5. Dispatch Both Axis Briefs in One Foreground Batch")
+    pin(text, /each attempt assesses and selects its strategy afresh/)
+    pin(text, /then identity\/strategy\/counts\/coverage without file\/line maxima or parent code analysis/)
+    pin(text, /Require assessment signals, an allowed approach \(all_diff_files\|risk_focus\|sampled_by_area\|other\), non-empty rationale and scope_kind/)
+    pin(text, /Check mapping: all_diff_files → scope_kind all_diff_files; risk_focus\/sampled_by_area → focus_set; other → other or focus_set as stated/)
+    pin(text, /Validate inventory against intake with disclosed filtering\/retrieval gaps; \.corvus exclusions are null-path global omissions outside inventory reconciliation and scope counts/)
+    pin(text, /All-diff scope selects every inventory path\/hunk implicitly; focus_set\/selected_scope are empty or omitted\. Otherwise focus_set ⊆ inventory and equals selected_scope paths/)
+    pin(text, /Reviewed scope lies within selected scope; regions: all_hunks means every discovered hunk of that path/)
+    pin(text, /discovered\/selected\/reviewed\/omitted\/unavailable counts \(non-negative integers or null for unknown\) matching their scope; incomplete evidence stays null\/disclosed/)
+    pin(text, /For all_diff_files with complete inventory and no inventory omissions\/unavailability, selected = reviewed = discovered counts, reviewed_scope covers each inventory path with all_hunks, and omitted\/unavailable counts are zero/)
+    pin(text, /Otherwise reviewed\/omitted\/unavailable path union reconciles with inventory \(partial paths may overlap\); their changed-line regions partition discovered hunks without double counting/)
+    pin(text, /Context-only gaps carry no changed lines; null-path global omissions stay outside reconciliation\/counts/)
+    pin(text, /targeted_reads is a non-negative integer and equals evidence_reads.length, including failed attempts/)
+    pin(text, /Validate actual coverage from scope fields, not approach labels alone/)
+    pin(text, /Inconsistent\/invalid\/error\/truncated output retains independently valid evidence\/gaps, never retargets or reruns detection merely to repair a report/)
+    pin(text, /A failed\/invalid brief keeps the other's evidence and adds one short gap line for that brief; unknown coverage stays null\. Only step 6's movement decision admits another attempt, re-dispatching both/)
+  })
+
+  test("AC8: strategy-line trigger is protocol-pinned and full-review advice depends only on AQ6 risks/gaps/complexity", () => {
+    const text = section(skill, "6. Recheck Head and Synthesize In-Session")
+    pin(text, /approach\/rationale only when not all diff files, or anything omitted\/unavailable/)
+    pin(text, /Recommend full review only for consequential uncovered risk, material evidence gaps or complexity needing deeper coverage, naming the specific reason, never size or omission alone/)
+    pin(normalize(detector), /full-review recommendation only for consequential uncovered risk, material evidence gaps or complexity needing deeper coverage, with the specific reason/)
+    pin(text, /Zero findings means none found in reviewed scope, not approval or complete coverage/)
+  })
+
+  /** Oracle: the skill's sole literal step-10 coverage template and the checker's
+   * actual light coverage/action predicate, read before substitutions. Missing
+   * templates/predicates or a non-matching rendered phrase fail unconditionally;
+   * no rollout flag disables this pin. This checks regex compatibility, not a
+   * model run or semantic count validation; the checker accepts a broad disclosure. */
+  test("AC8/AC10: the literal step-10 coverage phrase matches the checker's light summary regex", () => {
+    const cleanup = section(skill, "10. Clean Up and Summarize")
+    const templates = [...cleanup.matchAll(/Actual coverage: <approach>[^>]*<n>[^>]*<m>[^>]*<lines>[^>]*<k>[^>]*<u>/g)]
+    expect(templates).toHaveLength(1)
+    const template = templates[0]?.[0] ?? ""
+    expect(template).toBe("Actual coverage: <approach>; reviewed <n> of <m> files (<lines> changed lines); omitted <k>; unavailable <u>")
+    const source = readFileSync(resolve(root, "scripts/check-review-artifacts.ts"), "utf8")
+    const start = source.indexOf('add("light coverage/action",')
+    expect(start).toBeGreaterThanOrEqual(0)
+    const predicate = source.slice(start, source.indexOf("\n  if (local)", start))
+      .match(/&& \/([^\n]+)\/([a-z]*)\.test\(summary\) && \/untracked\//)
+    expect(predicate).not.toBeNull()
+    if (!predicate) return
+    const summaryRegex = new RegExp(predicate[1], predicate[2])
+    for (const values of [
+      ["all_diff_files", "45", "45", "1700", "0", "0"],
+      ["risk_focus", "12", "45", "920", "32", "1"],
+      ["sampled_by_area", "9", "80", "null", "71", "0"],
+      ["other", "3", "null", "120", "null", "null"],
+      ["not assessed", "0", "null", "null", "null", "null"],
+    ]) {
+      let rendered = template
+      for (const [index, token] of ["approach", "n", "m", "lines", "k", "u"].entries())
+        rendered = rendered.replace(`<${token}>`, values[index])
+      expect(rendered).not.toMatch(/<[^>]+>/)
+      expect(rendered).toMatch(summaryRegex)
+    }
+    expect("Reduced-coverage light review").not.toMatch(summaryRegex)
+  })
+
+  test("AC11: adaptive instructions stay within their prompt budgets", () => {
+    const countLines = (text: string) => text.replace(/\r\n/g, "\n").replace(/\n$/, "").split("\n").length
+    expect(countLines(skill)).toBeLessThanOrEqual(150)
+    expect(countLines(detector)).toBeLessThanOrEqual(200)
+  })
+
+  test("T12: no light skill line exceeds the read tool's 2,000-character cap", () => {
+    const overlong = (text: string) => text.split(/\r?\n/).flatMap((line, index) =>
+      Buffer.byteLength(line, "utf8") > 2000 ? [index + 1] : [])
+    expect(overlong(skill)).toEqual([])
+    expect(overlong("x".repeat(2000))).toEqual([])
+    expect(overlong("x".repeat(2001))).toEqual([1])
+    // Byte length is deliberately stricter than character length for tool safety.
+    expect(overlong("é".repeat(1001))).toEqual([1])
   })
 })

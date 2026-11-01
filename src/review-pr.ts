@@ -10,7 +10,7 @@ export type PrFindInput = PrRepoInput & { branch?: string }
 export type PrLocalInput = PrRepoInput & { base?: string }
 export type PrCandidate = { number: number; url: string; state: string; headRefName: string }
 export type PrLocator = { owner: string; name: string; pr: number | string }
-export type PrFilesInput = PrLocator & { paginate: true; include_corvus?: boolean; names_only?: boolean }
+export type PrFilesInput = PrLocator & { paginate: true; include_corvus?: boolean; names_only?: boolean; paths?: string[] }
 export type PrConfigInput = { owner: string; name: string; ref: string }
 export type PrMetadata = {
   number: number
@@ -66,7 +66,7 @@ export type PrData = {
   }
   metadata: PrMetadata
   head: { head_sha: string; code_head: string; base_sha: string }
-  files: { files: PrFile[] | string[]; complete_pagination: boolean; excluded_corvus: number }
+  files: { files: PrFile[] | string[]; complete_pagination: boolean; excluded_corvus: number; missing_paths?: string[] }
   diff: { oversized: false; text: string; excluded_corvus: number } | { oversized: true; http_status?: number }
   reviews: {
     reviews: PrReview[]; threads: PrThread[]; dispositions: PrDisposition[]
@@ -88,7 +88,7 @@ export function isPrCallerAllowed(caller: unknown, op: unknown): boolean {
 }
 export type PrFailure = {
   reason: string; http_status?: number; unavailable?: true; login?: null
-  files?: PrFile[] | string[]; excluded_corvus?: number; reviews?: PrReview[]; threads?: PrThread[]; dispositions?: PrDisposition[]
+  files?: PrFile[] | string[]; excluded_corvus?: number; missing_paths?: string[]; reviews?: PrReview[]; threads?: PrThread[]; dispositions?: PrDisposition[]
   complete_pagination?: false; complete_threads?: boolean
 }
 export type PrResult<T> = ({ ok: true } & T | { ok: false } & PrFailure) & { api_calls: number }
@@ -103,6 +103,10 @@ export type PrInput =
 
 const DEFAULT_TIMEOUT_MS = 60_000
 export const MAX_DIFF_BYTES = 512_000
+// Fifty input entries bound each selector; the writer batches larger path sets.
+// 1,024 UTF-16 code units per path caps their combined text at 51,200 before escaping.
+const MAX_FILE_PATHS = 50
+const MAX_FILE_PATH_LENGTH = 1_024
 const OWNER = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/
 const NAME = /^[A-Za-z0-9._-]{1,100}$/
 const SHA = /^[A-Fa-f0-9]{40}$/
@@ -112,7 +116,7 @@ const ACCEPT_JSON = ["-H", "Accept: application/vnd.github+json"]
 const METADATA_FIELDS = "number,url,title,body,author,baseRefName,baseRefOid,headRefName,headRefOid,labels,reviewRequests,isDraft,mergeable,state,mergedAt,additions,deletions,changedFiles,files,closingIssuesReferences,latestReviews,reviewDecision,isCrossRepository"
 const KEYS: Record<PrOperation, readonly string[]> = {
   metadata: ["owner", "name", "pr"], head: ["owner", "name", "pr"],
-  files: ["owner", "name", "pr", "paginate", "include_corvus", "names_only"], diff: ["owner", "name", "pr"],
+  files: ["owner", "name", "pr", "paginate", "include_corvus", "names_only", "paths"], diff: ["owner", "name", "pr"],
   reviews: ["owner", "name", "pr"], checks: ["owner", "name", "pr"],
   identity: [], config: ["owner", "name", "ref"], repo: ["cwd"],
   find: ["cwd", "branch"], local: ["cwd", "base"],
@@ -143,7 +147,28 @@ function argumentsObject(input: unknown): Record<string, unknown> {
   }))
 }
 
-type Target = { repo: string; endpoint: string; pr: string; cwd?: string; branch?: string; base?: string; include_corvus?: boolean; names_only?: boolean }
+/**
+ * Plain array entries are checked and copied before PR I/O: only normalized
+ * repository-relative paths select records, never endpoints or argv. Invalid,
+ * sparse or accessor-backed selectors fail invalid-input:paths without a read.
+ * Count bounds apply before deduplication; empty selects none. Only omission
+ * disables selection. Names-only modes reject selection rather than lose patches.
+ */
+function filePaths(value: unknown): string[] {
+  if (!Array.isArray(value) || value.length > MAX_FILE_PATHS) return fail("invalid-input:paths")
+  const paths: string[] = []
+  for (let index = 0; index < value.length; index++) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, String(index))
+    const path: unknown = descriptor && "value" in descriptor ? descriptor.value : undefined
+    if (typeof path !== "string" || path.length > MAX_FILE_PATH_LENGTH
+      || /[\u0000-\u001f\u007f-\u009f\\]/.test(path) || /^[A-Za-z]:/.test(path)
+      || path.split("/").some(segment => segment === "" || segment === "." || segment === "..")) return fail("invalid-input:paths")
+    paths.push(path)
+  }
+  return [...new Set(paths)]
+}
+
+type Target = { repo: string; endpoint: string; pr: string; cwd?: string; branch?: string; base?: string; include_corvus?: boolean; names_only?: boolean; paths?: string[] }
 function target(op: PrOperation, input: unknown): Target {
   const args = argumentsObject(input)
   if (Object.keys(args).some(key => !KEYS[op].includes(key))) return fail("invalid-arguments")
@@ -170,8 +195,11 @@ function target(op: PrOperation, input: unknown): Target {
   for (const key of ["include_corvus", "names_only"] as const) {
     if (args[key] !== undefined && typeof args[key] !== "boolean") return fail(`invalid-input:${key}`)
   }
+  const paths = args.paths === undefined ? undefined : filePaths(args.paths)
+  if (paths !== undefined && (args.names_only === true || args.include_corvus === true)) return fail("invalid-input:paths")
   return { repo, endpoint: `repos/${repo}/pulls/${pr}`, pr,
-    include_corvus: args.include_corvus === true, names_only: args.names_only === true || args.include_corvus === true }
+    include_corvus: args.include_corvus === true, names_only: args.names_only === true || args.include_corvus === true,
+    ...(paths === undefined ? {} : { paths }) }
 }
 
 /**
@@ -629,7 +657,15 @@ const handlers: Handlers = {
   async files(target, context) {
     const result = await listing(`${target.endpoint}/files`, context, value => target.names_only ? string(record(value).filename) : file(value))
     const items = result.items.filter(item => target.include_corvus || !isCorvusFile(typeof item === "string" ? item : item.filename))
-    const data = { files: items as PrFile[] | string[], excluded_corvus: result.items.length - items.length }
+    // Select only after validating every page/record; a matching early page never
+    // proves complete pagination. Patches are returned intact, without truncation.
+    // missing_paths means not observed when pagination failed, not confirmed absent;
+    // .corvus exclusion still applies and its count excludes only state records.
+    const requested = target.paths === undefined ? undefined : new Set(target.paths)
+    const selected = requested === undefined ? items : items.filter(item => requested.has(typeof item === "string" ? item : item.filename))
+    const found = new Set(result.items.map(item => typeof item === "string" ? item : item.filename))
+    const data = { files: selected as PrFile[] | string[], excluded_corvus: result.items.length - items.length,
+      ...(target.paths === undefined ? {} : { missing_paths: target.paths.filter(path => !found.has(path)) }) }
     return result.error ? { ok: false, ...result.error, ...data, complete_pagination: false }
       : { ok: true, ...data, complete_pagination: result.complete }
   },

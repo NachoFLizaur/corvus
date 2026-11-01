@@ -1,7 +1,7 @@
 ---
 id: ADR-0007
 status: proposed
-date: 2026-10-30
+date: 2026-11-01
 scope:
   - agent/corvus-review-light.md
   - agent/pr-light-reviewer.md
@@ -12,6 +12,7 @@ scope:
   - src/review-storage-class.ts
   - src/fixed-denies.ts
   - src/review-pr.ts
+  - src/review-worktree.ts
   - src/review-lock.ts
   - src/review-post.ts
   - src/review-sync.ts
@@ -23,9 +24,17 @@ scope:
   - agent/pr-comment-writer.md
   - scripts/smoke-review.sh
   - scripts/check-review-artifacts.ts
+  - src/__tests__/review-light-contract.test.ts
+  - src/__tests__/review-worktree.test.ts
+  - src/__tests__/check-review-artifacts.test.ts
+  - README.md
+  - docs/CORVUS-REVIEW-SKILL-SET.md
+  - AGENTS.md
+  - CHANGELOG.md
+  - docs/decisions/0007-light-review-single-detector-shared-namespace.md
 ---
 
-# ADR-0007: Light review publishes autonomously from one bounded protected detector and keeps its artifacts in a sync-ineligible class of the shared namespace
+# ADR-0007: Light Review Uses Concurrent Axis Briefs, a Tool-Owned Sibling Worktree and Local-Only Shared-Namespace Artifacts
 
 ## Context and Problem
 
@@ -44,7 +53,27 @@ local and publishes to GitHub autonomously.
 A faster variant must keep the untrusted-content boundary (detectors are protected and
 mechanically read-only, `src/protected-agents.ts:13-17`), the posting-integrity chain
 (ADR-0003, ADR-0004) and the writer's fixed artifact layout (`agent/pr-comment-writer.md:39`).
-ADR-0001 keeps R2 as two parallel axis children; this record does not change R2.
+R2 uses two parallel axis children (`skill/corvus-review-r2/SKILL.md`, Axis and Child Mapping); this record does not change R2.
+
+The adaptive-scope follow-up delegated scope judgment to the detector rather than fixed
+file/changed-line thresholds. The subsequent 0.11.0-beta.0 run on PR #15 recorded 35
+orchestrator turns, 43 calls, 8m15s orchestrator elapsed and approximately $2.04 total cost
+(task `corvus-review-light-v2/DISCOVERY.md`, Measured bad run). Its output lacked a Corvus
+opening/clear axis separation, copied verbose evidence and summary fields, and widened an
+inline anchor before relocation (same source, R1–R7). A 514,396-byte diff exceeded the
+512,000-byte transport limit; the whole-file-list fallback spilled before anchor verification.
+The user asked for clearer, shorter reviews, subagents and a PR-head worktree next to the
+repository, cleaned up afterward (task `corvus-review-light-v2/PLAN.md`, Intent/VQ1–VQ11).
+
+The detector still owns untrusted analysis; the orchestrator owns trusted axis/head controls
+and validates reports (`agent/pr-light-reviewer.md`, Trust and Capability Boundary/Report
+Format; `skill/corvus-review-light/SKILL.md`, steps 4–6). Shell deny patterns inspect command
+text, not workdir: issuing `git read-tree -u --reset HEAD` in the wrong directory would reset
+the user's index and overwrite tracked modifications. A regular checkout can run a
+post-checkout hook or smudge/process filters chosen through PR attributes; materialized
+symlinks can redirect reads to host secrets. The lifecycle therefore needs a tool-owned
+boundary rather than trusting model-issued shell population (`src/review-worktree.ts`,
+context/treeEntries/populate/worktree).
 
 ## Considered Options
 
@@ -74,19 +103,85 @@ ADR-0001 keeps R2 as two parallel axis children; this record does not change R2.
   (`agent/pr-comment-writer.md:39`, `src/review-sync.ts:24`, `src/review-pr.ts:269`), a
   second root is not serialized by the shared lock, and silently editing ignore files
   changes the user's repository configuration.
-- **Check out the PR head** — rejected because it switches the user's worktree; a fetched
-  PR ref read with `git show <head>:<path>` (the gatherer's precedent,
-  `agent/pr-context-gatherer.md:32`) gives head-accurate content without a checkout.
-- **Autonomous light orchestrator + one bounded protected detector + local-only state in the
-  shared namespace** — chosen.
+- **Switch the user's checkout to the PR head** — still rejected because it changes their
+  working context. A detached sibling worktree answers the earlier "check out the PR head"
+  objection without switching their branch or overwriting their files.
+- **Object-only PR-head reads** — retained as fallback, not the primary route, because
+  `git show`/`git grep` give exact-head evidence but do not provide the requested navigable
+  file tree. Creation/access/verification gaps still need disclosure, even when fallback
+  recovers some context.
+- **Model-issued `git worktree` plus shell `git read-tree -u --reset` population** — rejected
+  because a wrong shell workdir can destroy uncommitted main-checkout changes, and text-based
+  denies cannot prove directory ownership. Ordinary checkout also exposes hooks, filters and
+  symlink redirects; a shell worktree prune would affect other owners' registrations.
+- **Tool-owned detached sibling with raw-blob population and owned-only removal** — chosen
+  because validated controls, canonical paths and an explicitly selected new-tree index keep
+  those mutations out of the model's shell authority, while avoiding checkout/filter execution
+  and storing symlink blobs as ordinary files.
+- **Fixed file/changed-line thresholds with size-triggered risk focus and full-review advice** —
+  rejected for light mode because size alone does not describe risk concentration, generated
+  changes or reviewable complexity; the follow-up explicitly delegates that judgment to the
+  detector. The existing transport limits remain evidence-retrieval limits, not scope policy.
+- **Hard supplementary-read ceiling** — replaced by soft guidance because a fixed count can
+  stop decisive context gathering while still spending reads on low-value evidence. Each
+  brief records its reads and unresolved context; light is a judgment-bounded pass, not a
+  thoroughness promise or numeric context budget.
+- **One protected detector covering both axes** — replaced because the observed review carried
+  all detection context in one child and failed the presentation requirements. The evidence
+  does not prove topology alone caused that output; separate axis briefs plus a compact
+  rendering contract are the chosen improvement, with extra child cost explicitly accepted.
+- **Two concurrent same-identity axis briefs with detector-led scope** — chosen instead of
+  full R2 contracts or optional file-group sharding because it splits detection context while
+  retaining the protected light identity and avoids an additional roster/coverage-merge policy.
+- **Autonomous light orchestration + tool-owned sibling tree + local-only shared-namespace
+  state** — chosen, retaining the existing writer and integrity chain.
 
 ## Decision
 
-- A new protected, mechanically read-only subagent `pr-light-reviewer` performs one bounded
-  pass per detection attempt over correctness, security, stated PR intent and consequential
-  architecture or convention defects, attributing each finding to the Standards or Spec axis,
-  because one isolated reviewer with bounded evidence is the pattern fast reviewers use while the
-  protected boundary still separates untrusted content from posting authority.
+- Exactly two concurrent foreground `pr-light-reviewer` instances run in one batch per attempt,
+  because distinct trusted briefs separate context without weakening the protected identity.
+  `axis: standards` covers architecture/correctness/conventions; `axis: spec_security` covers
+  Spec across eligible dimensions plus independent security attributed Standards/security.
+  IDs have disjoint brief prefixes, findings keep axis/dimension attribution, and one invalid
+  brief preserves independently valid evidence from the other with a disclosed gap, not a
+  repair detection pass. Movement restarts both (`skill/corvus-review-light/SKILL.md`, step 5).
+- Each brief chooses scope without file/changed-line maxima or a supplementary-read ceiling,
+  because useful context varies by risk and complexity. `all_diff_files` is the fast default
+  when comfortably reviewable; `risk_focus`, `sampled_by_area` or `other` justifies alternatives.
+  Advisory size config cannot force omission/no-post. Soft guidance prioritizes enclosing code,
+  decisive callers and tests, ending low-value investigation while recording all beyond-diff
+  read attempts, including failures. Inventory/diff/patch retrieval is not supplementary context.
+  Reports retain discovered/selected/reviewed/omitted/unavailable scope, reasons and null unknown
+  counts; validation reconciles inventories/regions/read accounts without parent code analysis.
+  Combined coverage uses path/region unions rather than summed overlapping counts, because
+  independent briefs can inspect the same files (`agent/pr-light-reviewer.md`, steps 3–5/Report
+  Format; `skill/corvus-review-light/SKILL.md`, step 5).
+- PR mode creates one disposable detached sibling worktree after successful lock acquisition
+  and head-object preparation, because navigable exact-head files answer the user's request
+  without changing their checkout. Only `corvus_review_worktree`, callable by the light identity
+  on both hosts, owns create/remove. It derives the canonical sibling path from trusted session
+  cwd, validated PR/code_head/runId (`runid6` = SHA-256(runId) prefix); the skill uses the returned
+  path verbatim, never a PR-selected cwd. Raw-blob population avoids hooks/filter execution,
+  disables fsmonitor, selects only the new worktree index, validates tree paths, stores symlinks
+  as regular files and reports skipped submodules. Detectors verify HEAD before read/grep/glob;
+  no other Git command runs inside the unstatted-index tree, because status/diff can re-hash
+  files through clean filters. They never execute PR code, builds or tests. Failure falls back
+  to outside-tree object reads with a disclosed gap (`src/review-worktree.ts`, context through
+  worktree; `agent/pr-light-reviewer.md`, step 5).
+- Every successful create retains its original tuple for removal on all terminal routes and
+  before restart re-creation, because lock loss or posting failure must not leak an owned tree.
+  Removal precedes lock release, verifies registration/head ownership and confirms directory
+  and registration absence. LOCAL, intake CLOSED/MERGED and held/denied locks create none.
+  Existing/stale-looking trees are reported, never removed/pruned; failed removal names the
+  exact path and manual remedy, and unconfirmed-create rollback needs manual inspection before
+  removal (`src/review-worktree.ts`, removeOwned/worktree; light skill, steps 4/6/10).
+- The shared writer requests only its comment paths through the validated `corvus_review_pr`
+  files filter after an oversized/truncated diff, because a full listing can spill before
+  anchor verification. The tool paginates all records, returns selected intact patches and
+  missing-path evidence, and leaves unfiltered calls unchanged. Missing/incomplete patches
+  remain unverifiable; only writer-reported anchors relocate, and placements are never widened
+  by the orchestrator (`src/review-pr.ts`, filePaths/operations.files;
+  `agent/pr-comment-writer.md`, step 3; light skill, steps 6/9).
 - `corvus-review-light` is the autonomous orchestrator (question denied, Invocation Mode
   autonomous) and dispatches only that detector and the existing `pr-comment-writer`,
   because the writer and `corvus_review_post` remain the sole posting route (ADR-0003) and
@@ -95,13 +190,19 @@ ADR-0001 keeps R2 as two parallel axis children; this record does not change R2.
   then never approves (overrides included), permits severity-derived `REQUEST_CHANGES` only
   for a retained blocker/critical at the confidence floor and lets an eligible trusted
   `REQUEST_CHANGES` override apply inside the cap, without a light-specific action rule (`skill/corvus-review-extras/SKILL.md:61-63`).
-  The marker leads directly into review content, without a generic reduced-coverage banner
-  or equivalent mandatory notice, because internal partial coverage governs action rather
-  than requiring a body warning. Review limits disclose only applicable factual scope,
-  omitted scope, oversized risk-first selection/full-review recommendation, gaps and
-  axis/severity counts/overflow; zero findings is not approval or complete coverage
-  (`skill/corvus-review-light/SKILL.md`, step 6). Minor details remain capped at
-  `min(validated max_minors, 2)`, nitpicks excluded and minor overflow counted by axis.
+  The marker leads directly into the literal Corvus opening: PR identity, action/head/statistics
+  and axis counts, then Standards and Spec sections with one-line headlines. Each finding has
+  its Conventional Comments identity, ≤3 short problem/impact lines and one suggestion/fix,
+  because light output must remain legible without copying local evidence fields or detector
+  summary filler. Inline-first findings are not duplicated in the body; relocation moves that
+  same compact finding into its own axis. Review limits use ≤3 short factual bullets for
+  applicable scope/rationale, omissions/overflow and material gaps, without a generic banner.
+  Full-review advice names consequential uncovered risk, material gaps or deeper complexity,
+  because size or omission alone is not that evidence. Zero findings is neither approval nor
+  complete coverage. Complete inventories, diagnostics and evidence fields stay in the local
+  ledger, because actual coverage must remain auditable without bloating the post (light skill,
+  steps 6/9/10). Minor details stay capped at `min(validated max_minors, 2)`, nitpicks excluded
+  and minor overflow counted by axis.
 - Review state stays local: light candidates, staging and frozen artifacts live in a
   tool-owned storage class inside the shared root, chosen by the tools from caller identity,
   which `corvus_review_sync` excludes from status, snapshot, add/commit and post-commit checks
@@ -159,30 +260,45 @@ ADR-0001 keeps R2 as two parallel axis children; this record does not change R2.
 
 ## Consequences
 
-**Good**: one detector session per attempt plus the writer (two on the no-restart happy path)
-instead of four or five on the full path; no approval wait, review-input or
-document staging; no light files in any state commit, including a later full review's, and
-no worktree switch; existing posting integrity, lock, marker and action precedence reused.
+**Good**: two isolated axis briefs plus the writer (three children on a no-restart published PR
+route), without full-path gatherer/researcher or review-input/document staging. Compact familiar
+output separates findings without duplicating inline content. Exact-head file navigation keeps
+the user's checkout intact, while tool-owned population/removal neutralizes hook/filter/symlink
+hazards. Existing posting integrity, lock, marker, action precedence and sync-ineligible storage
+are reused; strategy and coverage accounts keep detector scope inspectable.
 
-**Bad**: one more protected identity, a fixed-deny enforcement path, caller-specific tool
-restrictions and a new storage class across both hosts and the writer contract; quality
-parity with the two-axis review is unmeasured; light posts advance the round counter without
-a resumable checkpoint; light artifacts appear as untracked files unless the user excludes
-the light class locally. Moving heads can cost up to three detector passes rather than one;
-the fixed attempt limit and lock-age/root refusals bound churn by stopping without posting
-instead of retrying indefinitely. Once a root holds `.light/` (even empty), its
-`lock.yaml`/`.lock` records stop being synchronized for full reviews too; this durable
-exclusion is the cost of keeping light lock bytes and tracked deletions local.
+**Bad**: one additional detector session per attempt compared with the original light topology;
+three attempts can dispatch six detectors. Host overlap and any runtime/cost improvement remain
+unmeasured for this revision. Worktree population costs disk/time and needs a writable parent;
+creation failures fall back with gaps, while cleanup failures must expose the exact path and
+manual remedy. The tool/caller/permission surface spans both hosts; removal preflights cannot
+prevent external concurrent directory replacement. Protected identity/fixed-deny/storage
+complexity remains, and light posts still advance rounds without checkpoints. Artifacts may
+appear untracked. Once `.light/` exists, shared lock bytes/deletions remain sync-excluded even
+for full review. Judgment-based scope and soft read guidance are less deterministic; consistent
+coverage accounts do not prove that every consequential defect was found or establish parity.
 
-**Neutral**: `corvus-review` and `corvus-review-auto` behaviour and ADR-0001's two-axis R2
-are unchanged apart from synchronization skipping the light class and namespace
-`lock.yaml`/`.lock` when `.light` exists (even when empty); per-user model overrides can
-point the light detector at a faster model.
+**Neutral**: full-review R0–R5 and the shared config schema stay unchanged. Existing sync skips
+the light class and its namespace locks; the validated files filter and shared writer's bounded
+patch fallback are the shared v2 changes, with unfiltered output unchanged. Both axis instances
+use the same identity/model override. Advisory light size settings do not change full-pipeline
+large-PR semantics. The 19-turn read-through toward ≤20 is structural, not a live measurement.
 
 ## Verification
 
 - Structural prompt tests pin the light roster to `pr-light-reviewer` and `pr-comment-writer`,
   `question` denied, and the absence of head-record writes and sync pull/push in the light skill.
+- Pin two concurrent distinct axis briefs per attempt, disjoint IDs, partial-report evidence
+  preservation, no hard read ceiling and the literal compact render template against checker
+  regexes, including unwidened placements and no duplicated inline findings.
+- Worktree tests cover canonical/relative/symlinked root spelling, raw-blob population,
+  hooks/filter/symlink neutralization, owned-only removal, non-owned tree preservation and main
+  HEAD/index/file bytes. Caller tests allow the tool only to light on both adapters.
+- Checker/harness fixtures cover create→dispatch→remove→release ordering on posted, failed,
+  terminal, drift, ownership-loss and refusal routes, plus no creation for LOCAL/intake terminal/
+  held lock, cleanup-failure disclosure and registration/sibling-directory leak snapshots.
+- Files/writer tests cover selected intact patches, missing/invalid paths, unchanged unfiltered
+  output and the oversized-diff fallback, without guessed anchors or writer artifact edits.
 - Sync tests show a full-review push over a root holding light artifacts commits no
   light-class path; permission probes show user config cannot re-allow the primary's fixed
   denies while a user writer-dispatch deny survives.

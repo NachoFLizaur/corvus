@@ -6,13 +6,14 @@ import { createLockExecutor } from "../review-lock"
 import { createPrExecutor, isPrCallerAllowed } from "../review-pr"
 import { createVerdictExecutor } from "../review-verdict"
 import { createSyncExecutor } from "../review-sync"
+import { createWorktreeExecutor } from "../review-worktree"
 import { isReviewCallerAllowed } from "../review-callers"
 import type { Registrar, SetupContext } from "./types"
 
 type ToolDraft = Parameters<Parameters<SetupContext["tool"]["transform"]>[0]>[0]
 
 /**
- * One transform contributes seven name-keyed tools. The host's draft.add upserts
+ * One transform contributes eight name-keyed tools. The host's draft.add upserts
  * by name, so replay replaces rather than duplicates them. codemode:false keeps
  * all directly callable under their own permission keys, even when execute is
  * denied. Host location is captured before registration; the shared executors
@@ -28,6 +29,7 @@ export const registerTools: Registrar = async (ctx) => {
   const pr = createPrExecutor({ cwd: directory })
   const verdict = createVerdictExecutor(reviewStateRoot)
   const sync = createSyncExecutor({ cwd: directory })
+  const worktree = createWorktreeExecutor({ cwd: directory })
   const registration = await ctx.tool.transform((draft: ToolDraft) => {
     draft.add({
       name: "corvus_review_payload",
@@ -147,7 +149,7 @@ export const registerTools: Registrar = async (ctx) => {
     })
     draft.add({
       name: "corvus_review_pr",
-      description: "Read GitHub PR data with validated, fixed operations. metadata/head/diff/reviews/checks take owner, name, pr; files also requires paginate:true and accepts include_corvus/names_only booleans (include_corvus implies names-only). Files and diffs exclude .corvus by default and report excluded_corvus; local changed_files stays unfiltered. metadata/head/local return raw head_sha and code_head skipping state commits. config takes owner, name, ref (base SHA); identity takes no fields; repo resolves owner/name from gh or origin with optional cwd (defaults to the session directory). find takes optional cwd/branch to discover the current or named branch's PR; local takes optional cwd/base for a bounded local diff including tracked uncommitted changes, branch (null when detached), default_branch, merge_base, ahead, changed_files, stat, dirty and oversized. Caller policy (host agent): pr-comment-writer: head/diff/files/reviews; pr-code-reviewer, security-reviewer, pr-light-reviewer: metadata/head/files/diff/reviews/checks; corvus-review, corvus-review-auto, corvus-review-light, pr-context-gatherer: all ops. Unknown callers: caller-not-allowed.",
+      description: "Read GitHub PR data with validated, fixed operations. metadata/head/diff/reviews/checks take owner/name/pr; files requires paginate:true. files paths selects exact patch records plus missing_paths: <=50 normalized repository-relative strings, <=1,024 chars each, deduplicated; rejects names_only/include_corvus true. include_corvus implies names-only. Files/diffs exclude .corvus by default (excluded_corvus); local changed_files stays unfiltered. metadata/head/local return raw head_sha and code_head skipping state commits. config takes owner/name/ref (base SHA); identity takes no fields; repo resolves gh/origin with optional cwd (session default). find takes optional cwd/branch; local takes optional cwd/base for a bounded tracked working diff. Host caller policy: pr-comment-writer: head/diff/files/reviews; pr-code-reviewer, security-reviewer, pr-light-reviewer: metadata/head/files/diff/reviews/checks; corvus-review, corvus-review-auto, corvus-review-light, pr-context-gatherer: all ops. Unknown callers: caller-not-allowed.",
       input: {
         type: "object",
         properties: {
@@ -161,6 +163,7 @@ export const registerTools: Registrar = async (ctx) => {
           paginate: { type: "boolean", const: true },
           include_corvus: { type: "boolean" },
           names_only: { type: "boolean" },
+          paths: { type: "array", items: { type: "string", minLength: 1, maxLength: 1_024 }, maxItems: 50 },
           ref: { type: "string" },
         },
         required: ["op"],
@@ -233,6 +236,25 @@ export const registerTools: Registrar = async (ctx) => {
         if (!isReviewCallerAllowed("corvus_review_sync", ctx?.agent, args)) return { content: JSON.stringify({ synced: false, reason: "caller-not-allowed", git_calls: 0 }) }
         return { content: await sync(args) }
       },
+    })
+    draft.add({
+      name: "corvus_review_worktree",
+      description: "Light-only create/remove of an exact-head sibling worktree. Supply op/pr/code_head/runId; cwd defaults to the session directory. Raw blob population avoids hooks, filters and live symlinks. Removal verifies the derived path and detached registration/HEAD; never prunes others.",
+      input: {
+        type: "object",
+        properties: {
+          op: { type: "string", enum: ["create", "remove"] },
+          cwd: { type: "string" },
+          pr: { type: "integer", minimum: 1, maximum: Number.MAX_SAFE_INTEGER },
+          code_head: { type: "string", pattern: "^[a-f0-9]{40}$" },
+          runId: { type: "string", minLength: 1 },
+        },
+        required: ["op", "pr", "code_head", "runId"],
+        additionalProperties: false,
+      },
+      options: { codemode: false },
+      /** Host ctx.agent is checked before I/O by the shared executor; no input bypasses light-only admission. */
+      execute: async (args: unknown, ctx) => ({ content: await worktree(args, ctx?.agent) }),
     })
   })
   return async () => {

@@ -30,6 +30,7 @@ export const REVIEW_CALLER_POLICY = {
   },
   corvus_review_sync: { ...full, [REVIEW_CALLERS.lightOrchestrator]: ["resolve"] },
   corvus_review_post: { [REVIEW_CALLERS.writer]: "*" },
+  corvus_review_worktree: { [REVIEW_CALLERS.lightOrchestrator]: "*" },
 } satisfies Record<string, Record<string, Operations>>
 
 export type ReviewToolName = keyof typeof REVIEW_CALLER_POLICY

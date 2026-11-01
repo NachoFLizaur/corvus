@@ -5,6 +5,21 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.11.0-beta.1 — 2026-11-01
+
+### Added
+
+- Light-only `corvus_review_worktree` on both hosts: create a detached PR-head sibling after lock acquisition, populate raw blobs without running checkout hooks or filters, store symlinks as regular files and report skipped submodules. Owned-only removal verifies directory/registration absence before lock release and restart re-creation; other worktrees remain untouched, and cleanup failures disclose the exact path and manual remedy. Fixed light shell denies now include worktree/read-tree and `git --` forms.
+- `corvus_review_pr` files supports a validated `paths` filter (up to 50 paths) with intact selected patches and missing-path evidence after full pagination; unfiltered calls remain unchanged. The shared writer uses it only for oversized/truncated-diff anchor fallback.
+
+### Changed
+
+- Light review dispatches two concurrent foreground instances of the protected `pr-light-reviewer` identity per attempt: Standards and Spec plus independent security. Each chooses its own single-pass scope from size/complexity without fixed file/changed-line cutoffs; `all_diff_files` is the fast default, with justified focus/sampling alternatives. Light size settings remain advisory. A failed brief keeps the sibling's valid evidence with a disclosed gap; restarts re-dispatch both.
+- Supplementary investigation follows soft value/risk guidance instead of a numeric read ceiling; every evidence-read attempt, including failures, stays in the local coverage ledger. Strategy reports account for discovered/selected/reviewed/omitted/unavailable scope, with unknown counts `null` and combined coverage using path/region unions rather than overlapping sums. Transport gaps remain factual limits, not scope cutoffs.
+- Light output now has a recognizable Corvus opening, separate Standards and Spec headlines, and compact Conventional Comments findings: ≤3 short problem/impact lines plus one suggestion/fix. Inline findings are not duplicated in the body, and detector anchors pass through unchanged; relocation moves only compact findings. Review limits use ≤3 short factual bullets, keeping inventories, detector evidence fields and summary filler local. Full-review advice names consequential uncovered risk, material gaps or deeper complexity, never size alone.
+- Light checker/harness evidence now covers both axis briefs, worktree lifecycle ordering/leaks and compact rendering. The no-restart read-through is 18 tool batches plus summary (19 turns), toward a ≤20-turn target; current live metrics remain UNVERIFIED pending separate cost authorization, not a measured improvement over the 35-turn PR #15 baseline.
+- Restart/terminal-state behavior, the three-attempt and 90-minute restart limits, fresh lock ownership, local-only sync-ineligible artifacts, protected read-only detection, digest-bound writer publication, never-APPROVE action rails and minor/nitpick filtering remain unchanged.
+
 ## 0.11.0-beta.0 — 2026-10-31
 
 ### Added
