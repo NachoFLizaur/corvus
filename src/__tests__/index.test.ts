@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import { createHash } from "node:crypto"
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -306,7 +307,7 @@ describe("review tool hooks", () => {
           expect(await rawCall("corvus_review_pr", { ...input, ...flags }, "pr-comment-writer")).toBe(before)
         }
         expect(await call("corvus_review_pr", { ...input, paths: [anchor.filename, "missing.ts", anchor.filename] }, "pr-comment-writer")).toEqual({
-          ok: true, files: [{ ...anchor, has_patch: true }], excluded_corvus: 1,
+          ok: true, files: [{ ...anchor, has_patch: true, diff_anchor: `diff-${createHash("sha256").update(anchor.filename).digest("hex")}` }], excluded_corvus: 1,
           missing_paths: ["missing.ts"], complete_pagination: true, api_calls: 2,
         })
       } finally {
@@ -341,6 +342,8 @@ describe("review tool hooks", () => {
       expect(fake.tools.get("corvus_review_pr")!.description).toBe(description)
       expect(description.length).toBeLessThanOrEqual(1_149)
       expect(description).toContain("files paths selects exact patch records plus missing_paths")
+      expect(description).toContain("diff_anchor=diff-<SHA256(path)>")
+      expect(description).toContain("Files-tab #<diff_anchor>R<line> or R<start>-R<end>")
       expect(description).toContain("rejects names_only/include_corvus true")
     } finally { await cleanup?.() }
   })
@@ -383,6 +386,39 @@ describe("review tool hooks", () => {
             }
           }
         }
+      }
+    })
+  })
+
+  test.each(["v1", "v2"] as const)("%s rejects light force before mutation and preserves full force on fresh current/legacy locks", async host => {
+    await withReviewTools(host, async (directory, call) => {
+      for (const leaf of ["lock.yaml", ".lock"]) {
+        const reviewRoot = join(directory, ".corvus/reviews", leaf === "lock.yaml" ? "pr15" : "pr16")
+        const input = { op: "acquire", reviewRoot, runId: "light", force: true }
+        const rejected = { ok: false, reason: "invalid-arguments" }
+        expect(await call("corvus_review_lock", input, "corvus-review-light")).toEqual(rejected)
+        expect(existsSync(reviewRoot)).toBe(false)
+        expect(await call("corvus_review_lock", { ...input, runId: "full", force: false }, "corvus-review")).toMatchObject({ ok: true, state: "acquired" })
+        const current = join(reviewRoot, "lock.yaml"), target = join(reviewRoot, leaf)
+        if (leaf === ".lock") {
+          const bytes = readFileSync(current)
+          expect(await call("corvus_review_lock", { op: "release", reviewRoot, runId: "full", mode: "delete" }, "corvus-review")).toMatchObject({ ok: true })
+          writeFileSync(target, bytes)
+        }
+        const before = readFileSync(target)
+        expect(await call("corvus_review_lock", input, "corvus-review-light")).toEqual(rejected)
+        expect(readFileSync(target)).toEqual(before)
+        expect(existsSync(join(reviewRoot, ".light"))).toBe(false)
+        for (const force of [undefined, false]) {
+          expect(await call("corvus_review_lock", { op: "acquire", reviewRoot, runId: "light", ...(force === undefined ? {} : { force }) }, "corvus-review-light"))
+            .toMatchObject({ ok: false, state: "held", holder: { run_id: "full" } })
+          expect(readFileSync(target)).toEqual(before)
+        }
+        for (const caller of ["corvus-review", "corvus-review-auto"]) {
+          expect(await call("corvus_review_lock", { ...input, runId: caller }, caller)).toMatchObject({ ok: true, state: "acquired" })
+        }
+        expect(await call("corvus_review_lock", { op: "release", reviewRoot, runId: "corvus-review-auto", mode: "complete" }, "corvus-review-auto"))
+          .toMatchObject({ ok: true, state: "completed" })
       }
     })
   })

@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import { createHash } from "node:crypto"
 import {
   checks, config, createPrExecutor, diff, files, find, head, identity, isPrCallerAllowed, local, metadata, repo, reviews,
   type PrExec, type PrExecResult,
@@ -122,12 +123,24 @@ describe("review PR bounded per-path patches", () => {
   const state = { filename: ".corvus/reviews/pr15/input.md", status: "modified", additions: 1, deletions: 0, patch: "+state" }
   const listing = JSON.stringify([anchor]) + "\n" + JSON.stringify([binary, state]) + "\n"
   const input = { op: "files", ...locator, paginate: true }
+  const anchored = { ...anchor, has_patch: true, diff_anchor: `diff-${createHash("sha256").update(anchor.filename).digest("hex")}` }
+  const anchoredBinary = { ...binary, has_patch: false, diff_anchor: `diff-${createHash("sha256").update(binary.filename).digest("hex")}` }
+
+  test("derives anchors from exact UTF-8 paths, not an API-supplied anchor", async () => {
+    const filename = 'src/é path "quoted".ts'
+    const item = { ...anchor, filename, diff_anchor: "diff-untrusted" }
+    const { exec } = recordingExec(success(JSON.stringify([item])))
+    expect(await files({ ...locator, paginate: true, paths: [filename] }, { exec })).toEqual({
+      ok: true, files: [{ ...anchor, filename, has_patch: true, diff_anchor: `diff-${createHash("sha256").update(filename, "utf8").digest("hex")}` }],
+      excluded_corvus: 0, missing_paths: [], complete_pagination: true, api_calls: 1,
+    })
+  })
 
   test("filters after full pagination, deduplicates selectors and preserves entire patches in listing order", async () => {
     const { exec, calls } = recordingExec(success(listing))
     const result = JSON.parse(await createPrExecutor({ exec })({ ...input, paths: [binary.filename, anchor.filename, anchor.filename] }))
     expect(result).toEqual({
-      ok: true, files: [{ ...anchor, has_patch: true }, { ...binary, has_patch: false }],
+      ok: true, files: [anchored, anchoredBinary],
       excluded_corvus: 1, missing_paths: [], complete_pagination: true, api_calls: 2,
     })
     expect(calls).toEqual([["gh", "api", "--method", "GET", "--paginate", `${endpoint}/files`, "-H", "Accept: application/vnd.github+json"]])
@@ -136,7 +149,7 @@ describe("review PR bounded per-path patches", () => {
   test("reports missing paths once in request order without treating excluded state files as absent", async () => {
     const { exec } = recordingExec(success(listing))
     expect(await files({ ...locator, paginate: true, paths: ["missing-z.ts", state.filename, anchor.filename, "missing-a.ts", "missing-z.ts"] }, { exec })).toEqual({
-      ok: true, files: [{ ...anchor, has_patch: true }], excluded_corvus: 1,
+      ok: true, files: [anchored], excluded_corvus: 1,
       missing_paths: ["missing-z.ts", "missing-a.ts"], complete_pagination: true, api_calls: 2,
     })
   })
@@ -157,7 +170,7 @@ describe("review PR bounded per-path patches", () => {
       const { exec } = recordingExec(response)
       expect(await files({ ...locator, paginate: true, paths: [anchor.filename, binary.filename] }, { exec })).toEqual({
         ok: false, reason: response.code === 0 ? "invalid-response" : "forbidden",
-        ...(response.code === 0 ? {} : { http_status: 403 }), files: [{ ...anchor, has_patch: true }],
+        ...(response.code === 0 ? {} : { http_status: 403 }), files: [anchored],
         excluded_corvus: 0, missing_paths: [binary.filename], complete_pagination: false,
         api_calls: 2,
       })
@@ -238,7 +251,7 @@ describe("review PR bounded per-path patches", () => {
     const filtered = await run({ ...input, paths: [anchor.filename] })
     expect(Buffer.byteLength(filtered)).toBeLessThan(2_000)
     expect(JSON.parse(filtered)).toEqual({
-      ok: true, files: [{ ...anchor, has_patch: true }], excluded_corvus: 0,
+      ok: true, files: [anchored], excluded_corvus: 0,
       missing_paths: [], complete_pagination: true, api_calls: 2,
     })
   })

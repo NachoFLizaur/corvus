@@ -315,13 +315,15 @@ function execute(op: Operation, input: unknown, opts: InternalLockOptions, calle
       || (op === "release" && args.mode !== "delete" && args.mode !== "complete")) fail("invalid-arguments")
     const fs = opts.fs ?? nodeFs
     /**
-     * Host identity selects local-only locking before the active record write.
+     * Host identity and validated arguments are read before lock filesystem I/O.
+     * Light force-acquire and non-delete release fail invalid-arguments; no
+     * tool argument disables either restriction. Full locks keep force support.
      * Creating the durable .light class first makes sync exclude this namespace's
      * lock.yaml/.lock, including a previously tracked terminal marker's deletion.
-     * Light temps stay in the class and release permits only delete. No tool
-     * argument disables this rule; ordinary full locks retain their old layout.
+     * Light temps stay in the class; ordinary full locks retain their old layout.
      */
     if (caller === REVIEW_CALLERS.lightOrchestrator) {
+      if (op === "acquire" && args.force === true) fail("invalid-arguments")
       if (op === "release" && args.mode !== "delete") fail("invalid-arguments")
       if (op === "acquire") opts = { ...opts, temporaryDirectory: resolveLightReviewDirectory(args.reviewRoot, opts.reviewStateRoot, fs, true) }
     }

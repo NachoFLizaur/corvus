@@ -8,7 +8,7 @@ import { root, skillDir } from "../paths"
 import v2Plugin from "../server"
 import { toV2Permissions } from "../to-v2-permissions"
 import { createFakeContext } from "./fake-context"
-import { LIGHT_BASH_DENIES, LIGHT_MUTATIONS } from "./fixtures/review-light"
+import { LIGHT_BASH_DENIES, LIGHT_MUTATIONS, LIGHT_READS } from "./fixtures/review-light"
 
 type Corpus = Record<string, string>
 type Kind = "agent" | "command" | "skill" | "reference"
@@ -285,7 +285,11 @@ function validate(corpus: Corpus, c: Contract, final = false): string[] {
           for (const [pattern, commands] of Object.entries(gitDenies)) check(bash[pattern] === "deny"
             && bash["*"] === "allow" && Object.keys(bash)[0] === "*" && commands.every(command => evaluateRules(rules, "shell", command) === "deny"), `safety:${path}:${pattern}`)
         }
-        if (path === lightOrchestrator) check(LIGHT_MUTATIONS.every(command => evaluateRules(rules, "shell", command) === "deny"), `safety:${path}:fixed-denies`)
+        if (path === lightOrchestrator) {
+          check(record(permission.bash) && Object.keys(permission.bash).length === 52
+            && LIGHT_MUTATIONS.every(command => evaluateRules(rules, "shell", command) === "deny"), `safety:${path}:fixed-denies`)
+          check(LIGHT_READS.every(command => evaluateRules(rules, "shell", command) === "allow"), `safety:${path}:shell-reads`)
+        }
       }
     } catch { check(false, `frontmatter:${path}`) }
     bodies[path] = body

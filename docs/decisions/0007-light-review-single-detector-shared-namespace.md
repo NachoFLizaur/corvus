@@ -130,25 +130,43 @@ context/treeEntries/populate/worktree).
   all detection context in one child and failed the presentation requirements. The evidence
   does not prove topology alone caused that output; separate axis briefs plus a compact
   rendering contract are the chosen improvement, with extra child cost explicitly accepted.
-- **Two concurrent same-identity axis briefs with detector-led scope** — chosen instead of
-  full R2 contracts or optional file-group sharding because it splits detection context while
-  retaining the protected light identity and avoids an additional roster/coverage-merge policy.
+- **Exactly two same-identity axis briefs with detector-led omission** — replaced after the
+  beta.1 PR #15 run reviewed 31 of 58 files on Standards and omitted tests/checker/docs
+  (trusted follow-up dispatch, 2026-11-01). Size-driven sampling did not meet the user's
+  coverage expectation; that observation does not establish quality parity or a benchmark.
+- **Adaptive cohesive file shards, all axes in one foreground batch** — chosen because it
+  scales coverage through parallel context rather than dropping reviewable files, while
+  preserving the protected identity and shorter orchestration path. Additional cost is accepted.
 - **Autonomous light orchestration + tool-owned sibling tree + local-only shared-namespace
   state** — chosen, retaining the existing writer and integrity chain.
 
 ## Decision
 
-- Exactly two concurrent foreground `pr-light-reviewer` instances run in one batch per attempt,
+- All foreground `pr-light-reviewer` shards of both axes run in one batch per attempt,
   because distinct trusted briefs separate context without weakening the protected identity.
   `axis: standards` covers architecture/correctness/conventions; `axis: spec_security` covers
   Spec across eligible dimensions plus independent security attributed Standards/security.
-  IDs have disjoint brief prefixes, findings keep axis/dimension attribution, and one invalid
-  brief preserves independently valid evidence from the other with a disclosed gap, not a
-  repair detection pass. Movement restarts both (`skill/corvus-review-light/SKILL.md`, step 5).
-- Each brief chooses scope without file/changed-line maxima or a supplementary-read ceiling,
-  because useful context varies by risk and complexity. `all_diff_files` is the fast default
-  when comfortably reviewable; `risk_focus`, `sampled_by_area` or `other` justifies alternatives.
-  Advisory size config cannot force omission/no-post. Soft guidance prioritizes enclosing code,
+  IDs include the axis brief and one-based shard (`ls<k>-…`, `lsp<k>-…`), findings keep
+  axis/dimension attribution, and a failed shard preserves other valid evidence with one
+  Review-limits gap naming uncovered paths, not a repair detection pass. Movement re-plans
+  shards (`skill/corvus-review-light/SKILL.md`, step 5).
+- Sharding/index follow-up: plan from trusted file names and available per-file sizes, without
+  parent code reads; use one shard per axis when comfortably reviewable, otherwise cohesive
+  directory/module groups, tests beside code and docs together. Every changed file belongs to
+  exactly one shard per axis, because parallel coverage replaces size-driven omission. Each
+  shard reviews every eligible assigned hunk; only generated/vendor/lock/binary/snapshot/minified
+  content is omitted with reasons, and risk focus/sampling require unavailable evidence. Union
+  findings per axis and deduplicate same-path, overlapping-line, same-dimension/title-intent copies,
+  keeping higher severity/confidence without disclosure. Each inline gets one linked axis-index
+  line from paths-filtered tool `diff_anchor` (`diff-` + sha256(path)) and exact RIGHT coordinates;
+  relocation replaces its index with the unchanged compact body finding, because the body must
+  expose every finding without duplicating inline detail. LOCAL has no links. Light acquisition
+  rejects `force: true` on both hosts and fixed denies add 29 Git/gh mutation patterns, because
+  held-lock ownership and the no-delivery authority boundary must survive config overrides
+  (`src/review-lock.ts`, `agent/corvus-review-light.md`, `src/__tests__/fixtures/review-light.ts`).
+- Each shard has no fixed file/changed-line/shard maxima, review time limit or supplementary-read
+  ceiling, because useful context varies by complexity. `all_diff_files` means every assigned
+  path/hunk; advisory size config cannot force omission/no-post. Soft guidance prioritizes enclosing code,
   decisive callers and tests, ending low-value investigation while recording all beyond-diff
   read attempts, including failures. Inventory/diff/patch retrieval is not supplementary context.
   Reports retain discovered/selected/reviewed/omitted/unavailable scope, reasons and null unknown
@@ -194,8 +212,8 @@ context/treeEntries/populate/worktree).
   and axis counts, then Standards and Spec sections with one-line headlines. Each finding has
   its Conventional Comments identity, ≤3 short problem/impact lines and one suggestion/fix,
   because light output must remain legible without copying local evidence fields or detector
-  summary filler. Inline-first findings are not duplicated in the body; relocation moves that
-  same compact finding into its own axis. Review limits use ≤3 short factual bullets for
+  summary filler. Inline-first findings have exact-diff index links, not duplicated body detail;
+  relocation replaces the index with that compact finding in its own axis. Review limits use ≤3 short factual bullets for
   applicable scope/rationale, omissions/overflow and material gaps, without a generic banner.
   Full-review advice names consequential uncovered risk, material gaps or deeper complexity,
   because size or omission alone is not that evidence. Zero findings is neither approval nor
@@ -260,15 +278,15 @@ context/treeEntries/populate/worktree).
 
 ## Consequences
 
-**Good**: two isolated axis briefs plus the writer (three children on a no-restart published PR
-route), without full-path gatherer/researcher or review-input/document staging. Compact familiar
-output separates findings without duplicating inline content. Exact-head file navigation keeps
+**Good**: isolated adaptive axis shards plus the writer (three children when one shard per axis
+suffices), without full-path gatherer/researcher or review-input/document staging. Eligible hunks
+stay assigned on large PRs. Compact output indexes every inline without duplicating detail. Exact-head file navigation keeps
 the user's checkout intact, while tool-owned population/removal neutralizes hook/filter/symlink
 hazards. Existing posting integrity, lock, marker, action precedence and sync-ineligible storage
 are reused; strategy and coverage accounts keep detector scope inspectable.
 
-**Bad**: one additional detector session per attempt compared with the original light topology;
-three attempts can dispatch six detectors. Host overlap and any runtime/cost improvement remain
+**Bad**: adaptive sharding can increase detector sessions without a fixed upper bound;
+three attempts still bound head churn. Host overlap and any runtime/cost improvement remain
 unmeasured for this revision. Worktree population costs disk/time and needs a writable parent;
 creation failures fall back with gaps, while cleanup failures must expose the exact path and
 manual remedy. The tool/caller/permission surface spans both hosts; removal preflights cannot
@@ -282,15 +300,16 @@ coverage accounts do not prove that every consequential defect was found or esta
 the light class and its namespace locks; the validated files filter and shared writer's bounded
 patch fallback are the shared v2 changes, with unfiltered output unchanged. Both axis instances
 use the same identity/model override. Advisory light size settings do not change full-pipeline
-large-PR semantics. The 19-turn read-through toward ≤20 is structural, not a live measurement.
+large-PR semantics. The 20-turn read-through target is structural, not a live measurement.
 
 ## Verification
 
 - Structural prompt tests pin the light roster to `pr-light-reviewer` and `pr-comment-writer`,
   `question` denied, and the absence of head-record writes and sync pull/push in the light skill.
-- Pin two concurrent distinct axis briefs per attempt, disjoint IDs, partial-report evidence
-  preservation, no hard read ceiling and the literal compact render template against checker
-  regexes, including unwidened placements and no duplicated inline findings.
+- Pin concurrent distinct axis/shard briefs per attempt, disjoint complete file assignment,
+  collision-free IDs, partial-failure evidence preservation, no hard read/time ceiling and
+  the literal compact render template against checker regexes, including exact single/range
+  index links, relocation replacement, unwidened placements and no duplicated inline detail.
 - Worktree tests cover canonical/relative/symlinked root spelling, raw-blob population,
   hooks/filter/symlink neutralization, owned-only removal, non-owned tree preservation and main
   HEAD/index/file bytes. Caller tests allow the tool only to light on both adapters.

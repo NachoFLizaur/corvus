@@ -1,4 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process"
+import { createHash } from "node:crypto"
 import { resolve } from "node:path"
 import { isReviewCallerAllowed } from "./review-callers"
 
@@ -36,7 +37,7 @@ export type PrMetadata = {
 }
 export type PrFile = {
   filename: string; status: string; additions: number; deletions: number
-  has_patch: boolean; patch?: string
+  has_patch: boolean; patch?: string; diff_anchor?: string
 }
 export type PrReview = {
   id: number; user: string | null; state: string; commit_id: string | null
@@ -662,7 +663,11 @@ const handlers: Handlers = {
     // missing_paths means not observed when pagination failed, not confirmed absent;
     // .corvus exclusion still applies and its count excludes only state records.
     const requested = target.paths === undefined ? undefined : new Set(target.paths)
-    const selected = requested === undefined ? items : items.filter(item => requested.has(typeof item === "string" ? item : item.filename))
+    // Only selected patch records gain GitHub's Files-tab anchor, hashing the
+    // exact API filename as UTF-8; unfiltered/names-only serialization stays intact.
+    const selected = requested === undefined ? items : (items as PrFile[])
+      .filter(item => requested.has(item.filename))
+      .map(item => ({ ...item, diff_anchor: `diff-${createHash("sha256").update(item.filename).digest("hex")}` }))
     const found = new Set(result.items.map(item => typeof item === "string" ? item : item.filename))
     const data = { files: selected as PrFile[] | string[], excluded_corvus: result.items.length - items.length,
       ...(target.paths === undefined ? {} : { missing_paths: target.paths.filter(path => !found.has(path)) }) }

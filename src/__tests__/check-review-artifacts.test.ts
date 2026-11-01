@@ -536,6 +536,7 @@ const lastNote = (events: ReviewFixture["events"]) => {
 }
 
 type LightReplayOptions = {
+  shards?: boolean; inline?: boolean
   intake?: "CLOSED" | "MERGED"; terminal?: "CLOSED" | "MERGED"; exhaustion?: boolean
   previews?: boolean; driftAfterPreview?: boolean; rawOnly?: boolean; baseOnly?: boolean; codeOnly?: boolean
   ownership?: boolean; takeover?: boolean; age?: boolean; root?: boolean; restartAge?: number
@@ -566,6 +567,9 @@ function buildLightRestartTrace(data: ReviewFixture, count: number, options: Lig
   // Every light replay uses the same one-file/one-added-line product fixture;
   // assert that oracle before reporting its actual scope, never a scope ceiling.
   expect(files).toEqual(["x"])
+  // Synthetic two-file control inventory for the sharding route; no model-run
+  // claim or product-size ceiling. Each shard still has its own diff evidence.
+  if (options.shards) files.push("y")
   const opts = { reviewStateRoot: join(input.fixture, ".corvus") }, started = "2026-09-13T00:00:00Z"
   const pr = (op: string, output: object, extra = {}) => toolEvent("corvus_review_pr", { op, owner: "owner", name: "repo", pr: 8, ...extra }, output)
   const meta = (h: string, b: string, state = "OPEN", raw = h) => pr("metadata", { ok: true, number: 8, url: "https://github.com/owner/repo/pull/8", state, code_head: h, head_sha: raw, baseRefOid: b, isCrossRepository: false, api_calls: 1 })
@@ -597,10 +601,11 @@ function buildLightRestartTrace(data: ReviewFixture, count: number, options: Lig
     if (!options.local) events.push(toolEvent("bash", { command: "git fetch --no-tags github pull/8/head" }, {}), toolEvent("bash", { command: `git cat-file -e '${h}^{commit}'` }, {}),
       toolEvent("corvus_review_worktree", { op: "create", ...treeTuple(h) }, options.createFailure ? { ok: false, reason: "fixture-create-failed" }
         : { ok: true, path: treePath(h), head: h, populated_files: 1, skipped: [], symlinks_as_files: [], preexisting_corvus_worktrees: [] }))
-    for (const axis of ["standards", "spec_security"]) {
-      const id = `ses_light_${i}_${axis}`
-      events.push(toolEvent("task", { subagent_type: "pr-light-reviewer", prompt: `attempt: ${i}; axis: ${axis}; code_head: ${h}; base_sha: ${b}; ${options.local || options.createFailure ? "" : `head_worktree: ${treePath(h)}; `}advisory_size_settings: {large_pr_threshold: 20, large_pr_strategy: warn} (advice only); fresh detector-led assessment and scope selection` }, { sessionID: id, status: "completed" }))
-      children.push({ id, tools: options.local ? [toolEvent("read", { filePath: join(input.fixture, ".smoke-light-unstaged") }, {})] : [meta(h, b), pr("files", { ok: true, files: [{ filename: "x", additions: 1, deletions: 0, changes: 1, patch: "@@ -0,0 +1 @@\n+line" }], complete_pagination: true, api_calls: 1 }, { paginate: true }), pr("diff", { ok: true, text: "diff --git a/x b/x\nnew file mode 100644\n--- /dev/null\n+++ b/x\n@@ -0,0 +1 @@\n+line\n", api_calls: 1 })] })
+    for (const axis of ["standards", "spec_security"]) for (let shard = 1; shard <= (options.shards ? 2 : 1); shard++) {
+      const focus = options.shards ? [files[shard - 1]] : files
+      const id = `ses_light_${i}_${axis}${shard === 1 ? "" : `_${shard}`}`
+      events.push(toolEvent("task", { subagent_type: "pr-light-reviewer", prompt: `attempt: ${i}; axis: ${axis}; shard: ${shard}/${options.shards ? 2 : 1}; focus_paths: ${JSON.stringify(focus)}; code_head: ${h}; base_sha: ${b}; ${options.local || options.createFailure ? "" : `head_worktree: ${treePath(h)}; `}advisory_size_settings: {large_pr_threshold: 20, large_pr_strategy: warn} (advice only); full assigned scope` }, { sessionID: id, status: "completed" }))
+      children.push({ id, tools: options.local ? [toolEvent("read", { filePath: join(input.fixture, ".smoke-light-unstaged") }, {})] : [meta(h, b), pr("files", { ok: true, files: focus.map(filename => ({ filename, additions: 1, deletions: 0, changes: 1, patch: "@@ -0,0 +1 @@\n+line" })), complete_pagination: true, api_calls: 1 }, { paginate: true }), pr("diff", { ok: true, text: focus.map(path => `diff --git a/${path} b/${path}\nnew file mode 100644\n--- /dev/null\n+++ b/${path}\n@@ -0,0 +1 @@\n+line\n`).join(""), api_calls: 1 })] })
     }
     events.push(status(options.ownership ? 7200 : options.restartAge ?? 60, options.takeover ? "other-run" : "run-1"))
     if (options.ownership || options.takeover) break
@@ -609,6 +614,15 @@ function buildLightRestartTrace(data: ReviewFixture, count: number, options: Lig
     if (options.exhaustion || i < count && !options.previews) { events.push(meta(nextH, nextB)); continue }
     if (!options.local) events.push(meta(h, b, "OPEN", options.rawOnly ? lightHead(4) : h))
     const candidate: CandidateRequest = { commit_id: h, event: "COMMENT", body: `<!-- corvus-review v2 path=${relative} head=${h} round=${i} -->\n## Corvus Light Review — ${options.local ? "repo / smoke/light-unrelated" : "#8 Fixture"}\n**COMMENT · \`${h.slice(0, 7)}\` · 1 files, +1/−0 · Standards 0 · Spec 0 · inline 0**\n\n## Standards\n**No actionable findings in reviewed scope.** · 0 findings\n\n## Spec\n**No actionable findings in reviewed scope.** · 0 findings`, comments: [] }
+    if (options.shards) candidate.body = candidate.body.replace("1 files, +1/−0", "2 files, +2/−0")
+    if (options.inline) {
+      const diff_anchor = `diff-${createHash("sha256").update("x").digest("hex")}`
+      const comment = { path: "x", line: 1, side: "RIGHT" as const, body: "**major** (standards/correctness, ls1-logic-standards-001): Keep the validated identity\nThe unchecked value loses the verified identity.\nUse the verified value instead." }
+      candidate.comments.push(comment)
+      candidate.body = candidate.body.replace("Standards 0 · Spec 0 · inline 0", "Standards 1 · Spec 0 · inline 1")
+        .replace("**No actionable findings in reviewed scope.** · 0 findings", `**Preserve the verified identity.** · 1 major\n- **major** · [\`x:1\`](https://github.com/owner/repo/pull/8/files#${diff_anchor}R1) — Keep the validated identity`)
+      events.push(pr("files", { ok: true, files: [{ filename: "x", diff_anchor, patch: "@@ -0,0 +1 @@\n+line" }], complete_pagination: true, missing_paths: [], api_calls: 1 }, { paginate: true, paths: ["x"] }))
+    }
     writeFileSync(join(input.fixture, path), canonicalize(candidate))
     const frozen = freeze(join(input.fixture, path), join(input.fixture, artifact), opts)
     // Assert before narrowing, rather than throwing from a parameterized setup.
@@ -647,10 +661,10 @@ function buildLightRestartTrace(data: ReviewFixture, count: number, options: Lig
   const inert = lastArtifact && (options.terminal || options.age || options.root) ? `Retained superseded artifact from attempt ${lastArtifact.attempt} head ${lastArtifact.h} is inert, not authorized for latest head.` : ""
   const coverage = options.intake || options.held
     ? "Actual coverage: not assessed; reviewed 0 of null files (null changed lines); omitted null; unavailable null"
-    : "Actual coverage: all_diff_files; reviewed 1 of 1 files (1 changed lines); omitted 0; unavailable 0"
+    : `Actual coverage: all_diff_files; reviewed ${files.length} of ${files.length} files (${files.length} changed lines); omitted 0; unavailable 0`
   const cleanupNote = options.cleanupFailure ? `Worktree remove failed: fixture-cleanup-failed; path ${treePath(heads.at(-1)!.code_head)}; manual remedy: git worktree remove --force '${treePath(heads.at(-1)!.code_head)}'.` : ""
   const createNote = options.createFailure ? "Worktree create failed: fixture-create-failed; object-read fallback." : ""
-  events.push(lightNote(`Full-pipeline bookkeeping omitted by light contract.\nDetection attempts: ${heads.length}\n${heads.map(x => lightAttemptLedger(x.attempt, x.code_head, x.base_sha, x.worktree, x.cleanup)).join("\n")}\nTerminal reason: ${reason}; ${options.posted ? "posted; no further posting" : "no posting"}. Latest observed head: ${options.exhaustion ? headFor(count + 1) : heads.at(-1)?.code_head ?? headFor(1)}.\n${coverage}; synthesis counts: Standards 0, Spec 0. ${lastArtifact ? artifact : "Candidate and frozen artifact unavailable: no presentation produced."}; files may appear untracked. ${inert} ${cleanupNote} ${createNote}`))
+  events.push(lightNote(`Full-pipeline bookkeeping omitted by light contract.\nDetection attempts: ${heads.length}\n${heads.map(x => lightAttemptLedger(x.attempt, x.code_head, x.base_sha, x.worktree, x.cleanup)).join("\n")}\nTerminal reason: ${reason}; ${options.posted ? "posted; no further posting" : "no posting"}. Latest observed head: ${options.exhaustion ? headFor(count + 1) : heads.at(-1)?.code_head ?? headFor(1)}.\n${coverage}; synthesis counts: Standards ${options.inline ? 1 : 0}, Spec 0. ${lastArtifact ? artifact : "Candidate and frozen artifact unavailable: no presentation produced."}; files may appear untracked. ${inert} ${cleanupNote} ${createNote}`))
   data.events.splice(0, data.events.length, ...events)
   input.writer = options.posted || options.writerMoved || false // Synthetic writer receipts, never a live run.
   input.head = lightHead(4) // Intentionally not the live intake or any reviewed head.
@@ -673,6 +687,8 @@ async function replayCase(count: number, options: LightReplayOptions, mutation?:
 }
 
 const lightRestartCases: readonly [string, number, LightReplayOptions][] = [
+  ["two axes × two disjoint shards", 1, { shards: true }],
+  ["inline finding has an exact linked axis index", 1, { inline: true }],
   ["two attempts with independently previewed artifacts", 2, { previews: true }],
   ["three attempts with independently previewed artifacts", 3, { previews: true }],
   ["code-head-only drift reuses same-base config", 2, { previews: true, codeOnly: true }],
@@ -699,7 +715,7 @@ test.each(lightRestartCases)("AC4/AC6–AC10 replay: %s", async (_name, count, o
    expect(result.rows).toHaveLength(68) // + worktree route/render structure + two snapshot rows; auto unchanged.
   expect(lastNote(data.events)).toContain(options.intake
     ? "Actual coverage: not assessed; reviewed 0 of null files (null changed lines); omitted null; unavailable null"
-    : "Actual coverage: all_diff_files; reviewed 1 of 1 files (1 changed lines); omitted 0; unavailable 0")
+    : `Actual coverage: all_diff_files; reviewed ${options.shards ? 2 : 1} of ${options.shards ? 2 : 1} files (${options.shards ? 2 : 1} changed lines); omitted 0; unavailable 0`)
   const controls = result.rows.find(row => row.check === "light attempt controls")
   expect(controls?.ok).toBe(true)
    if (options.intake || options.cleanupFailure || options.createFailure) expect(rowOutcome(controls!)).toBe("N/A-PASS:")
@@ -712,7 +728,8 @@ test.each(lightRestartCases)("AC4/AC6–AC10 replay: %s", async (_name, count, o
      else expect(prompt).not.toContain("head_worktree:")
      expect(prompt).not.toContain("max_targeted_reads")
     expect(prompt).toContain("advisory_size_settings: {large_pr_threshold: 20, large_pr_strategy: warn} (advice only)")
-    expect(prompt).toContain("fresh detector-led assessment and scope selection")
+    expect(prompt).toContain("full assigned scope")
+    expect(prompt).toMatch(/shard: [1-9]\d*\/[1-9]\d*; focus_paths: \[/)
     expect(prompt).not.toMatch(/max_files|max_changed_lines|reviewed bounds/)
   }
   const presentations = tools.filter(tool => tool.part.tool === "corvus_review_payload" && (tool.part.state.input as { op?: string }).op === "preview")
@@ -843,8 +860,8 @@ test("T5 render predicate accepts the skill's extracted literal template, not a 
   const values: Record<string, string> = {
     marker: `<!-- corvus-review v2 path=.corvus/reviews/pr8 head=${lightHead(1)} round=1 -->`, N: "8", "PR title": "Fixture",
     "COMMENT|REQUEST_CHANGES": "COMMENT", sha7: "1111111", files: "1", additions: "1", deletions: "0", n: "1", i: "0",
-    "one-sentence assessment headline": "Address the evidenced finding.", "counts by severity word; mark inline-only counts, e.g. 1 major (inline)": "1 major",
-    severity: "major", dimension: "correctness", id: "ls-logic-standards-001", title: "Keep the validated identity", path: "x", line: "1",
+    "one-sentence assessment headline": "Address the evidenced finding.", "counts by severity word, e.g. 1 major": "1 major",
+    severity: "major", dimension: "correctness", id: "ls1-logic-standards-001", title: "Keep the validated identity", path: "x", line: "1",
     "≤3 short source lines of problem/impact": "The unchecked value loses the verified identity.",
     "one ```suggestion``` block (≤~8 lines) or one-sentence fix": "Use the verified value instead.",
     "approach/rationale only when not all diff files, or anything omitted/unavailable": "One context dependency was unavailable.",
@@ -852,8 +869,9 @@ test("T5 render predicate accepts the skill's extracted literal template, not a 
     "material intent/head/worktree/config/history/transport/brief gaps, only when present": "The missing dependency limits this conclusion.",
   }
   const example = template.replace(/<state_notices, only when present:>\n> \[!NOTE\]\n> <draft\/self-review\/identity unknown notice>\n/, "")
+    .replaceAll(/<one index line per inline finding:>\n- [^\n]+\n/g, "")
     .replaceAll("<body-only findings, each:>\n", "").replace(/<([^>]+)>/g, (token, key: string) => values[key] ?? token)
-    .replace("(spec/correctness, ls-logic-standards-001)", "(spec/correctness, lsp-logic-spec-001)")
+    .replace("(spec/correctness, ls1-logic-standards-001)", "(spec/correctness, lsp1-logic-spec-001)")
   expect(example).not.toMatch(/<[^!][^>]*>/)
   expect(example).toMatch(/^## Review limits$/m)
   expect(lightRenderErrors(example)).toEqual([])
@@ -864,16 +882,45 @@ test("T5 render predicate accepts the skill's extracted literal template, not a 
   expect(lightRenderErrors(example.replace("## Review limits", "### Review limits"))).toContain("Review limits must be review-wide")
   const block = example.slice(example.indexOf("**major** (standards/"), example.indexOf("\n\n## Spec"))
   expect(block).toContain("Use the verified value instead.")
-  const next = block.replace("ls-logic-standards-001", "ls-logic-standards-002")
+  const next = block.replace("ls1-logic-standards-001", "ls1-logic-standards-002")
   const separated = example.replace(block, `${block}\n\n${next}`)
   expect(lightRenderErrors(separated)).toEqual([])
   expect(lightRenderErrors(example.replace(block, `${block}\n${next}`))).toContain("consecutive body findings lack blank-line separation")
-  const inlineOnly = example.replace(block, "").replace("· inline 0**", "· inline 1**").replace("· 1 major\n", "· 1 major (inline)\n")
-  expect(inlineOnly).toContain("· 1 major (inline)")
+  const inlineOnly = example.replace(block, "").replace("· inline 0**", "· inline 1**")
+  expect(inlineOnly).toContain("· 1 major")
   expect(inlineOnly).not.toContain("**major** (standards/")
   expect(lightRenderErrors(inlineOnly)).toEqual([])
   for (const broken of [example.replace("## Spec", "## Missing"), example.replace("**COMMENT ·", "COMMENT ·"), `${example}\n- Fourth limit.`,
     `${example}\nReviewed paths: x, y`, example.replace("## Corvus Light Review", "## Other Review")]) expect(lightRenderErrors(broken).length).toBeGreaterThan(0)
+})
+
+test.each(["missing", "wrong hash", "wrong line", "wrong axis", "duplicate", "wrong repo"])("inline index rejects %s", async kind => {
+  const data = await lightFixture(1, { inline: true })
+  const producer = operation(data.events, "corvus_review_persist", "write_candidate")
+  const value = (producer.part.state.input as { candidate: CandidateRequest }).candidate
+  const index = value.body.split("\n").find(line => line.startsWith("- **major**"))!
+  const body = kind === "missing" ? value.body.replace(index, "") : kind === "wrong hash" ? value.body.replace(/#diff-[a-f0-9]+/, "#diff-" + "a".repeat(64))
+    : kind === "wrong line" ? value.body.replace("R1)", "R2)") : kind === "wrong axis" ? value.body.replace(index, "").replace("## Spec\n", `## Spec\n${index}\n`)
+    : kind === "duplicate" ? value.body.replace(index, `${index}\n${index}`) : value.body.replace("github.com/owner/repo/", "github.com/other/repo/")
+  expect(lightRenderErrors(body, false, value.comments, data.input).length).toBeGreaterThan(0)
+  expect(lightRenderErrors(value.body, false, value.comments, data.input)).toEqual([])
+  const range = { ...value.comments[0], start_line: 1, start_side: "RIGHT" as const, line: 3 }
+  const rangeBody = value.body.replace("`x:1`", "`x:1–3`").replace("R1)", "R1-R3)")
+  expect(lightRenderErrors(rangeBody, false, [range], data.input)).toEqual([])
+  expect(lightRenderErrors(rangeBody, true, [range], data.input)).toContain("LOCAL has inline index links")
+  // Relocation replaces index with the unchanged compact comment plus location.
+  const relocated = value.body.replace(index, range.body.replace("\n", "\n`x:1–3` — ")).replace("inline 1", "inline 0")
+  expect(lightRenderErrors(relocated, false, [], data.input)).toEqual([])
+})
+
+test.each(["overlap", "missing path", "duplicate shard", "missing axis"])("sharded roster rejects %s", async kind => {
+  const { result } = await replayCase(1, { shards: true }, data => {
+    const calls = data.events.flatMap(event => "tool" in event.part && event.part.tool === "task" ? [event.part.state.input] : [])
+    const target = calls[1] as { prompt: string }
+    target.prompt = kind === "overlap" ? String(target.prompt).replace('["y"]', '["x"]') : kind === "missing path" ? String(target.prompt).replace('["y"]', "[]")
+      : kind === "duplicate shard" ? String(target.prompt).replace("shard: 2/2", "shard: 1/2") : String(target.prompt).replace("axis: standards", "axis: spec_security")
+  })
+  expect(result.rows.find(row => row.check === "light detector roster")?.ok).toBe(false)
 })
 
 test.each([

@@ -5,6 +5,18 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.11.0-beta.2 — 2026-11-01
+
+### Changed
+
+- Light review plans cohesive shards from the trusted changed-file inventory and dispatches every shard of both axes in one foreground batch. One shard per axis remains the comfortable small-diff case; large diffs gain parallel coverage without numeric shard/file/line caps or review time limits. Each assigned eligible hunk is reviewed by default; only non-reviewable content is omitted with reasons, and focus/sampling require unavailable evidence rather than size. Restart re-plans shards; a failed shard preserves other results with a named uncovered-path gap, without a repair rerun.
+- Inline findings keep their compact details inline and gain one-line severity/location/title indexes under their axis headlines, linked to exact diff lines or ranges using paths-filtered `diff_anchor` results. Body-only findings retain full blocks; relocation replaces only affected index lines with compact body findings. LOCAL has no links. Checker coverage now includes shard roster/partition accounting and exact inline-index anchors, without changing full-review rows.
+
+### Fixed
+
+- Light lock acquisition rejects `force: true` on both hosts, preserving a held lock. Fixed light denies additionally cover Git mutation commands and gh mutation families, including merge/pull/rebase/apply/restore/clean/config, PR close/ready/create and issue/release/repo/workflow/run/credential commands; additional user denials and model overrides remain intact.
+- Paths-filtered `corvus_review_pr` files records return `diff_anchor: "diff-" + sha256(path)` without changing unfiltered results. Shared lock expiry/restart admission, action/minor/marker rules and digest-bound writer publication remain unchanged; new live timing/quality results are not claimed.
+
 ## 0.11.0-beta.1 — 2026-11-01
 
 ### Added

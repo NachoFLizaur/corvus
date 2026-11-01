@@ -1427,7 +1427,7 @@ type LightPresentation = { attempt: LightAttempt; producer: Tool; value: RecordV
  * These expressions mirror the skill's sole literal template; its extracted,
  * instantiated template is a regression oracle. Missing structure fails closed.
  * LOCAL changes only the title identity. Auto never consumes this predicate. */
-export function lightRenderErrors(body: string, local = false): string[] {
+export function lightRenderErrors(body: string, local = false, comments?: CandidateRequest["comments"], locator?: { owner: string; repo: string; pr: string }): string[] {
   const errors: string[] = []
   const content = body.split(/\r?\n/).slice(1).join("\n")
   const title = local ? /^## Corvus Light Review — .+$/m : /^## Corvus Light Review — #\d+ .+$/m
@@ -1444,11 +1444,36 @@ export function lightRenderErrors(body: string, local = false): string[] {
   const findingLines = [...content.matchAll(/^\*\*.*\*\* \((?:standards|spec)\/[^\n]*$/gm)]
   for (const [index, finding] of findingLines.entries()) {
     const line = finding[0]
-    if (!/^\*\*(?:blocker|critical|major|minor|praise|thought|note)\*\* \((standards|spec)\/(architecture|correctness|conventions|security), (?:ls|lsp)-(?:arch|logic|conv|sec)-(?:standards|spec)-\d{3}\): \S.{0,79}$/.test(line)) errors.push("invalid compact finding identity")
+    if (!/^\*\*(?:blocker|critical|major|minor|praise|thought|note)\*\* \((standards|spec)\/(architecture|correctness|conventions|security), (?:ls|lsp)[1-9]\d*-(?:arch|logic|conv|sec)-(?:standards|spec)-\d{3}\): \S.{0,79}$/.test(line)) errors.push("invalid compact finding identity")
     const axis = /\((standards|spec)\//.exec(line)?.[1]
     const position = finding.index, standards = axes[0]?.index ?? Infinity, spec = axes[1]?.index ?? Infinity
     if (axis === "standards" ? position < standards || position > spec : position < spec) errors.push("finding in wrong axis section")
     if (index > 0 && findingLines[index - 1][0].includes(`(${axis}/`) && !/\n[\t ]*\n$/.test(content.slice(0, position))) errors.push("consecutive body findings lack blank-line separation")
+  }
+  const indexes = [...content.matchAll(/^- \*\*([^\n]+?)\*\* · \[`([^`\n]+)`\]\(([^\n]+?)\) — ([^\n]+)$/gm)]
+  if (local && indexes.length) errors.push("LOCAL has inline index links")
+  // Candidate comments are the oracle before freeze; fitted artifacts have no
+  // comments and are checked structurally only (the mechanical fitter owns bytes).
+  // Every surviving inline must have exactly one matching index in its axis;
+  // absent/malformed anchors fail regardless of omissions or detector errors.
+  if (comments) {
+    const matched = new Set<number>()
+    for (const comment of comments) {
+      const identity = /^\*\*(blocker|critical|major|minor|praise|thought|note)\*\* \((standards|spec)\/(?:architecture|correctness|conventions|security), ((?:ls|lsp)[1-9]\d*-(?:arch|logic|conv|sec)-(?:standards|spec)-\d{3})\): (\S.{0,79})$/m.exec(comment.body)
+      if (!identity || comment.side !== "RIGHT") { errors.push("invalid inline finding identity/side"); continue }
+      const start = comment.start_line ?? comment.line
+      const location = `${comment.path}:${start === comment.line ? start : `${start}–${comment.line}`}`
+      const anchor = `diff-${createHash("sha256").update(comment.path).digest("hex")}R${start}${start === comment.line ? "" : `-R${comment.line}`}`
+      const expectedURL = locator ? `https://github.com/${locator.owner}/${locator.repo}/pull/${locator.pr}/files#${anchor}` : null
+      const matches = indexes.flatMap((index, i) => index[1] === identity[1] && index[2] === location && index[4] === identity[4]
+        && (expectedURL ? index[3] === expectedURL : /^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/\d+\/files#/.test(index[3]) && index[3].endsWith(`#${anchor}`)) ? [i] : [])
+      if (matches.length !== 1 || matched.has(matches[0])) { errors.push("inline finding lacks unique exact index link"); continue }
+      matched.add(matches[0])
+      const position = indexes[matches[0]].index
+      if (identity[2] === "standards" ? position < (axes[0]?.index ?? Infinity) || position > (axes[1]?.index ?? Infinity) : position < (axes[1]?.index ?? Infinity)) errors.push("inline index in wrong axis section")
+      if (findingLines.some(finding => finding[0].includes(`, ${identity[3]}):`))) errors.push("inline finding detail duplicated in body")
+    }
+    if (matched.size !== indexes.length) errors.push("unmatched inline index link")
   }
   return errors
 }
@@ -1466,6 +1491,19 @@ function lightFieldValues(value: string, key: string): string[] {
     const raw = match[1].trim().replace(/[.,)]+$/, "")
     try { return raw.startsWith('"') ? text(JSON.parse(raw)) : raw.replace(/^[`']+|[`'".,)]+$/g, "") } catch { return "" }
   })
+}
+
+/** Trusted JSON path arrays are decoded before roster validation, never executed.
+ * Missing, duplicate or non-string paths fail the roster; no size setting disables
+ * disjointness or coverage. The complete intake listing is the coverage oracle. */
+function lightFocusPaths(prompt: string): string[] | null {
+  const arrays = [...prompt.matchAll(/\bfocus_paths"?\s*[:=]\s*(\[(?:[^\]"\\]|"(?:\\.|[^"\\])*")*\])/g)]
+  if (arrays.length !== 1) return null
+  try {
+    const paths: unknown = JSON.parse(arrays[0][1])
+    return Array.isArray(paths) && paths.every(path => typeof path === "string" && path && !path.startsWith("/")
+      && !path.split("/").some(part => ["", ".", ".."].includes(part))) && new Set(paths).size === paths.length ? paths : null
+  } catch { return null }
 }
 
 /** Decode in-session authorization objects, not child prose or summary claims. */
@@ -1550,21 +1588,48 @@ export async function checkLightAttempts(input: Inputs, events: RecordValue[], t
     const firstDispatch = dispatches[0], dispatch = dispatches.at(-1)!
     const axes = dispatches.map(tool => /\baxis[\s"_:=-]+(standards|spec_security)\b/i.exec(text(tool.input.prompt))?.[1])
     const between = controls.filter(tool => tool.index >= firstDispatch.index && tool.index <= dispatch.index)
-    if (number !== index + 1 || dispatches.length !== 2 || new Set(axes).size !== 2 || axes.some(axis => !axis)
-      || between.length !== 2 || dispatches.some(tool => tool.input.background === true)
-      || new Set(dispatches.map(tool => tool.turn ?? stored.find(item => item.callID === tool.callID)?.turn).filter(Boolean)).size > 1) rosterError(`attempt ${number}: require two foreground distinct axis briefs in one batch`)
+    if (number !== index + 1 || new Set(axes).size !== 2 || axes.some(axis => !axis)
+      || between.length !== dispatches.length || dispatches.some(tool => tool.input.background === true)
+      || new Set(dispatches.map(tool => tool.turn ?? stored.find(item => item.callID === tool.callID)?.turn).filter(Boolean)).size > 1) rosterError(`attempt ${number}: require foreground shards of both axes in one batch`)
     const source = local ? intake : metadata.findLast(tool => tool.index < firstDispatch.index && validOpen(tool))
     if (!source) { rosterError(`attempt ${number}: no validated OPEN head/base`); continue }
     const head = text(source.output.code_head), base = text(local ? source.output.merge_base : source.output.baseRefOid)
     const attempt = { number, head, base, firstDispatch, dispatch, dispatches, metadata: source, end: [...groups.values()][index + 1]?.[0].index ?? Infinity }
     attempts.push(attempt)
+    const inventoryCall = local ? intake : tools.findLast(tool => prCall(tool, "files") && tool.index < firstDispatch.index
+      && ok(tool) && tool.input.names_only === true && tool.output.complete_pagination === true)
+    const rawInventory = local ? inventoryCall?.output.changed_files : inventoryCall?.output.files
+    const inventory = Array.isArray(rawInventory) && rawInventory.every(path => typeof path === "string")
+      ? rawInventory.filter(path => !/^\.corvus(?:\/|$)/.test(path)) as string[] : null
+    if (!inventory) rosterError(`attempt ${number}: missing complete shard inventory`)
+    for (const axis of ["standards", "spec_security"]) {
+      const shards = dispatches.filter((_, i) => axes[i] === axis)
+      const paths: string[] = [], ordinals: number[] = []
+      for (const shard of shards) {
+        const prompt = text(shard.input.prompt), parts = /^([1-9]\d*)\/([1-9]\d*)$/.exec(lightFieldValues(prompt, "shard")[0] ?? "")
+        const focus = lightFocusPaths(prompt)
+        if (lightFieldValues(prompt, "shard").length !== 1 || !parts || Number(parts[2]) !== shards.length
+          || Number(parts[1]) > shards.length || !focus || inventory?.length && !focus.length) rosterError(`attempt ${number}: invalid ${axis} shard/focus_paths`)
+        if (parts) ordinals.push(Number(parts[1]))
+        if (focus) paths.push(...focus)
+      }
+      if (new Set(ordinals).size !== shards.length || new Set(paths).size !== paths.length) rosterError(`attempt ${number}: duplicate ${axis} shard or overlapping focus_paths`)
+      // Omitted inventory paths need a path-specific terminal disclosure and a
+      // non-reviewable reason. Evidence-unavailable assigned files remain shards.
+      const omitted = inventory?.filter(path => !paths.includes(path)) ?? []
+      const disclosed = omitted.every(path => summary.split(/\r?\n/).some(line => line.includes(path)
+        && /omitt|exclud/i.test(line) && /generated|vendor|lockfile|binar|snapshot|minified/i.test(line)))
+      if (inventory && (paths.some(path => !inventory.includes(path)) || !disclosed)) rosterError(`attempt ${number}: ${axis} focus_paths do not cover inventory minus disclosed non-reviewable omissions`)
+    }
     for (const dispatch of dispatches) {
       const child = detectorChildren.find(child => child.id === childResult(dispatch).sessionID && child.parentID === parentID)
       const prompt = text(dispatch.input.prompt)
       if (/\bmax_targeted_reads\b/.test(prompt) || lightFieldPresent(prompt, "read_budget")) rosterError(`attempt ${number}: retired read ceiling in detector control`)
       if (!underLock(dispatch) || !["completed", "error", "cancelled"].includes(childResult(dispatch).status) || !child || !oid(head) || !oid(base)
         || !prompt.includes(head) || !prompt.includes(base)) rosterError(`attempt ${number}: dispatch/child/head/base accounting invalid`)
-      if (!local && child && !["metadata", "files", "diff"].every(op => child.tools.some(tool => prCall(tool, op) && ok(tool)
+      const failed = ["error", "cancelled"].includes(childResult(dispatch).status)
+      if (failed && !(lightFocusPaths(prompt) ?? []).every(path => summary.split(/\r?\n/).some(line => line.includes(path) && /shard|uncovered/i.test(line)))) rosterError(`attempt ${number}: failed shard lacks uncovered-path disclosure`)
+      if (!failed && !local && child && !["metadata", "files", "diff"].every(op => child.tools.some(tool => prCall(tool, op) && ok(tool)
         && (op !== "metadata" || tool.output.code_head === head && tool.output.baseRefOid === base)))) rosterError(`attempt ${number}: detector lacks fresh metadata/files/diff`)
     }
     const previous = attempts[index - 1]
@@ -1598,7 +1663,7 @@ export async function checkLightAttempts(input: Inputs, events: RecordValue[], t
   const assigned = detectorCalls.map(tool => childResult(tool).sessionID)
   const writerChildren = descendants.filter(child => child.agent === "pr-comment-writer")
   const assignedWriters = writerCalls.filter(tool => tool.state.status === "completed").map(tool => childResult(tool).sessionID)
-   const rosterOK = !rosterErrors.length && detectorCalls.length <= 6 && detectorCalls.length === detectorChildren.length && new Set(assigned).size === assigned.length
+   const rosterOK = !rosterErrors.length && attempts.length <= 3 && detectorCalls.length === detectorChildren.length && new Set(assigned).size === assigned.length
     && detectorChildren.every(child => assigned.includes(child.id))
     && writerChildren.length === assignedWriters.length && new Set(assignedWriters).size === assignedWriters.length && writerChildren.every(child => assignedWriters.includes(child.id))
      && descendants.every(child => child.parentID === parentID && (child.agent === "pr-light-reviewer" || input.writer && child.agent === "pr-comment-writer"))
@@ -1606,7 +1671,7 @@ export async function checkLightAttempts(input: Inputs, events: RecordValue[], t
    const ledgerOK = countClaim && Number(countClaim[1]) === attempts.length && attempts.every(attempt => summary.split(/\r?\n/).some(line =>
     new RegExp(`\\battempt[\\s\"_:=-]+${attempt.number}\\b`, "i").test(line) && line.includes(attempt.head) && line.includes(attempt.base)))
    const rosterRow: Row = { check: "light detector roster", ok: !evidenceError && rosterOK && Boolean(ledgerOK), code: 5,
-     detail: !evidenceError && rosterOK && ledgerOK ? `${detectorChildren.length} detector sessions; ${detectorCalls.length} accounted dispatches (two per attempt, ≤6 total); ledger matches every head/base`
+      detail: !evidenceError && rosterOK && ledgerOK ? `${detectorChildren.length} detector sessions; ${detectorCalls.length} accounted axis/shard dispatches (≤3 attempts); ledger matches every head/base`
        : `forged: ${evidenceError || rosterErrors.join("; ") || "detector/child/ledger cardinality mismatch"}` }
   rows.push(rosterRow)
 
@@ -1702,8 +1767,16 @@ export async function checkLightAttempts(input: Inputs, events: RecordValue[], t
       const marker = parseReviewMarker(text(value.body).split(/\r?\n/)[0])
       const history = tools.findLast(tool => tool.name === "corvus_review_verdict" && tool.index < producer.index && tool.index > (attempts[attempt.number - 2]?.dispatch.index ?? -1))
       if (!marker || marker.head !== attempt.head || (marker.path ? marker.path !== relativeRoot || !ok(history) || marker.round !== history?.output.round : ok(history) || !disclosure(summary, "round", diagnostic(history)))) throw new Error("attempt marker/history mismatch")
-       const renderErrors = lightRenderErrors(text(value.body), local)
-       if (renderErrors.length) throw new Error(renderErrors.join("; "))
+       const renderErrors = lightRenderErrors(text(value.body), local, value.comments as CandidateRequest["comments"], input)
+        if (renderErrors.length) throw new Error(renderErrors.join("; "))
+      for (const path of new Set((value.comments as CandidateRequest["comments"]).map(comment => comment.path))) {
+        const anchor = `diff-${createHash("sha256").update(path).digest("hex")}`
+        const receipt = tools.findLast(tool => prCall(tool, "files") && correlated(tool) && ok(tool)
+          && tool.index > attempt.dispatch.index && tool.index < producer.index && tool.input.paginate === true
+          && Array.isArray(tool.input.paths) && tool.input.paths.includes(path) && tool.output.complete_pagination === true
+          && Array.isArray(tool.output.files) && tool.output.files.some(item => record(item).filename === path && record(item).diff_anchor === anchor))
+        if (!receipt) throw new Error(`inline index lacks tool-produced diff_anchor: ${path}`)
+      }
       presentations.push({ attempt, producer, value })
     } catch (error) { presentationErrors.push(`${producer.index}: ${String(error)}`) }
   }
@@ -1732,7 +1805,7 @@ export async function checkLightAttempts(input: Inputs, events: RecordValue[], t
            if ("reason" in expected || call.output.sha256 !== expected.sha256 || !reportedPathMatches(input.fixture, call.output.artifactPath, join(root, ".light"), "post-request.json")
             || call.output.fitted !== fitted || !isDeepStrictEqual(call.output.measurements, expected.measurements)
              || !isDeepStrictEqual(call.output.omitted, fitted ? fit.omitted : { comments: 0, findings: 0 })) throw new Error("freeze digest/fit/revision mismatch")
-           const renderErrors = lightRenderErrors(text(record(fitted ? fit.request : value).body), local)
+           const renderErrors = lightRenderErrors(text(record(fitted ? fit.request : value).body), local, fitted ? undefined : value.comments as CandidateRequest["comments"], input)
            if (renderErrors.length) throw new Error(`frozen render: ${renderErrors.join("; ")}`)
           presentation.frozen = call; presentation.preview = undefined; presentation.digest = expected.sha256
         } else if (call.input.op === "preview") {
