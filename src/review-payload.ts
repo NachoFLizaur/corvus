@@ -72,7 +72,7 @@ export type FreezeResult =
   | { ok: true; artifactPath: string; sha256: string; measurements: Measurements; fitted: boolean; omitted: ReviewOmissions }
   | CandidateRejection
   | PathRejection
-  | { ok: false; reason: "candidate-bom" | `candidate-${ParseReason}` | "candidate-read-error" | "artifact-write-error" | "artifact-read-error" }
+  | { ok: false; reason: "candidate-bom" | `candidate-${ParseReason}` | "candidate-read-error" | "artifact-write-error" | "artifact-read-error" | "artifact-event-not-allowed" }
   | { ok: false; reason: "readback-mismatch"; expectedBytes: number; actualBytes: number }
 
 export type VerifyResult = {
@@ -336,6 +336,17 @@ export function freeze(candidatePath: string, artifactPath: string, opts: Review
   if (!parsed.ok) return { ok: false, reason: `candidate-${parsed.reason}` }
   let measured = measure(parsed.value)
   if ("reason" in measured) return measured
+  /** Contained canonical paths and schema-checked event are read before fitting
+   * or writes. Light APPROVE fails closed, including library calls without a
+   * storageClass option; only full-class paths permit APPROVE. No bypass exists. */
+  if ((parsed.value as CandidateRequest).event === "APPROVE") {
+    let classRoot: string
+    try { classRoot = fs.realpathSync(opts.reviewStateRoot) }
+    catch { return { ok: false, reason: "path-resolution-error", path: candidatePath } }
+    if (basename(classRoot) === "reviews" && basename(dirname(classRoot)) === ".corvus") classRoot = dirname(classRoot)
+    const lightPath = (path: string) => isLightClassPath(relative(classRoot, path))
+    if (lightPath(candidate.path) || lightPath(artifact.path)) return { ok: false, reason: "artifact-event-not-allowed" }
+  }
   const fitted = !measured.ok
   let omitted: ReviewOmissions = { comments: 0, findings: 0 }
   if (fitted) {

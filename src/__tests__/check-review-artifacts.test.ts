@@ -431,7 +431,21 @@ async function lightFixture(count = 1, options: LightReplayOptions = {}) {
   git(input.fixture, "add", ".smoke-light-staged")
   writeFileSync(join(input.fixture, ".smoke-light-staged"), "worktree staged sentinel\n")
   writeFileSync(join(input.fixture, ".smoke-light-unstaged"), "worktree unstaged sentinel\n")
-  // Remove only fixture-owned full bookkeeping, retaining the built verifier.
+  // LOCAL must build its own verifier through the real harness condition, not
+  // inherit the full-PR fixture's dist and mask a skipped LOCAL build.
+  if (options.local) {
+    rmSync(join(work, "dist"), { recursive: true })
+    expect(existsSync(join(work, "dist/review-payload.js"))).toBe(false)
+    const harness = readFileSync(resolve(import.meta.dirname, "../../scripts/smoke-review.sh"), "utf8")
+    const block = /if \[\[ [^\n]*\]\]; then\n  cap 60 bun build "\$ROOT\/src\/review-payload\.ts"[^]*?\nfi/.exec(harness)?.[0]
+    expect(typeof block).toBe("string")
+    const build = Bun.spawnSync(["bash", "-c", `set -euo pipefail\ncap() { shift; "$@"; }\ndie() { exit "$1"; }\n${block}`], {
+      env: { ...process.env, ROOT: resolve(import.meta.dirname, "../.."), WORK: work, INTAKE: "local", AGENT: "light" },
+    })
+    expect(build.exitCode, build.stderr.toString()).toBe(0)
+    expect(existsSync(join(work, "dist/review-payload.js"))).toBe(true)
+  }
+  // Remove only fixture-owned full bookkeeping.
   rmSync(data.root, { recursive: true })
   const relative = reviewRoot(input), root = join(input.fixture, relative)
   data.root = root

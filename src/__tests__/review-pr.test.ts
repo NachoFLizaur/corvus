@@ -257,6 +257,126 @@ describe("review PR bounded per-path patches", () => {
   })
 })
 
+describe("review PR tool-verified RIGHT anchors", () => {
+  const input = { op: "files", ...locator, paginate: true }
+  const changed = { filename: "src/changed.ts", status: "modified", additions: 2, deletions: 2,
+    patch: "@@ -10,4 +10,4 @@\n context\n-deleted\n+added\n context2\n-tail\n+replacement\n@@ -30 +30 @@\n last" }
+  const added = { filename: "new.ts", status: "added", additions: 2, deletions: 0, patch: "@@ -0,0 +1,2 @@\n+first\n+last\n\\ No newline at end of file" }
+  const deleted = { filename: "deleted.ts", status: "removed", additions: 0, deletions: 1, patch: "@@ -1 +0,0 @@\n-only old" }
+  const binary = { filename: "image.png", status: "added", additions: 0, deletions: 0 }
+  const listing = JSON.stringify([changed, added]) + "\n" + JSON.stringify([deleted, binary])
+  const resultAnchor = (path: string, line: number, reason?: string, start_line?: number) => ({ path, line,
+    ...(start_line === undefined ? {} : { start_line }), postable: reason === undefined, ...(reason ? { reason } : {}),
+    diff_anchor: `diff-${createHash("sha256").update(path).digest("hex")}` })
+
+  test("verifies added/context lines, new files and exact single-hunk ranges without returning patches", async () => {
+    const anchors = [{ path: changed.filename, line: 10 }, { path: changed.filename, line: 11 },
+      { path: changed.filename, start_line: 10, line: 13 }, { path: added.filename, start_line: 1, line: 2 },
+      { path: changed.filename, start_line: 30, line: 30 }]
+    const { exec, calls } = recordingExec(success(listing))
+    const result = JSON.parse(await createPrExecutor({ exec })({ ...input, anchors }))
+    expect(result).toEqual({ ok: true, excluded_corvus: 0,
+      anchors: anchors.map(anchor => resultAnchor(anchor.path, anchor.line, undefined, anchor.start_line)), complete_pagination: true, api_calls: 2 })
+    expect(result).not.toHaveProperty("files")
+    expect(JSON.stringify(result)).not.toContain("patch")
+    expect(calls).toHaveLength(1)
+  })
+
+  test("rejects deleted-only, outside, multi-hunk, missing and patchless anchors with compact reasons", async () => {
+    const anchors = [{ path: deleted.filename, line: 1 }, { path: changed.filename, line: 14 },
+      { path: changed.filename, start_line: 13, line: 30 }, { path: "missing.ts", line: 1 }, { path: binary.filename, line: 1 }]
+    const { exec } = recordingExec(success(listing))
+    expect(JSON.parse(await createPrExecutor({ exec })({ ...input, anchors })).anchors).toEqual([
+      resultAnchor(deleted.filename, 1, "outside-hunk"), resultAnchor(changed.filename, 14, "outside-hunk"),
+      resultAnchor(changed.filename, 30, "spans-hunks", 13), resultAnchor("missing.ts", 1, "path-not-in-pr"), resultAnchor(binary.filename, 1, "no-patch"),
+    ])
+  })
+
+  test.each([
+    "@@ -1,2 +1,2 @@\n context", // truncated hunk, even the observed line cannot establish completeness
+    "@@ -1 +1 @@\n-context only old", // missing RIGHT line
+    "@@ -1 +1 @@\n+new", // missing old line
+    "@@ -1 +1 @@\n context\n+extra", // over-counted
+    "@@ -1 +1 @@\nmalformed",
+    "@@ -1 +9007199254740992 @@\n context",
+    "@@ -0 +0 @@\n context",
+  ])("malformed or incomplete patch %s cannot verify a visible line", async patch => {
+    const { exec } = recordingExec(success(JSON.stringify([{ ...changed, patch }])))
+    expect(JSON.parse(await createPrExecutor({ exec })({ ...input, anchors: [{ path: changed.filename, line: 1 }] })).anchors)
+      .toEqual([resultAnchor(changed.filename, 1, "outside-hunk")])
+  })
+
+  test("incomplete pagination fails every anchor closed, including present early-page matches", async () => {
+    for (const response of [{ ...forbidden, stdout: JSON.stringify([added]) }, success(JSON.stringify([added]) + "\n[{"),
+      success(JSON.stringify([added, { ...binary, additions: "bad" }]))]) {
+      const { exec } = recordingExec(response)
+      const result = JSON.parse(await createPrExecutor({ exec })({ ...input, anchors: [{ path: added.filename, line: 1 }, { path: "missing.ts", line: 1 }] }))
+      expect(result).toMatchObject({ ok: false, complete_pagination: false, anchors: [
+        resultAnchor(added.filename, 1, "incomplete-pagination"), resultAnchor("missing.ts", 1, "incomplete-pagination"),
+      ] })
+      expect(result).not.toHaveProperty("files")
+    }
+  })
+
+  test("anchors combine with independent paths selection and preserve empty-selector semantics", async () => {
+    const { exec } = recordingExec(success(listing), success(listing))
+    const run = createPrExecutor({ exec })
+    const result = JSON.parse(await run({ ...input, paths: [binary.filename], anchors: [{ path: added.filename, line: 2 }] }))
+    expect(result.files).toEqual([{ ...binary, has_patch: false, diff_anchor: resultAnchor(binary.filename, 1).diff_anchor }])
+    expect(result.missing_paths).toEqual([])
+    expect(result.anchors).toEqual([resultAnchor(added.filename, 2)])
+    expect(JSON.parse(await run({ ...input, anchors: [] }))).toEqual({ ok: true, excluded_corvus: 0, anchors: [], complete_pagination: true, api_calls: 2 })
+  })
+
+  test.each([null, {}, "new.ts", [null], [{}], [{ path: "new.ts" }], [{ path: "new.ts", line: 0 }],
+    [{ path: "new.ts", line: 1.5 }], [{ path: "new.ts", line: Number.MAX_SAFE_INTEGER + 1 }], [{ path: "new.ts", line: 1, side: "LEFT" }],
+    [{ path: "new.ts", line: 1, start_line: 2 }], [{ path: "new.ts", line: 1, start_line: null }], [{ path: "new.ts", line: 1, start_line: undefined }],
+    ...["", "./new.ts", "src/../new.ts", "/new.ts", "C:/new.ts", "src\\new.ts", "src/\0new.ts", "a".repeat(1_025)]
+      .map(path => [{ path, line: 1 }]), Array.from({ length: 51 }, () => ({ path: "new.ts", line: 1 }))].map(anchors => [anchors]))(
+    "invalid anchor input %j rejects before any exec", async anchors => {
+      const { exec, calls } = recordingExec()
+      expect(JSON.parse(await createPrExecutor({ exec })({ ...input, anchors }))).toEqual({ ok: false, reason: "invalid-input:anchors", complete_pagination: false, api_calls: 0 })
+      expect(calls).toEqual([])
+    })
+
+  test("dense plain-data anchors reject accessors without executing them; names-only flags and other ops reject", async () => {
+    let reads = 0
+    const accessor: unknown[] = []
+    Object.defineProperty(accessor, "0", { get: () => { reads++; return { path: "new.ts", line: 1 } } })
+    const item = { path: "new.ts" }
+    Object.defineProperty(item, "line", { get: () => { reads++; return 1 } })
+    const { exec, calls } = recordingExec()
+    const run = createPrExecutor({ exec })
+    for (const anchors of [accessor, Array(1), [item]]) expect(JSON.parse(await run({ ...input, anchors })).reason).toBe("invalid-input:anchors")
+    for (const flags of [{ names_only: true }, { include_corvus: true }])
+      expect(JSON.parse(await run({ ...input, anchors: [], ...flags })).reason).toBe("invalid-input:anchors")
+    expect(JSON.parse(await run({ op: "diff", ...locator, anchors: [] })).reason).toBe("invalid-arguments")
+    expect(reads).toBe(0)
+    expect(calls).toEqual([])
+  })
+
+  test("paths-only JSON stays byte-identical to the beta.2 field order and patch bytes", async () => {
+    const { exec } = recordingExec(success(JSON.stringify([added])))
+    const expected = `{"ok":true,"files":[{"filename":"new.ts","status":"added","additions":2,"deletions":0,"has_patch":true,"patch":${JSON.stringify(added.patch)},"diff_anchor":${JSON.stringify(resultAnchor(added.filename, 1).diff_anchor)}}],"excluded_corvus":0,"missing_paths":[],"complete_pagination":true,"api_calls":1}`
+    expect(await createPrExecutor({ exec })({ ...input, paths: [added.filename] })).toBe(expected)
+  })
+
+  test("PR #15-sized selected README patch verifies all three anchors in less than 2 KB", async () => {
+    const readmePatch = "@@ -280,5 +280,5 @@\n" + Array.from({ length: 5 }, () => " " + "x".repeat(10_000)).join("\n")
+      + "\n@@ -704 +704 @@\n " + "x".repeat(3_206)
+    expect(readmePatch.length).toBeGreaterThan(53_000)
+    const records = [{ ...changed, filename: "README.md", patch: readmePatch },
+      { ...changed, filename: "src/review-post.ts", patch: "@@ -113 +113 @@\n context" }]
+    const { exec } = recordingExec(success(JSON.stringify(records)), success(JSON.stringify(records)))
+    const run = createPrExecutor({ exec })
+    expect(Buffer.byteLength(await run({ ...input, paths: records.map(item => item.filename) }))).toBeGreaterThan(50_000)
+    const result = await run({ ...input, anchors: [{ path: "README.md", line: 284 }, { path: "README.md", line: 704 }, { path: "src/review-post.ts", line: 113 }] })
+    expect(Buffer.byteLength(result)).toBeLessThan(2_000)
+    expect(JSON.parse(result).anchors.every((anchor: { postable: boolean }) => anchor.postable)).toBe(true)
+    expect(JSON.parse(result)).not.toHaveProperty("files")
+  })
+})
+
 describe("review repository resolution", () => {
   const ghArgv = ["gh", "repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"]
   const gitArgv = ["git", "remote", "get-url", "origin"]

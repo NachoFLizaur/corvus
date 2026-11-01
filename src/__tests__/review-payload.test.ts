@@ -74,6 +74,28 @@ function totalBoundary(): CandidateRequest {
 const escapeCases = ["parent traversal", "absolute outside root", "symlink outside root"] as const
 
 describe("caller-selected payload storage", () => {
+  test("light APPROVE cannot freeze or overwrite an artifact even without a library class option; full APPROVE stays valid", () => withFixture(({ opts }) => {
+    const directory = join(opts.reviewStateRoot, "workspace")
+    const state = join(directory, ".corvus"), root = join(state, "reviews/pr42")
+    fs.mkdirSync(join(root, ".light"), { recursive: true })
+    const lightCandidate = join(root, ".light/candidate.json"), lightArtifact = join(root, ".light/post-request.json")
+    const fullCandidate = join(root, "candidate.json"), fullArtifact = join(root, "post-request.json")
+    const bytes = canonicalize({ ...candidate(), event: "APPROVE" })
+    for (const path of [lightCandidate, fullCandidate]) fs.writeFileSync(path, bytes)
+    const rejected = { ok: false, reason: "artifact-event-not-allowed" } as const
+    expect(freeze(lightCandidate, lightArtifact, { reviewStateRoot: state })).toEqual(rejected)
+    expect(fs.existsSync(lightArtifact)).toBe(false)
+    fs.writeFileSync(lightArtifact, "preserved artifact\n")
+    const { payload } = createReviewToolExecutors(directory)
+    expect(JSON.parse(payload({ op: "freeze", candidatePath: lightCandidate, artifactPath: lightArtifact }, "corvus-review-light"))).toEqual(rejected)
+    expect(fs.readFileSync(lightArtifact, "utf8")).toBe("preserved artifact\n")
+    // Both candidate and destination class are checked at the shared freeze decision.
+    expect(freeze(fullCandidate, lightArtifact, { reviewStateRoot: state })).toEqual(rejected)
+    const frozen = freeze(fullCandidate, fullArtifact, { reviewStateRoot: state })
+    expect(frozen.ok).toBe(true)
+    if (!frozen.ok) throw new Error(JSON.stringify(frozen))
+    expect(preview(fullArtifact, frozen.sha256, { reviewStateRoot: state })).toMatchObject({ ok: true, event: "APPROVE" })
+  }))
   test("light measure/freeze/preview stay in the class; full cannot enter it or redirect its bytes", () => withFixture(({ opts }) => {
     const directory = join(opts.reviewStateRoot, "workspace")
     const root = join(directory, ".corvus/tasks/example/reviews/pr42")

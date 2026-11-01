@@ -52,6 +52,35 @@ function expectLineLimit(text: string): void {
   expect(Math.max(...text.split("\n").map(line => line.length))).toBeLessThanOrEqual(1_900)
 }
 
+describe("review persist light event rail", () => {
+  test("single-call, begin and pre-upgrade staged finalize reject light APPROVE before candidate mutation; full staging still allows it", () => withFixture(({ opts, reviewRoot, reviewPath }) => {
+    const execute = createPersistExecutor(opts.reviewStateRoot)
+    const light = (args: object) => JSON.parse(execute({ reviewRoot, ...args }, "corvus-review-light"))
+    const approve = { ...candidate, event: "APPROVE" as const }
+    const rejected = { ok: false, reason: "artifact-event-not-allowed" } as const
+    expect(light({ op: "write_candidate", candidate: approve })).toEqual(rejected)
+    expect(light({ op: "begin", target: "candidate", commit_id: HEAD_SHA, event: "APPROVE" })).toEqual(rejected)
+    const classRoot = join(reviewPath, ".light"), target = join(classRoot, "candidate.json")
+    expect(fs.existsSync(target)).toBe(false)
+    const started = light({ op: "begin", target: "candidate", commit_id: HEAD_SHA, event: "COMMENT" })
+    const session = { staging_id: started.staging_id }
+    expect(light({ op: "append", ...session, field: "body", part: 0, parts: 1, text: BODY })).toMatchObject({ ok: true })
+    const path = join(classRoot, ".staging/candidate/manifest.json")
+    const manifest = JSON.parse(fs.readFileSync(path, "utf8"))
+    fs.writeFileSync(path, JSON.stringify({ ...manifest, event: "APPROVE" }))
+    const before = fs.readFileSync(path)
+    expect(light({ op: "finalize", ...session, expected_comments: 0 })).toEqual(rejected)
+    expect(fs.readFileSync(path)).toEqual(before)
+    expect(fs.existsSync(target)).toBe(false)
+    expect(write_candidate({ reviewRoot: classRoot, candidate: approve }, opts)).toEqual(rejected)
+    const full = begin({ reviewRoot, target: "candidate", commit_id: HEAD_SHA, event: "APPROVE" }, opts)
+    if (!full.ok || !("staging_id" in full)) throw new Error(JSON.stringify(full))
+    expect(append({ reviewRoot, staging_id: full.staging_id, field: "body", part: 0, parts: 1, text: BODY }, opts)).toMatchObject({ ok: true })
+    expect(finalize({ reviewRoot, staging_id: full.staging_id, expected_comments: 0 }, opts)).toMatchObject({ ok: true })
+    expect(JSON.parse(fs.readFileSync(join(reviewPath, "candidate.json"), "utf8")).event).toBe("APPROVE")
+  }))
+})
+
 describe("review persist documents", () => {
   test("writes sections and roundtrips the input with frontmatter and a fenced YAML block preserved", () => withFixture(({ opts, reviewRoot, reviewPath }) => {
     const frontmatterYaml = 'title: "Review"\nlabels:\n  - correctness'

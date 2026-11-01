@@ -210,10 +210,13 @@ describe("plugin.setup", () => {
     expect(fake.tools.get("corvus_review_pr")!.input).toMatchObject({
       properties: { cwd: { type: "string" }, branch: { type: "string" }, base: { type: "string" },
         paths: { type: "array", maxItems: 50, items: { type: "string", minLength: 1, maxLength: 1_024 } },
+        anchors: { type: "array", maxItems: 50, items: { type: "object", required: ["path", "line"], additionalProperties: false, properties: {
+          path: { type: "string", minLength: 1, maxLength: 1_024 }, line: { type: "integer", minimum: 1 }, start_line: { type: "integer", minimum: 1 },
+        } } },
       },
     })
-    expect(fake.tools.get("corvus_review_pr")!.description).toContain("find takes optional cwd/branch")
-    expect(fake.tools.get("corvus_review_pr")!.description).toContain("local takes optional cwd/base")
+    expect(fake.tools.get("corvus_review_pr")!.description).toContain("find: optional cwd/branch")
+    expect(fake.tools.get("corvus_review_pr")!.description).toContain("local: optional cwd/base")
     expect(fake.tools.get("corvus_review_persist")!.input).toMatchObject({
       properties: {
         facts: { type: "object", additionalProperties: true }, name: { type: "string" },

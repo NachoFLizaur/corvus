@@ -11,7 +11,13 @@ export type PrFindInput = PrRepoInput & { branch?: string }
 export type PrLocalInput = PrRepoInput & { base?: string }
 export type PrCandidate = { number: number; url: string; state: string; headRefName: string }
 export type PrLocator = { owner: string; name: string; pr: number | string }
-export type PrFilesInput = PrLocator & { paginate: true; include_corvus?: boolean; names_only?: boolean; paths?: string[] }
+export type PrAnchor = { path: string; line: number; start_line?: number }
+export type PrAnchorResult = PrAnchor & {
+  postable: boolean
+  reason?: "path-not-in-pr" | "no-patch" | "outside-hunk" | "spans-hunks" | "incomplete-pagination"
+  diff_anchor: string
+}
+export type PrFilesInput = PrLocator & { paginate: true; include_corvus?: boolean; names_only?: boolean; paths?: string[]; anchors?: PrAnchor[] }
 export type PrConfigInput = { owner: string; name: string; ref: string }
 export type PrMetadata = {
   number: number
@@ -67,7 +73,7 @@ export type PrData = {
   }
   metadata: PrMetadata
   head: { head_sha: string; code_head: string; base_sha: string }
-  files: { files: PrFile[] | string[]; complete_pagination: boolean; excluded_corvus: number; missing_paths?: string[] }
+  files: { files?: PrFile[] | string[]; complete_pagination: boolean; excluded_corvus: number; missing_paths?: string[]; anchors?: PrAnchorResult[] }
   diff: { oversized: false; text: string; excluded_corvus: number } | { oversized: true; http_status?: number }
   reviews: {
     reviews: PrReview[]; threads: PrThread[]; dispositions: PrDisposition[]
@@ -89,7 +95,7 @@ export function isPrCallerAllowed(caller: unknown, op: unknown): boolean {
 }
 export type PrFailure = {
   reason: string; http_status?: number; unavailable?: true; login?: null
-  files?: PrFile[] | string[]; excluded_corvus?: number; missing_paths?: string[]; reviews?: PrReview[]; threads?: PrThread[]; dispositions?: PrDisposition[]
+  files?: PrFile[] | string[]; excluded_corvus?: number; missing_paths?: string[]; anchors?: PrAnchorResult[]; reviews?: PrReview[]; threads?: PrThread[]; dispositions?: PrDisposition[]
   complete_pagination?: false; complete_threads?: boolean
 }
 export type PrResult<T> = ({ ok: true } & T | { ok: false } & PrFailure) & { api_calls: number }
@@ -117,7 +123,7 @@ const ACCEPT_JSON = ["-H", "Accept: application/vnd.github+json"]
 const METADATA_FIELDS = "number,url,title,body,author,baseRefName,baseRefOid,headRefName,headRefOid,labels,reviewRequests,isDraft,mergeable,state,mergedAt,additions,deletions,changedFiles,files,closingIssuesReferences,latestReviews,reviewDecision,isCrossRepository"
 const KEYS: Record<PrOperation, readonly string[]> = {
   metadata: ["owner", "name", "pr"], head: ["owner", "name", "pr"],
-  files: ["owner", "name", "pr", "paginate", "include_corvus", "names_only", "paths"], diff: ["owner", "name", "pr"],
+  files: ["owner", "name", "pr", "paginate", "include_corvus", "names_only", "paths", "anchors"], diff: ["owner", "name", "pr"],
   reviews: ["owner", "name", "pr"], checks: ["owner", "name", "pr"],
   identity: [], config: ["owner", "name", "ref"], repo: ["cwd"],
   find: ["cwd", "branch"], local: ["cwd", "base"],
@@ -155,21 +161,45 @@ function argumentsObject(input: unknown): Record<string, unknown> {
  * Count bounds apply before deduplication; empty selects none. Only omission
  * disables selection. Names-only modes reject selection rather than lose patches.
  */
+function validFilePath(path: unknown): path is string {
+  return typeof path === "string" && path.length <= MAX_FILE_PATH_LENGTH
+    && !/[\u0000-\u001f\u007f-\u009f\\]/.test(path) && !/^[A-Za-z]:/.test(path)
+    && !path.split("/").some(segment => segment === "" || segment === "." || segment === "..")
+}
+
 function filePaths(value: unknown): string[] {
   if (!Array.isArray(value) || value.length > MAX_FILE_PATHS) return fail("invalid-input:paths")
   const paths: string[] = []
   for (let index = 0; index < value.length; index++) {
     const descriptor = Object.getOwnPropertyDescriptor(value, String(index))
     const path: unknown = descriptor && "value" in descriptor ? descriptor.value : undefined
-    if (typeof path !== "string" || path.length > MAX_FILE_PATH_LENGTH
-      || /[\u0000-\u001f\u007f-\u009f\\]/.test(path) || /^[A-Za-z]:/.test(path)
-      || path.split("/").some(segment => segment === "" || segment === "." || segment === "..")) return fail("invalid-input:paths")
+    if (!validFilePath(path)) return fail("invalid-input:paths")
     paths.push(path)
   }
   return [...new Set(paths)]
 }
 
-type Target = { repo: string; endpoint: string; pr: string; cwd?: string; branch?: string; base?: string; include_corvus?: boolean; names_only?: boolean; paths?: string[] }
+/** Closed, dense plain-data anchors are copied before PR I/O. The shared path
+ * oracle and safe positive RIGHT coordinates reject invalid ranges with zero
+ * requests; count is bounded before copying. Only omission disables verification. */
+function fileAnchors(value: unknown): PrAnchor[] {
+  if (!Array.isArray(value) || value.length > MAX_FILE_PATHS) return fail("invalid-input:anchors")
+  const anchors: PrAnchor[] = []
+  for (let index = 0; index < value.length; index++) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, String(index))
+    if (!descriptor || !("value" in descriptor)) return fail("invalid-input:anchors")
+    let item: Record<string, unknown>
+    try { item = argumentsObject(descriptor.value) } catch { return fail("invalid-input:anchors") }
+    const positive = (number: unknown): number is number => typeof number === "number" && Number.isSafeInteger(number) && number >= 1
+    if (Object.keys(item).some(key => !["path", "line", "start_line"].includes(key))
+      || !validFilePath(item.path) || !positive(item.line)
+      || (Object.hasOwn(item, "start_line") && (!positive(item.start_line) || item.start_line > item.line))) return fail("invalid-input:anchors")
+    anchors.push({ path: item.path, line: item.line, ...(Object.hasOwn(item, "start_line") ? { start_line: item.start_line as number } : {}) })
+  }
+  return anchors
+}
+
+type Target = { repo: string; endpoint: string; pr: string; cwd?: string; branch?: string; base?: string; include_corvus?: boolean; names_only?: boolean; paths?: string[]; anchors?: PrAnchor[] }
 function target(op: PrOperation, input: unknown): Target {
   const args = argumentsObject(input)
   if (Object.keys(args).some(key => !KEYS[op].includes(key))) return fail("invalid-arguments")
@@ -198,9 +228,11 @@ function target(op: PrOperation, input: unknown): Target {
   }
   const paths = args.paths === undefined ? undefined : filePaths(args.paths)
   if (paths !== undefined && (args.names_only === true || args.include_corvus === true)) return fail("invalid-input:paths")
+  const anchors = args.anchors === undefined ? undefined : fileAnchors(args.anchors)
+  if (anchors !== undefined && (args.names_only === true || args.include_corvus === true)) return fail("invalid-input:anchors")
   return { repo, endpoint: `repos/${repo}/pulls/${pr}`, pr,
     include_corvus: args.include_corvus === true, names_only: args.names_only === true || args.include_corvus === true,
-    ...(paths === undefined ? {} : { paths }) }
+    ...(paths === undefined ? {} : { paths }), ...(anchors === undefined ? {} : { anchors }) }
 }
 
 /**
@@ -373,6 +405,71 @@ function file(value: unknown): PrFile {
     has_patch: typeof item.patch === "string",
     ...(typeof item.patch === "string" ? { patch: item.patch } : {}),
   }
+}
+
+const diffAnchor = (path: string): string => `diff-${createHash("sha256").update(path).digest("hex")}`
+type RightHunk = { start: number; end: number }
+/** API patch headers and every body prefix/count are the RIGHT-line oracle,
+ * read after pagination and before returning postability. Only complete hunks
+ * contribute contiguous added/context intervals; deleted lines never advance
+ * RIGHT. Malformed/truncated hunks contribute none. No caller bypass exists. */
+function rightHunks(patch: string): RightHunk[] {
+  const hunks: RightHunk[] = []
+  let hunk: { start: number; oldCount: number; newCount: number; old: number; right: number; valid: boolean } | undefined
+  const finish = () => {
+    if (hunk?.valid && hunk.old === hunk.oldCount && hunk.right === hunk.newCount && hunk.newCount > 0) {
+      hunks.push({ start: hunk.start, end: hunk.start + hunk.newCount - 1 })
+    }
+  }
+  const rows = patch.split("\n")
+  if (rows.at(-1) === "") rows.pop()
+  for (const row of rows) {
+    if (row.startsWith("@@")) {
+      finish()
+      hunk = undefined
+      const header = /^@@ -([0-9]+)(?:,([0-9]+))? \+([0-9]+)(?:,([0-9]+))? @@(?: .*)?$/.exec(row)
+      if (!header) continue
+      const oldStart = Number(header[1]), oldCount = Number(header[2] ?? 1)
+      const start = Number(header[3]), newCount = Number(header[4] ?? 1)
+      if (![oldStart, oldCount, start, newCount, oldStart + oldCount, start + newCount].every(Number.isSafeInteger)
+        || (oldCount > 0 && oldStart < 1) || (newCount > 0 && start < 1)) continue
+      hunk = { start, oldCount, newCount, old: 0, right: 0, valid: true }
+    } else if (hunk) {
+      if (row === "\\ No newline at end of file") continue
+      if (row[0] === " ") { hunk.old++; hunk.right++ }
+      else if (row[0] === "+") hunk.right++
+      else if (row[0] === "-") hunk.old++
+      else hunk.valid = false
+      if (hunk.old > hunk.oldCount || hunk.right > hunk.newCount) hunk.valid = false
+    }
+  }
+  finish()
+  return hunks
+}
+
+/** All validated pages and eligible files are read before anchor decisions.
+ * Incomplete pagination fails every anchor closed, including early matches;
+ * missing files/patches and ranges outside one complete hunk remain unpostable.
+ * Anchor-only results never include patches. Only omission skips these checks. */
+function verifyAnchors(anchors: PrAnchor[], items: PrFile[], complete: boolean): PrAnchorResult[] {
+  const byPath = new Map(items.map(item => [item.filename, item]))
+  const parsed = new Map<string, RightHunk[]>()
+  return anchors.map(anchor => {
+    const item = byPath.get(anchor.path)
+    let reason: PrAnchorResult["reason"]
+    if (!complete) reason = "incomplete-pagination"
+    else if (!item) reason = "path-not-in-pr"
+    else if (!item.patch) reason = "no-patch"
+    else {
+      let hunks = parsed.get(anchor.path)
+      if (!hunks) { hunks = rightHunks(item.patch); parsed.set(anchor.path, hunks) }
+      const start = anchor.start_line ?? anchor.line
+      if (!hunks.some(hunk => start >= hunk.start && anchor.line <= hunk.end)) {
+        reason = hunks.filter(hunk => start <= hunk.end && anchor.line >= hunk.start).length > 1 ? "spans-hunks" : "outside-hunk"
+      }
+    }
+    return { ...anchor, postable: reason === undefined, ...(reason ? { reason } : {}), diff_anchor: diffAnchor(anchor.path) }
+  })
 }
 function review(value: unknown): PrReview {
   const item = record(value)
@@ -667,10 +764,12 @@ const handlers: Handlers = {
     // exact API filename as UTF-8; unfiltered/names-only serialization stays intact.
     const selected = requested === undefined ? items : (items as PrFile[])
       .filter(item => requested.has(item.filename))
-      .map(item => ({ ...item, diff_anchor: `diff-${createHash("sha256").update(item.filename).digest("hex")}` }))
+      .map(item => ({ ...item, diff_anchor: diffAnchor(item.filename) }))
     const found = new Set(result.items.map(item => typeof item === "string" ? item : item.filename))
-    const data = { files: selected as PrFile[] | string[], excluded_corvus: result.items.length - items.length,
-      ...(target.paths === undefined ? {} : { missing_paths: target.paths.filter(path => !found.has(path)) }) }
+    const data = { ...(target.anchors !== undefined && target.paths === undefined ? {} : { files: selected as PrFile[] | string[] }),
+      excluded_corvus: result.items.length - items.length,
+      ...(target.paths === undefined ? {} : { missing_paths: target.paths.filter(path => !found.has(path)) }),
+      ...(target.anchors === undefined ? {} : { anchors: verifyAnchors(target.anchors, items as PrFile[], result.complete) }) }
     return result.error ? { ok: false, ...result.error, ...data, complete_pagination: false }
       : { ok: true, ...data, complete_pagination: result.complete }
   },

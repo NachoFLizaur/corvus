@@ -288,8 +288,9 @@ describe("light prompt contracts", () => {
     pin(markers, /Unknown round → corvus-review v1 head:<code_head>, disclose gap, never invent n/)
     pin(history, /resolved root without trailing slash, positive safe integer tool round n/)
     const anchors = section(writer, "3. Validate Inline Locations")
-    pin(anchors, /On oversized:true \(HTTP 406\/413\) or partial\/truncated diff text, call corvus_review_pr op files with \{owner, name, pr, paginate: true, paths: <unique comment paths>\} for only those per-file patches, missing_paths and complete_pagination; batch at most 50 paths per call/)
-    pin(anchors, /any anchor mismatch requests R5 relocation without changing the artifact/)
+    pin(anchors, /Call corvus_review_pr op files with \{owner, name, pr, paginate: true, anchors: <comment path\/line\/start_line controls>\} as the primary anchor verification path; batch at most 50 anchors per call and omit paths so no patches are returned/)
+    pin(anchors, /Match every returned anchor's path\/line\/start_line exactly.*require postable:true and complete_pagination:true/)
+    pin(anchors, /Any false\/missing result.*unverifiable, never guessed.*R5's relocation.*Retain the artifact unchanged/)
   })
 
   for (const fixture of LIGHT_EVIDENCE_CASES) test(`AC4/AC10 fixture: ${fixture.name} (prompt contract, not a model-run claim)`, () => {
@@ -359,8 +360,8 @@ describe("adaptive light scope contracts", () => {
 
   test("inline indexes use tool anchors, exact single/range coordinates and replacement on relocation", () => {
     const synthesis = section(skill, "6. Recheck Head and Synthesize In-Session")
-    pin(synthesis, /After synthesis call corvus_review_pr op files with \{owner,name,pr,paginate:true,paths:<unique inline-finding paths>\}.*alongside post-detection metadata\/lock checks/)
-    pin(synthesis, /Use each returned diff_anchor, never guess it; failed\/missing anchors disclose the gap and move affected findings body-only before freeze/)
+    pin(synthesis, /After synthesis call corvus_review_pr op files with \{owner,name,pr,paginate:true,anchors:<inline path\/line\/start_line controls>\}.*alongside post-detection metadata\/lock checks/)
+    pin(synthesis, /Omit paths for compact patch-free results\. Match controls exactly; require postable:true\/complete_pagination:true and use its diff_anchor, never guess it\. False\/missing anchors disclose the gap and move affected findings body-only before freeze/)
     pin(synthesis, /Each inline finding gets one index line in its attributed axis immediately under the headline; range text is <start>–<end> and link suffix R<start>-R<end>, single line uses R<line>\. LOCAL has no links or inline comments/)
     pin(section(skill, "9. Map Writer Results and Relocate Unverifiable Anchors"), /Replace only their index lines with those compact findings in their own axis body/)
   })

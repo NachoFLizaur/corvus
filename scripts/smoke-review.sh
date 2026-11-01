@@ -444,7 +444,7 @@ fi
 # The package bundles this module into its host entries, not a standalone JS
 # export. Build a sandbox-only verifier from the same tree, without repacking or
 # editing the installed plugin that the host will exercise.
-if [[ "$INTAKE" != local ]]; then
+if [[ "$INTAKE" != local || "$AGENT" == light ]]; then
   cap 60 bun build "$ROOT/src/review-payload.ts" --outdir "$WORK/dist" --target bun >"$WORK/verifier-build.log" 2>&1 || die 3 'standalone verifier build failed'
 fi
 # Writer mode carries no task deny: the shim's POST admission is the only barrier and

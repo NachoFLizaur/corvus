@@ -158,7 +158,7 @@ context/treeEntries/populate/worktree).
   content is omitted with reasons, and risk focus/sampling require unavailable evidence. Union
   findings per axis and deduplicate same-path, overlapping-line, same-dimension/title-intent copies,
   keeping higher severity/confidence without disclosure. Each inline gets one linked axis-index
-  line from paths-filtered tool `diff_anchor` (`diff-` + sha256(path)) and exact RIGHT coordinates;
+  line from tool-verified `anchors` results' `diff_anchor` (`diff-` + sha256(path)) and exact RIGHT coordinates;
   relocation replaces its index with the unchanged compact body finding, because the body must
   expose every finding without duplicating inline detail. LOCAL has no links. Light acquisition
   rejects `force: true` on both hosts and fixed denies add 29 Git/gh mutation patterns, because
@@ -193,12 +193,13 @@ context/treeEntries/populate/worktree).
   Existing/stale-looking trees are reported, never removed/pruned; failed removal names the
   exact path and manual remedy, and unconfirmed-create rollback needs manual inspection before
   removal (`src/review-worktree.ts`, removeOwned/worktree; light skill, steps 4/6/10).
-- The shared writer requests only its comment paths through the validated `corvus_review_pr`
-  files filter after an oversized/truncated diff, because a full listing can spill before
-  anchor verification. The tool paginates all records, returns selected intact patches and
-  missing-path evidence, and leaves unfiltered calls unchanged. Missing/incomplete patches
-  remain unverifiable; only writer-reported anchors relocate, and placements are never widened
-  by the orchestrator (`src/review-pr.ts`, filePaths/operations.files;
+- The shared writer verifies comment coordinates through `corvus_review_pr` files `anchors`,
+  because even one paths-filtered patch can spill and be line-truncated by the host. The tool
+  paginates all records and verifies added/context RIGHT spans within one complete hunk,
+  returning compact postability/reasons/diff anchors without patch text; unfiltered and
+  paths-only calls stay unchanged. Light synthesis moves false/missing anchors body-only
+  before freeze; only writer-reported unresolved anchors relocate afterward, and placements
+  are never widened by the orchestrator (`src/review-pr.ts`, fileAnchors/verifyAnchors;
   `agent/pr-comment-writer.md`, step 3; light skill, steps 6/9).
 - `corvus-review-light` is the autonomous orchestrator (question denied, Invocation Mode
   autonomous) and dispatches only that detector and the existing `pr-comment-writer`,
@@ -207,7 +208,11 @@ context/treeEntries/populate/worktree).
 - Light coverage is always recorded as partial, because the existing fail-closed precedence
   then never approves (overrides included), permits severity-derived `REQUEST_CHANGES` only
   for a retained blocker/critical at the confidence floor and lets an eligible trusted
-  `REQUEST_CHANGES` override apply inside the cap, without a light-specific action rule (`skill/corvus-review-extras/SKILL.md:61-63`).
+  `REQUEST_CHANGES` override apply inside the cap (`skill/corvus-review-extras/SKILL.md:61-63`).
+  Candidate persistence, freeze and post also reject light-class APPROVE, because prompt
+  rails alone cannot enforce the never-APPROVE contract at the mutation boundary; full-review
+  APPROVE is unchanged (`src/review-persist.ts`, rejectLightApproval; `src/review-payload.ts`,
+  freeze; `src/review-post.ts`, readArtifact).
   The marker leads directly into the literal Corvus opening: PR identity, action/head/statistics
   and axis counts, then Standards and Spec sections with one-line headlines. Each finding has
   its Conventional Comments identity, ≤3 short problem/impact lines and one suggestion/fix,
@@ -297,8 +302,8 @@ for full review. Judgment-based scope and soft read guidance are less determinis
 coverage accounts do not prove that every consequential defect was found or establish parity.
 
 **Neutral**: full-review R0–R5 and the shared config schema stay unchanged. Existing sync skips
-the light class and its namespace locks; the validated files filter and shared writer's bounded
-patch fallback are the shared v2 changes, with unfiltered output unchanged. Both axis instances
+the light class and its namespace locks; compact tool-verified anchors and the shared writer's
+primary verification path preserve unfiltered/paths-only output. Both axis instances
 use the same identity/model override. Advisory light size settings do not change full-pipeline
 large-PR semantics. The 20-turn read-through target is structural, not a live measurement.
 

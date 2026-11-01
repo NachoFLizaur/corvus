@@ -5,6 +5,15 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.11.0-beta.3 — 2026-11-01
+
+### Fixed
+
+- `corvus_review_pr` files verifies RIGHT-side anchors inside complete API patch hunks and returns compact postability/diff links without patches. The shared writer uses this primary path even when patches would exceed host output limits; light synthesis moves unpostable anchors body-only before freeze. Unfiltered and paths-only output remain unchanged.
+- Light-class APPROVE is rejected by candidate persistence, freeze and the posting tool before any posting API call; full-review APPROVE remains available.
+- LOCAL light smoke runs build the standalone payload verifier before artifact replay, without relying on reused `dist` files.
+- README light-agent descriptions now reflect concurrent axis shards; the read-through target correctly counts 19 tool batches plus summary (20 turns), not a measured live result.
+
 ## 0.11.0-beta.2 — 2026-11-01
 
 ### Changed

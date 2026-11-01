@@ -1,8 +1,9 @@
 import { describe, expect, test } from "bun:test"
 import * as fs from "node:fs"
 import { tmpdir } from "node:os"
+import { createHash } from "node:crypto"
 import { join, relative } from "node:path"
-import { freeze, type CandidateRequest } from "../review-payload"
+import { canonicalize, freeze, type CandidateRequest } from "../review-payload"
 import { createPostExecutor, post, type PostExec, type PostExecResult, type PostInput, type PostOptions } from "../review-post"
 
 const HEAD_SHA = "a".repeat(40)
@@ -80,6 +81,27 @@ function mismatchedDigest(input: PostInput): PostInput {
 }
 
 describe("review post transport", () => {
+  test.each(["reviews/pr42", "tasks/example/reviews/pr42"])("light APPROVE in %s rejects verified pre-upgrade artifacts before any API call; full APPROVE still posts", namespace => withFixture(async ({ directory, input }) => {
+    const opts = { reviewStateRoot: join(directory, ".corvus"), directory }
+    const root = join(opts.reviewStateRoot, namespace)
+    fs.mkdirSync(join(root, ".light"), { recursive: true })
+    const bytes = canonicalize({ ...request, event: "APPROVE" })
+    const expectedSha256 = createHash("sha256").update(bytes).digest("hex")
+    const lightArtifact = join(root, ".light/post-request.json"), fullArtifact = join(root, "post-request.json")
+    fs.writeFileSync(lightArtifact, bytes)
+    const unused = recordingExec()
+    for (const artifactPath of [lightArtifact, relative(directory, lightArtifact)]) {
+      expect(await post({ ...input, artifactPath, expectedSha256, event: "APPROVE" }, { ...opts, exec: unused.exec }))
+        .toEqual({ outcome: "rejected", reason: "artifact-event-not-allowed", tool_api_calls: 0 })
+    }
+    expect(unused.calls).toEqual([])
+    expect(fs.readFileSync(lightArtifact, "utf8")).toBe(bytes)
+    fs.writeFileSync(fullArtifact, bytes)
+    const allowed = recordingExec(headResponse, postedResponse)
+    expect(await post({ ...input, artifactPath: fullArtifact, expectedSha256, event: "APPROVE" }, { ...opts, exec: allowed.exec }))
+      .toEqual({ outcome: "posted", review_url: REVIEW_URL, tool_api_calls: 2 })
+    expect(allowed.calls).toHaveLength(2)
+  }))
   test.each(["reviews/pr42", "tasks/example/reviews/pr42"].flatMap(namespace => [false, true].map(symlinked => ({ namespace, symlinked }))))("writer accepts only the light PR post-request leaf in $namespace (symlinked=$symlinked) for every path spelling", ({ namespace, symlinked }) => withFixture(async ({ directory, input }) => {
     const root = join(directory, ".corvus", namespace)
     const classPath = join(root, ".light")

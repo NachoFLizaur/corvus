@@ -83,13 +83,21 @@ describe("plugin entry point", () => {
     for (const args of [{ op: "find" }, { op: "find", cwd: "/repo", branch: "topic/B" }, { op: "local", cwd: "/repo", base: "main" }]) {
       expect(z.safeParse(z.object(result.tool!.corvus_review_pr.args), args)).toMatchObject({ success: true, data: args })
     }
-    expect(result.tool!.corvus_review_pr.description).toContain("find takes optional cwd/branch")
-    expect(result.tool!.corvus_review_pr.description).toContain("local takes optional cwd/base")
+    expect(result.tool!.corvus_review_pr.description).toContain("find: optional cwd/branch")
+    expect(result.tool!.corvus_review_pr.description).toContain("local: optional cwd/base")
     expect(z.toJSONSchema(z.object(result.tool!.corvus_review_pr.args))).toMatchObject({ properties: {
       paths: { type: "array", maxItems: 50, items: { type: "string", minLength: 1, maxLength: 1_024 } },
+      anchors: { type: "array", maxItems: 50, items: { type: "object", required: ["path", "line"], properties: {
+        path: { type: "string", minLength: 1, maxLength: 1_024 }, line: { type: "integer", minimum: 1 }, start_line: { type: "integer", minimum: 1 },
+      } } },
     } })
     const filteredArgs = { op: "files", owner: "o", name: "r", pr: 1, paginate: true, paths: ["src/anchor.ts"] }
     expect(z.safeParse(z.object(result.tool!.corvus_review_pr.args), filteredArgs)).toMatchObject({ success: true, data: filteredArgs })
+    const anchoredArgs = { ...filteredArgs, anchors: [{ path: "src/anchor.ts", line: 2, start_line: 1 }] }
+    expect(z.safeParse(z.object(result.tool!.corvus_review_pr.args), anchoredArgs)).toMatchObject({ success: true, data: anchoredArgs })
+    for (const anchors of [[{ path: "", line: 1 }], [{ path: "x", line: 0 }], [{ path: "x", line: 1.5 }], Array.from({ length: 51 }, () => ({ path: "x", line: 1 }))]) {
+      expect(z.safeParse(z.object(result.tool!.corvus_review_pr.args), { ...filteredArgs, anchors }).success).toBe(false)
+    }
     for (const paths of [[""], ["a".repeat(1_025)], Array.from({ length: 51 }, () => "a.ts")]) {
       expect(z.safeParse(z.object(result.tool!.corvus_review_pr.args), { ...filteredArgs, paths }).success).toBe(false)
     }
@@ -310,6 +318,15 @@ describe("review tool hooks", () => {
           ok: true, files: [{ ...anchor, has_patch: true, diff_anchor: `diff-${createHash("sha256").update(anchor.filename).digest("hex")}` }], excluded_corvus: 1,
           missing_paths: ["missing.ts"], complete_pagination: true, api_calls: 2,
         })
+        const anchors = [{ path: anchor.filename, line: 2, start_line: 1 }, { path: anchor.filename, line: 3 }, { path: "missing.ts", line: 1 }]
+        for (const caller of ["pr-comment-writer", "corvus-review-light"]) {
+          const result = await call("corvus_review_pr", { ...input, anchors }, caller)
+          expect(result).toEqual({ ok: true, excluded_corvus: 1, anchors: anchors.map((item, index) => ({ ...item,
+            postable: index === 0, ...(index ? { reason: index === 1 ? "outside-hunk" : "path-not-in-pr" } : {}),
+            diff_anchor: `diff-${createHash("sha256").update(item.path).digest("hex")}`,
+          })), complete_pagination: true, api_calls: 2 })
+          expect(result).not.toHaveProperty("files")
+        }
       } finally {
         if (beforePath === undefined) delete process.env.PATH
         else process.env.PATH = beforePath
@@ -330,21 +347,29 @@ describe("review tool hooks", () => {
           ok: false, reason: "invalid-input:paths", complete_pagination: false, api_calls: 0,
         })
       }
+      for (const anchors of [[{ path: "./x.ts", line: 1 }], [{ path: "x.ts", line: 0 }], [{ path: "x.ts", start_line: 2, line: 1 }],
+        [{ path: "x.ts", line: 1, side: "LEFT" }], Array.from({ length: 51 }, () => ({ path: "x.ts", line: 1 }))]) {
+        expect(await call("corvus_review_pr", { ...input, anchors }, "pr-comment-writer")).toEqual({
+          ok: false, reason: "invalid-input:anchors", complete_pagination: false, api_calls: 0,
+        })
+      }
     })
   })
 
-  test("both hosts describe the same bounded file selector within the prior description length", async () => {
+  test("both hosts describe the same compact anchor verifier within the description budget", async () => {
     const hooks = await plugin({} as Parameters<typeof plugin>[0])
     const fake = createFakeContext()
     const cleanup = await registerTools(fake.ctx)
     try {
       const description = hooks.tool!.corvus_review_pr.description
       expect(fake.tools.get("corvus_review_pr")!.description).toBe(description)
-      expect(description.length).toBeLessThanOrEqual(1_149)
-      expect(description).toContain("files paths selects exact patch records plus missing_paths")
+      expect(description.length).toBeLessThanOrEqual(1_250)
+      expect(description).toContain("paths selects intact patches, missing_paths")
+      expect(description).toContain("anchors:[{path,line,start_line?}] verifies RIGHT added/context spans in one complete hunk")
+      expect(description).toContain("no patches or files unless paths also supplied")
       expect(description).toContain("diff_anchor=diff-<SHA256(path)>")
       expect(description).toContain("Files-tab #<diff_anchor>R<line> or R<start>-R<end>")
-      expect(description).toContain("rejects names_only/include_corvus true")
+      expect(description).toContain("both reject names_only/include_corvus true")
     } finally { await cleanup?.() }
   })
 
@@ -464,6 +489,64 @@ describe("review tool hooks", () => {
       expect(await call("corvus_review_lock", { op: "release", reviewRoot, runId: "light", mode: "complete" }, light)).toMatchObject({ ok: false, reason: "invalid-arguments" })
       expect(await call("corvus_review_lock", { op: "release", reviewRoot, runId: "light", mode: "delete" }, light)).toMatchObject({ ok: true })
       expect(existsSync(join(reviewRoot, "lock.yaml"))).toBe(false)
+    })
+  })
+
+  test.each(["v1", "v2"] as const)("%s enforces light no-APPROVE at persist, staged finalize, freeze and post, leaving full APPROVE valid", async host => {
+    await withReviewTools(host, async (directory, call) => {
+      const light = "corvus-review-light", full = "corvus-review", head = "a".repeat(40)
+      const candidate = { commit_id: head, event: "APPROVE", body: "Review", comments: [] }
+      const rejected = { ok: false, reason: "artifact-event-not-allowed" }
+      // A local fixed gh double proves both zero-API rejection and preserved full posting.
+      const bin = join(directory, "bin")
+      mkdirSync(bin)
+      writeFileSync(join(bin, "gh"), '#!/bin/sh\nprintf "call\\n" >> "$0.calls"\nif [ "$3" = "GET" ]; then /bin/cat "$0.head"; else /bin/cat "$0.post"; fi\n', { mode: 0o755 })
+      writeFileSync(join(bin, "gh.head"), JSON.stringify([[{ sha: head, commit: { message: "Product change" } }]]))
+      writeFileSync(join(bin, "gh.post"), JSON.stringify({ html_url: "https://github.com/o/r/pull/1#pullrequestreview-1" }))
+      const beforePath = process.env.PATH
+      process.env.PATH = `${bin}:${beforePath ?? ""}`
+      try {
+        for (const namespace of ["reviews/pr1", "tasks/example/reviews/pr1"]) {
+          const reviewRoot = join(directory, ".corvus", namespace)
+          const classPath = join(reviewRoot, ".light"), candidatePath = join(classPath, "candidate.json"), artifactPath = join(classPath, "post-request.json")
+          expect(await call("corvus_review_persist", { op: "write_candidate", reviewRoot, candidate }, light)).toEqual(rejected)
+          expect(existsSync(candidatePath)).toBe(false)
+          expect(await call("corvus_review_persist", { op: "begin", reviewRoot, target: "candidate", commit_id: head, event: "APPROVE" }, light)).toEqual(rejected)
+          expect(existsSync(join(classPath, ".staging/candidate/manifest.json"))).toBe(false)
+          const started = await call("corvus_review_persist", { op: "begin", reviewRoot, target: "candidate", commit_id: head, event: "COMMENT" }, light)
+          expect(started.ok).toBe(true)
+          const session = { reviewRoot, staging_id: started.staging_id }
+          expect(await call("corvus_review_persist", { op: "append", ...session, field: "body", text: "Review", part: 0, parts: 1 }, light)).toMatchObject({ ok: true })
+          // Emulate a pre-upgrade staged header: finalize independently enforces the rail.
+          const manifestPath = join(classPath, ".staging/candidate/manifest.json")
+          const manifest = JSON.parse(readFileSync(manifestPath, "utf8"))
+          writeFileSync(manifestPath, JSON.stringify({ ...manifest, event: "APPROVE" }))
+          expect(await call("corvus_review_persist", { op: "finalize", ...session, expected_comments: 0 }, light)).toEqual(rejected)
+          expect(existsSync(candidatePath)).toBe(false)
+          expect(existsSync(manifestPath)).toBe(true)
+          writeFileSync(candidatePath, canonicalize(candidate as CandidateRequest))
+          expect(await call("corvus_review_payload", { op: "freeze", candidatePath, artifactPath }, light)).toEqual(rejected)
+          expect(existsSync(artifactPath)).toBe(false)
+          // Pre-upgrade artifact, already canonical and digest-matched, still cannot post.
+          const bytes = canonicalize(candidate as CandidateRequest)
+          writeFileSync(artifactPath, bytes)
+          expect(await call("corvus_review_post", { artifactPath, expectedSha256: createHash("sha256").update(bytes).digest("hex"),
+            repo: { owner: "o", name: "r" }, prNumber: 1, headSha: head, event: "APPROVE" }, "pr-comment-writer"))
+            .toEqual({ outcome: "rejected", reason: "artifact-event-not-allowed", tool_api_calls: 0 })
+          expect(existsSync(join(bin, "gh.calls"))).toBe(namespace !== "reviews/pr1")
+          expect(await call("corvus_review_persist", { op: "write_candidate", reviewRoot, candidate }, full)).toMatchObject({ ok: true })
+          const fullCandidate = join(reviewRoot, "candidate.json"), fullArtifact = join(reviewRoot, "post-request.json")
+          const frozen = await call("corvus_review_payload", { op: "freeze", candidatePath: fullCandidate, artifactPath: fullArtifact }, full)
+          expect(frozen).toMatchObject({ ok: true })
+          expect(await call("corvus_review_post", { artifactPath: fullArtifact, expectedSha256: frozen.sha256, repo: { owner: "o", name: "r" },
+            prNumber: 1, headSha: head, event: "APPROVE" }, "pr-comment-writer"))
+            .toMatchObject({ outcome: "posted", tool_api_calls: 2 })
+        }
+        expect(readFileSync(join(bin, "gh.calls"), "utf8").trim().split("\n")).toHaveLength(4)
+      } finally {
+        if (beforePath === undefined) delete process.env.PATH
+        else process.env.PATH = beforePath
+      }
     })
   })
 

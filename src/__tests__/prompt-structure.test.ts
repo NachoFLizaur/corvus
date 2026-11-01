@@ -144,7 +144,7 @@ const bodyPins: Record<string, BodyPin[]> = {
     { name: "inline-schema", section: "Closed Field Sets", required: /POST_ARTIFACT.*POST_REQUEST.*Comment.*POST_RESULT/ },
     { name: "no-skill-read", forbidden: /\.\.\/skill\// },
     { name: "digest-failure", section: "Error Handling", required: /artifact-verify-failed:.*return not_posted\s*, reason verify: <tool diagnostic>\s*, remote_state not_posted/ },
-    { name: "anchor-failure", required: /any anchor mismatch requests R5 relocation without changing the artifact\./i },
+    { name: "anchor-failure", required: /Any false\/missing result.*makes that anchor unverifiable, never guessed.*hand off to R5's relocation.*only unresolved anchors.*no POST attempted.*Retain the artifact unchanged/i },
     { name: "no-retyping", required: /Never re-type, copy, rewrite, relocate or re-encode review content\./i },
     { name: "post-integrity-owner", section: "1. Validate Descriptor and Controls", required: /content and size verification reserved for the post tool/ },
     { name: "tool-preflight", section: "Preflight Tools", required: /before reading the artifact, confirm corvus_review_pr and corvus_review_post are callable/ },
@@ -190,7 +190,7 @@ const safetyFixtureBodies: Corpus = {
     'Use a controls-only read. Body-line truncation is expected, not an incomplete controls read. Never re-type, copy, rewrite, relocate or re-encode review content. Granted JSON diagnostics may inspect the unchanged file, not supply verification.',
     'Keep content and size verification reserved for the post tool.',
     '### 2. Read Current Head\nRead the current head before inline anchors.',
-    '### 3. Validate Inline Locations\nAny anchor mismatch requests R5 relocation without changing the artifact.',
+    "### 3. Validate Inline Locations\nAny false/missing result makes that anchor unverifiable, never guessed; hand off to R5's relocation for only unresolved anchors with no POST attempted. Retain the artifact unchanged.",
     '### 4. Look Up Marker\nReuse a matching review before posting.',
     '### 5. Submit Through the Tool',
     'Call corvus_review_post once with {artifactPath: <artifact_path>, expectedSha256: <expected_sha256>, repo: <repository>, prNumber: <pr_number>, headSha: <head_sha>, event: <event>}.',
@@ -779,7 +779,7 @@ describe("prompt structure", () => {
         [r5, "metadata-notes", "CI/check changes only as notes in the terminal summary", "CI/check changes as posting controls"],
         [writer, "digest-failure", "artifact-verify-failed:*", "accept-invalid-artifact"],
         [writer, "digest-failure", "reason `verify: <tool diagnostic>`", "reason `anchors-unverifiable`"],
-        [writer, "anchor-failure", "any anchor mismatch requests R5 relocation without changing the artifact.", "any anchor mismatch permits guessed positions."],
+        [writer, "anchor-failure", "Any false/missing result", "Accept false/missing result"],
         [writer, "no-retyping", "Never re-type, copy, rewrite, relocate or re-encode review content.", "Reconstruct the payload with the write tool."],
         [writer, "post-integrity-owner", "content and size verification reserved for the post tool", "content and size verification supplied by the writer"],
         [writer, "tool-preflight", "confirm `corvus_review_pr` and `corvus_review_post` are callable", "assume all tools are callable"],
@@ -824,13 +824,13 @@ describe("prompt structure", () => {
     test("large-diff recovery keeps evidence, progress-based relocation and bounded persistence payloads", () => {
       const corpus = readCorpus(), schemas = "skill/corvus-review-extras/schemas.md"
       const cases: [string, string, RegExp, string, string][] = [
-        [writer, "3. Validate Inline Locations", /canonical diff.*oversized:true \(HTTP 406\/413\) or partial\/truncated diff text.*corvus_review_pr op files.*paginate: true, paths: <unique comment paths>.*only those per-file patches, missing_paths and complete_pagination.*batch at most 50 paths per call/,
-          "oversized:true", "oversized:false"],
-        [writer, "3. Validate Inline Locations", /paths: <unique comment paths>/,
-          "paths: <unique comment paths>", "paths: <all PR paths>"],
-        [writer, "3. Validate Inline Locations", /each file's complete patch.*path membership.*complete hunk counts.*added\/context RIGHT-side lines.*multi-line span in one hunk/,
-          "added/context RIGHT-side lines", "estimated local lines"],
-        [writer, "3. Validate Inline Locations", /absent patch.*truncated patch.*incomplete pagination makes that anchor unverifiable.*If ALL anchors verify, proceed; otherwise finish available anchor diagnostics and hand off to R5's relocation with status not_posted\s*, reason anchors-unverifiable\s*, and unverifiable_anchors: \[\{path,line_start,line_end\}\].*only unresolved anchors.*no POST attempted/,
+        [writer, "3. Validate Inline Locations", /corvus_review_pr op files.*paginate: true, anchors: <comment path\/line\/start_line controls>.*primary anchor verification path.*batch at most 50 anchors per call and omit paths so no patches are returned/,
+          "primary anchor verification path", "optional diagnostic"],
+        [writer, "3. Validate Inline Locations", /Match every returned anchor's path\/line\/start_line exactly.*require postable:true and complete_pagination:true/,
+          "postable:true", "postable:false"],
+        [writer, "3. Validate Inline Locations", /tool checks path membership, complete hunk counts and every added\/context RIGHT-side line in one hunk, independent of patch output size/,
+          "added/context RIGHT-side line", "estimated local lines"],
+        [writer, "3. Validate Inline Locations", /Any false\/missing result, absent patch, truncated hunk or incomplete pagination makes that anchor unverifiable.*If ALL anchors verify, proceed; otherwise finish available anchor diagnostics and hand off to R5's relocation with status not_posted\s*, reason anchors-unverifiable\s*, and unverifiable_anchors: \[\{path,line_start,line_end\}\].*only unresolved anchors.*no POST attempted/,
           "only unresolved anchors", "all anchors"],
         [writer, "3. Validate Inline Locations", /If ALL anchors verify, proceed; otherwise finish available anchor diagnostics and hand off to R5's relocation/,
           "If ALL anchors verify, proceed", "Proceed even with unverifiable anchors"],
@@ -888,7 +888,7 @@ describe("prompt structure", () => {
         [`${extras}state.md`, "Namespace and Lock", "corvus_review_lock", ["acquire", "release"]],
         [`${extras}state.md`, "Persist at R3", "corvus_review_persist", ["begin", "append", "finalize", "read_document", "write_meta", "candidate", "write_candidate"]],
         [writer, "2. Read Current Head", "corvus_review_pr", ["head"]],
-        [writer, "3. Validate Inline Locations", "corvus_review_pr", ["diff", "files"]],
+        [writer, "3. Validate Inline Locations", "corvus_review_pr", ["files"]],
       ]
       for (const [path, section, tool, ops] of owners) {
         const prose = requiredSection(corpus[path], section)

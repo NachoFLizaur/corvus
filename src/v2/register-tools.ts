@@ -149,7 +149,7 @@ export const registerTools: Registrar = async (ctx) => {
     })
     draft.add({
       name: "corvus_review_pr",
-      description: "Read GitHub PR data with validated, fixed operations. metadata/head/diff/reviews/checks take owner/name/pr; files requires paginate:true. files paths selects exact patch records plus missing_paths and diff_anchor=diff-<SHA256(path)> (Files-tab #<diff_anchor>R<line> or R<start>-R<end>): <=50 normalized repository-relative strings, <=1,024 chars each, deduplicated; rejects names_only/include_corvus true. include_corvus implies names-only. Files/diffs exclude .corvus by default (excluded_corvus); local changed_files stays unfiltered. metadata/head/local return raw head_sha and code_head skipping state commits. config takes owner/name/ref (base SHA); identity takes no fields; repo resolves gh/origin with optional cwd (session default). find takes optional cwd/branch; local takes optional cwd/base for a bounded tracked working diff. Host caller policy: pr-comment-writer: head/diff/files/reviews; pr-code-reviewer, security-reviewer, pr-light-reviewer: metadata/head/files/diff/reviews/checks; corvus-review, corvus-review-auto, corvus-review-light, pr-context-gatherer: all ops. Unknown callers: caller-not-allowed.",
+      description: "Read PR data with fixed operations. metadata/head/diff/reviews/checks: owner/name/pr; files: paginate:true. paths selects intact patches, missing_paths and diff_anchor=diff-<SHA256(path)> (Files-tab #<diff_anchor>R<line> or R<start>-R<end>). anchors:[{path,line,start_line?}] verifies RIGHT added/context spans in one complete hunk; returns postable/reason/diff_anchor, complete_pagination, no patches or files unless paths also supplied. Each selector <=50; normalized relative paths <=1,024 chars; paths deduplicated; both reject names_only/include_corvus true. include_corvus implies names-only; files/diffs exclude .corvus by default (excluded_corvus); local changed_files unfiltered. metadata/head/local: head_sha and code_head skipping state commits. config: owner/name/ref (base SHA); identity: no fields; repo: optional cwd, gh/origin; find: optional cwd/branch; local: optional cwd/base, bounded tracked diff. Callers: pr-comment-writer head/diff/files/reviews; pr-code-reviewer, security-reviewer, pr-light-reviewer metadata/head/files/diff/reviews/checks; corvus-review, corvus-review-auto, corvus-review-light, pr-context-gatherer all ops. Unknown: caller-not-allowed.",
       input: {
         type: "object",
         properties: {
@@ -164,6 +164,9 @@ export const registerTools: Registrar = async (ctx) => {
           include_corvus: { type: "boolean" },
           names_only: { type: "boolean" },
           paths: { type: "array", items: { type: "string", minLength: 1, maxLength: 1_024 }, maxItems: 50 },
+          anchors: { type: "array", maxItems: 50, items: { type: "object", properties: {
+            path: { type: "string", minLength: 1, maxLength: 1_024 }, line: { type: "integer", minimum: 1 }, start_line: { type: "integer", minimum: 1 },
+          }, required: ["path", "line"], additionalProperties: false } },
           ref: { type: "string" },
         },
         required: ["op"],

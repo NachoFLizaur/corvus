@@ -113,6 +113,10 @@ function readArtifact(input: PostInput, opts: PostOptions): ArtifactResult {
   if ((light(requested) || light(actual)) && (!lightLeaf(requested) || requested !== actual)) return { ok: false, reason: "artifact-verify-failed:path-outside-root" }
   if (!bytes) return { ok: false, reason: "artifact-verify-failed:artifact-read-error" }
   const request = JSON.parse(bytes.toString("utf8")) as CandidateRequest
+  /** The verified class path and those same artifact bytes are the event oracle
+   * before GET and every POST. Light APPROVE rejects with zero new API calls;
+   * no descriptor override disables this. Full artifacts keep all three events. */
+  if (light(actual) && request.event === "APPROVE") return { ok: false, reason: "artifact-event-not-allowed" }
   if (request.commit_id !== input.headSha) return { ok: false, reason: "artifact-head-mismatch" }
   if (request.event !== input.event) return { ok: false, reason: "artifact-event-mismatch" }
   return { ok: true, path, request }

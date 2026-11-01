@@ -38,7 +38,7 @@ export type PersistRejection = {
     | "not-regular-file" | "symlink-target" | "write-error" | "read-error" | "encoding-error"
     | "readback-mismatch" | "cleanup-error" | "unknown-record" | "not-found"
     | "unknown-staging" | "incomplete-staging" | "chunk-too-large" | "heading-conflict"
-    | "part-count-conflict" | "part-type-conflict" | "merge-conflict" | "caller-not-allowed"
+    | "part-count-conflict" | "part-type-conflict" | "merge-conflict" | "caller-not-allowed" | "artifact-event-not-allowed"
   expectedBytes?: number
   actualBytes?: number
   length?: number
@@ -589,7 +589,7 @@ function execute(op: Operation, input: unknown, opts: PersistOptions, metaNames:
         file = "verified_facts.yaml"
         break
       case "write_candidate": {
-        text = assembleCandidate(args.candidate)
+        text = assembleCandidate(args.candidate, args.reviewRoot, opts)
         file = "candidate.json"
         break
       }
@@ -659,10 +659,21 @@ const valueType = (value: JsonValue): string => Array.isArray(value) ? "array" :
  * size violations deliberately remain input to freeze, not persistence failures.
  * No option disables schema validation or routes candidates through input formatting.
  */
-function assembleCandidate(candidate: unknown): string {
+function assembleCandidate(candidate: unknown, reviewRoot: string, opts: PersistOptions): string {
   const measured = measure(candidate)
   if ("reason" in measured) fail(measured.reason)
+  rejectLightApproval((candidate as CandidateRequest).event, reviewRoot, opts)
   return measured.canonical
+}
+
+/** Host-root coordinates and the validated event are read before candidate or
+ * staging writes. Light APPROVE rejects for single-call, begin and finalize;
+ * full-class APPROVE stays valid. Caller/config cannot disable this path guard. */
+function rejectLightApproval(event: unknown, reviewRoot: string, opts: PersistOptions): void {
+  if (event !== "APPROVE") return
+  const { configured, conventional, root, absolute } = reviewLocation(reviewRoot, opts.reviewStateRoot, opts.fs ?? nodeFs)
+  const hostRel = hostRelativePath(conventional ? dirname(configured) : configured, absolute, conventional ? dirname(root) : root)
+  if (hostRel !== null && isLightClassPath(hostRel)) fail("artifact-event-not-allowed")
 }
 
 function candidateHeader(value: Record<string, unknown>): boolean {
@@ -921,6 +932,7 @@ function executeStaging(op: StagingOperation, input: unknown, opts: PersistOptio
       if (args.target === "document" && (typeof args.headSha !== "string" || args.headSha.length !== 40 || !/^[a-f0-9]{40}$/.test(args.headSha))) fail("invalid-head-sha")
       if (args.target !== "document" && (Object.hasOwn(args, "headSha") || Object.hasOwn(args, "expected_sections") || Object.hasOwn(args, "frontmatterYaml"))) fail("invalid-arguments")
       if (args.target === "candidate" ? !candidateHeader(args) : Object.hasOwn(args, "commit_id") || Object.hasOwn(args, "event")) fail("invalid-arguments")
+      if (args.target === "candidate") rejectLightApproval(args.event, args.reviewRoot, opts)
       if (args.expected_sections !== undefined && !positive(args.expected_sections)) fail("invalid-arguments")
       if (args.frontmatterYaml !== undefined && typeof args.frontmatterYaml !== "string") fail("invalid-arguments")
       const root = resolveReviewDirectory(args.reviewRoot, opts.reviewStateRoot, fs, true).path
@@ -1044,7 +1056,7 @@ function executeStaging(op: StagingOperation, input: unknown, opts: PersistOptio
       comments: Array.from({ length: args.expected_comments as number }, (_, comment) => ({
         ...manifest.received.find(item => item.comment === comment && item.field === "path" && item.part === 0)!.anchor,
         path: assembled[1 + comment * 2], body: assembled[2 + comment * 2],
-      })) }) : document ? assembleDocument({ reviewRoot: args.reviewRoot, headSha: manifest.headSha!, sections: assembled as DocumentSection[],
+      })) }, args.reviewRoot, opts) : document ? assembleDocument({ reviewRoot: args.reviewRoot, headSha: manifest.headSha!, sections: assembled as DocumentSection[],
       ...(manifest.frontmatterYaml !== undefined ? { frontmatterYaml: manifest.frontmatterYaml } : {}) })
       : assembleInput(Object.fromEntries(expected.map((key, index) => [key, assembled[index]])) as JsonValue)
     if (Buffer.from(text, "utf8").toString("utf8") !== text) fail("encoding-error")
