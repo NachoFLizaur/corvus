@@ -537,7 +537,7 @@ describe("review PR reviews and threads", () => {
     }
     const { exec } = recordingExec(success(JSON.stringify([review])), success("[]"))
     expect(await reviews(locator, { exec })).toEqual({
-      ok: true, reviews: [{ ...review, user: "raven-nachoflizaur[bot]" }], threads: [], dispositions: [],
+      ok: true, reviews: [{ ...review, user: "raven-nachoflizaur[bot]" }], threads: [], dispositions: [], prior_threads: [],
       complete_pagination: true, complete_threads: true, api_calls: 2,
     })
   })
@@ -564,7 +564,8 @@ describe("review PR reviews and threads", () => {
       finding_id: "logic-spec-001", axis: "spec", dimension: "correctness",
       body: root.body,
     } as const
-    expect(result).toEqual({
+    const { prior_threads, ...legacy } = result
+    expect(legacy).toEqual({
       ok: true,
       reviews: [{ id: 123, user: "reviewer", state: "COMMENTED", commit_id: HEAD_SHA, submitted_at: review.submitted_at, html_url: REVIEW_URL, body: review.body, body_marker: MARKER }],
       threads: [{ root: projectedRoot, replies: [{
@@ -575,6 +576,7 @@ describe("review PR reviews and threads", () => {
       dispositions: [{ finding_id: "logic-spec-001", axis: "spec", dimension: "correctness", thread_url: THREAD_URL, state: "unknown", evidence: BASE_SHA }],
       complete_pagination: true, complete_threads: true, api_calls: 4,
     })
+    expect(prior_threads).toEqual([{ ...legacy.threads![0], is_corvus_review: true, is_resolved: null, is_outdated: null }])
     expect(calls).toEqual([
       ["gh", "api", "--method", "GET", "--paginate", `${endpoint}/reviews`, "-H", "Accept: application/vnd.github+json"],
       ["gh", "api", "--method", "GET", "--paginate", `${endpoint}/comments`, "-H", "Accept: application/vnd.github+json"],
@@ -584,10 +586,25 @@ describe("review PR reviews and threads", () => {
   test("does not claim complete pagination or thread coverage when comments are forbidden", async () => {
     const { exec, calls } = recordingExec(success("[]"), forbidden)
     expect(await reviews(locator, { exec })).toEqual({
-      ok: false, reason: "forbidden", http_status: 403, reviews: [], threads: [], dispositions: [],
+      ok: false, reason: "forbidden", http_status: 403, reviews: [], threads: [], dispositions: [], prior_threads: [],
       complete_pagination: false, complete_threads: false, api_calls: 2,
     })
     expect(calls).toHaveLength(2)
+  })
+
+  test("additive prior_threads includes other reviewers and replies without changing full-review dispositions", async () => {
+    const review = { id: 1, user: { login: "human" }, state: "COMMENTED", commit_id: HEAD_SHA,
+      submitted_at: "2026-11-02T00:00:00Z", html_url: REVIEW_URL, body: "Check the guard" }
+    const root = { id: 2, pull_request_review_id: 1, path: "src/guard.ts", html_url: THREAD_URL,
+      line: null, original_line: 10, start_line: null, original_start_line: 8, user: { login: "human" }, body: "Missing validation\nUntrusted input reaches the sink.",
+      commit_id: HEAD_SHA, original_commit_id: BASE_SHA }
+    const reply = { ...root, id: 3, in_reply_to_id: 2, body: "Fixed?", html_url: `${THREAD_URL}-reply` }
+    const { exec } = recordingExec(success(JSON.stringify([review])), success(JSON.stringify([reply, root])))
+    const result = await reviews(locator, { exec })
+    expect(result).toMatchObject({ ok: true, threads: [], dispositions: [], complete_threads: true,
+      prior_threads: [{ is_corvus_review: false, is_resolved: null, is_outdated: null,
+        root: { id: 2, body: root.body, html_url: THREAD_URL, path: root.path, line: null, original_line: 10, start_line: null, original_start_line: 8, user: "human" },
+        replies: [{ id: 3, in_reply_to_id: 2, body: "Fixed?" }] }] })
   })
 })
 

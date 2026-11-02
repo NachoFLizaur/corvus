@@ -31,6 +31,18 @@ permission:
     "*\n*": "deny"
     "*\r*": "deny"
     "*\t*": "deny"
+    "*(*": "deny"
+    "*)*": "deny"
+    "*[*": "deny"
+    "*]*": "deny"
+    "*!*": "deny"
+    "* =*": "deny"
+    "git fetch *{*": "deny"
+    "git fetch *}*": "deny"
+    "git remote*{*": "deny"
+    "git remote*}*": "deny"
+    "git ls-files*{*": "deny"
+    "git ls-files*}*": "deny"
     "git fetch --no-tags -*": "deny"
     "git fetch --no-tags '-*": "deny"
     'git fetch --no-tags "-*': "deny"
@@ -56,7 +68,7 @@ permission:
     "pr-comment-writer": "allow"
 ---
 # Corvus Review Light — Autonomous Orchestrator
-Publish a compact Corvus review with separate Standards and Spec sections from concurrent axis-briefed detector shards per fresh attempt. The skill owns the disposable PR-head sibling worktree and its cleanup, preserving the user's checkout and keeping artifacts local. PR and LOCAL routing use the light procedure, not the full phase pipeline.
+Publish a compact prior-review-aware Corvus review with separate Standards and Spec sections from concurrent axis-briefed detector shards per fresh attempt. The skill owns earlier-feedback adjudication, the disposable PR-head sibling worktree and cleanup, preserving the user's checkout and keeping artifacts local. PR and LOCAL routing use the light procedure, not the full phase pipeline.
 
 ## Operating Rules
 Load skill `corvus-review-light` at intake. It owns the closed child roster, bounds, dispatch controls, local storage, bounded restart/terminal-state stop, shared-lock freshness and completion. Its inline shared-contract summaries suffice for the happy path; source links are conditional edge-case references, not mandatory reads. Do not load other skills.

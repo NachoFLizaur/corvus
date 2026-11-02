@@ -1468,6 +1468,15 @@ export function lightRenderErrors(body: string, local = false, comments?: Candid
   if (/minor[^\n]*(?:counted (?:but|not)|not detailed|overflow|details? (?:cap|omitted))|(?:counted (?:but|not)|not detailed|overflow)[^\n]*minor/i.test(limits[1] ?? "")) errors.push("count-only minor presentation retained")
   if (/reviewed from (?:local )?git objects/i.test(limits[1] ?? "")) errors.push("unsupported object-only review wording")
   if (limits.length > 2 || limits.length === 2 && (lines(limits[1]).length > 3 || lines(limits[1]).some(line => !/^- \S/.test(line)))) errors.push("Review limits exceeds three factual bullets")
+  const earlier = [...content.matchAll(/^## Earlier feedback\s*$/gm)]
+  if (earlier.length) {
+    const section = content.slice(earlier[0].index + earlier[0][0].length).split(/^## /m)[0]
+    const entries = lines(section)
+    if (local || earlier.length !== 1 || earlier[0].index < (axes[1]?.index ?? Infinity)
+      || limits.length === 2 && earlier[0].index > content.indexOf("## Review limits") || !entries.length
+      || entries.some(line => !/^- (?:Still open:|Fixed since last review:|Agrees with @[A-Za-z0-9[\]-]+:) \[[^\]\n]+\]\(https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/pull\/\d+#(?:discussion_r|pullrequestreview-)\d+\) — \S[^\n]*$/.test(line)
+        || line.startsWith("- Still open:") && !/ \(by @[A-Za-z0-9[\]-]+\)$/.test(line))) errors.push("invalid Earlier feedback section")
+  }
   const findingLines = [...content.matchAll(/^\*\*.*\*\* \((?:standards|spec)(?:\+(?:standards|spec))?\/[^\n]*$/gm)]
   for (const [index, finding] of findingLines.entries()) {
     const line = finding[0]
@@ -1541,6 +1550,83 @@ export function lightFocusPaths(prompt: string): string[] | null {
     return Array.isArray(paths) && paths.every(path => typeof path === "string" && path && !path.startsWith("/")
       && !path.split("/").some(part => ["", ".", ".."].includes(part))) && new Set(paths).size === paths.length ? paths : null
   } catch { return null }
+}
+
+/** No-op oracle: complete API history and every current child report, read after
+ * detection and before route scoring. Unknown/missing/conflicting statuses or
+ * coverage fail toward the normal route, not a summary-selected skip. Auto never
+ * calls this; no flag or summary text disables the evidence requirements. */
+export function lightNoNewFindings(history: RecordValue, head: string,
+  briefs: { prompt: string; texts: string[] }[]): boolean {
+  if (history.complete_pagination !== true || history.complete_threads !== true || !briefs.length
+    || !Array.isArray(history.prior_threads) || !Array.isArray(history.reviews)) return false
+  const latest = history.reviews.map(record).filter(review => parseReviewMarker(review.body)
+    && /^## Corvus Light Review — /m.test(text(review.body))).sort((a, b) =>
+      text(a.submitted_at).localeCompare(text(b.submitted_at)) || Number(a.id) - Number(b.id)).at(-1)
+  if (!latest || parseReviewMarker(latest.body)?.head !== head) return false
+  const known = new Map<string, string>()
+  for (const match of text(latest.body).matchAll(/^- (Still open|Fixed since last review|Agrees with @[^:]+): \[[^\n]+?\]\((https:\/\/github\.com\/[^\s)]+)\)/gm))
+    known.set(match[2], match[1] === "Fixed since last review" ? "fixed" : "still_applies")
+  const required = history.prior_threads.map(record).map(thread => record(thread.root))
+  for (const root of required) if (root.pull_request_review_id === latest.id) known.set(text(root.html_url), "still_applies")
+  const bodyIDs = history.reviews.map(record).flatMap(review => {
+    const findings = [...text(review.body).matchAll(/^\*\*(?:blocker|critical|major|minor)\*\* \([^\n]+\): /gm)]
+    if (review.id === latest.id && findings.length) known.set(text(review.html_url), "still_applies")
+    return findings.map((_, index) => `review-${review.id}-${index + 1}`)
+  })
+  const covered = new Set<string>(), statuses = new Map<string, string>()
+  try {
+    for (const brief of briefs) {
+      const feedback = lightObjects(brief.prompt).find(value => Array.isArray(value.prior_feedback))?.prior_feedback
+      const blocks = brief.texts.flatMap(source => [...source.matchAll(/```ya?ml\s*\n([\s\S]*?)```/g)]
+        .map(match => record(record(load(match[1])).LIGHT_REVIEW_REPORT)))
+      if (!Array.isArray(feedback) || blocks.length !== 1) return false
+      const report = blocks[0], counts = record(report.counts)
+      const focus = lightFocusPaths(brief.prompt)
+      const inventory = Array.isArray(report.inventory) ? report.inventory.map(record) : []
+      const reviewed = Array.isArray(report.reviewed_scope) ? report.reviewed_scope.map(record) : []
+      const omitted = Array.isArray(report.omitted_scope) ? report.omitted_scope.map(record).filter(item => item.path !== null) : []
+      const accounted = [...reviewed, ...omitted].map(item => item.path)
+      const knownCounts = ["discovered", "selected", "reviewed", "omitted", "unavailable"].every(key =>
+        ["files", "changed_lines"].every(field => Number.isSafeInteger(record(counts[key])[field]) && Number(record(counts[key])[field]) >= 0))
+      if (!focus || !knownCounts || !isDeepStrictEqual(report.focus_paths, focus)
+        || !isDeepStrictEqual(inventory.map(item => item.path).sort(), [...focus].sort())
+        || !isDeepStrictEqual([...accounted].sort(), [...focus].sort()) || new Set(accounted).size !== accounted.length
+        || [...reviewed, ...omitted].some(item => item.regions !== "all_hunks")
+        || omitted.some(item => !/generated|vendor|lockfile|binar|snapshot|minified/i.test(text(item.reason)))
+        || inventory.some(item => !Number.isSafeInteger(item.changed_lines) || Number(item.changed_lines) < 0)) return false
+      for (const [key, paths] of [["discovered", focus], ["selected", focus], ["reviewed", reviewed.map(item => item.path)], ["omitted", omitted.map(item => item.path)]] as const) {
+        const expected = { files: paths.length, changed_lines: inventory.filter(item => paths.includes(text(item.path))).reduce((n, item) => n + Number(item.changed_lines), 0) }
+        if (!isDeepStrictEqual(counts[key], expected)) return false
+      }
+      if (report.status !== "completed" || report.code_head !== head || report.error != null
+        || !Array.isArray(report.findings) || report.findings.length || !Array.isArray(report.prior_assessments)
+        || record(counts.unavailable).files !== 0 || record(counts.unavailable).changed_lines !== 0
+        || !Array.isArray(report.unavailable_scope) || report.unavailable_scope.length
+        || record(report.strategy).approach !== "all_diff_files" || record(report.strategy).scope_kind !== "all_diff_files") return false
+      const assessments = report.prior_assessments.map(record)
+      if (assessments.length !== feedback.length || new Set(assessments.map(item => item.id)).size !== assessments.length) return false
+      for (const raw of feedback) {
+        const item = record(raw), assessment = assessments.find(value => value.id === item.id)
+        const expected = known.get(text(item.url))
+        if (!assessment || !expected || item.last_status !== expected || assessment.status !== expected || assessment.gap != null
+          || !Array.isArray(assessment.evidence) || !assessment.evidence.length
+          || !assessment.evidence.every(raw => record(raw).ref === head && text(record(raw).quote).trim())) return false
+        const id = text(item.id)
+        if (!id || statuses.has(id) && statuses.get(id) !== assessment.status) return false
+        statuses.set(id, text(assessment.status)); covered.add(id)
+        if (Array.isArray(item.source_ids)) for (const source of item.source_ids) {
+          const root = required.find(root => `thread-${root.id}` === source)
+          if (!root || root.path !== item.path || ![root.line, root.original_line].some(line =>
+            typeof line === "number" && line >= Number(item.line_start) && line <= Number(item.line_end))) return false
+          covered.add(text(source))
+        }
+      }
+    }
+  } catch { return false }
+  // Every originating inline thread must have been adjudicated, including others'
+  // feedback; summary claims and a strategically empty dispatch cannot prove it.
+  return required.every(root => covered.has(`thread-${root.id}`)) && bodyIDs.every(id => covered.has(id))
 }
 
 /** Decode in-session authorization objects, not child prose or summary claims. */
@@ -1873,12 +1959,25 @@ export async function checkLightAttempts(input: Inputs, events: RecordValue[], t
   }
   if (payloadCalls.some(tool => !presentations.some(presentation => presentation.producer.index < tool.index))) presentationErrors.push("payload without candidate production")
   const lastCandidate = presentations.at(-1), lastArtifact = presentations.findLast(presentation => presentation.frozen)
+  const lastAttempt = attempts.at(-1)
+  const priorHistory = lastAttempt && tools.findLast(tool => prCall(tool, "reviews") && correlated(tool) && ok(tool)
+    && tool.index < lastAttempt.firstDispatch.index)
+  const noNew = !local && !writerCalls.length && !presentationCalls.length && !!lastAttempt && !!priorHistory
+    && lightNoNewFindings(priorHistory.output, lastAttempt.head, lastAttempt.dispatches.map(dispatch => ({
+      prompt: text(dispatch.input.prompt), texts: detectorChildren.find(child => child.id === childResult(dispatch).sessionID)?.texts ?? [],
+    })))
+  const inertPreexisting = (path: string) => {
+    if (!noNew || !/pre.existing[^\n]*inert/i.test(summary) || realpathSync(path) !== path) return false
+    const value = json(read(path)), measured = measure(value)
+    return !("reason" in measured) && measured.canonical === read(path) && value.commit_id === lastAttempt?.head
+      && value.event !== "APPROVE" && parseReviewMarker(value.body)?.head === lastAttempt?.head
+  }
   let retainedOK = true, builtOK = true
   try {
     if (lastCandidate) {
       const measured = measure(lastCandidate.value)
       if ("reason" in measured || realpathSync(candidate) !== join(realpathSync(root), ".light/candidate.json") || read(candidate) !== measured.canonical) throw new Error("retained candidate contradicts last producing attempt")
-    } else if (existsSync(candidate)) throw new Error("unaccounted retained candidate")
+    } else if (existsSync(candidate) && !inertPreexisting(candidate)) throw new Error("unaccounted retained candidate")
     if (lastArtifact) {
       const expected = lastArtifact.frozen!.output.fitted ? fitReview(lastArtifact.value as CandidateRequest).request : lastArtifact.value
       const measured = measure(expected)
@@ -1886,11 +1985,10 @@ export async function checkLightAttempts(input: Inputs, events: RecordValue[], t
       const modulePath = join(dirname(resolve(input.fixture)), "dist/review-payload.js")
       const built: { verify: typeof verify } = await import(pathToFileURL(modulePath).href)
       builtOK = built.verify(artifact, lastArtifact.digest!, { reviewStateRoot: join(input.fixture, ".corvus") }).ok
-    } else if (existsSync(artifact)) throw new Error("unaccounted retained artifact")
+    } else if (existsSync(artifact) && !inertPreexisting(artifact)) throw new Error("unaccounted retained artifact")
   } catch (error) { retainedOK = false; presentationErrors.push(String(error)) }
 
   const terminalMetadata = metadata.find(isTerminal)
-  const lastAttempt = attempts.at(-1)
   const drift = lastAttempt && metadata.find(tool => tool.index > lastAttempt.dispatch.index && validOpen(tool)
     && (tool.output.code_head !== lastAttempt.head || tool.output.baseRefOid !== lastAttempt.base))
   const lost = statuses.find(tool => acquired && tool.index > acquired.index && !fresh(tool))
@@ -1899,7 +1997,7 @@ export async function checkLightAttempts(input: Inputs, events: RecordValue[], t
   const held = acquisitions.find(tool => tool.output.state === "held" || denied(diagnostic(tool) ?? ""))
   const cleanupFailure = removals.find(tool => !ok(tool))
   const reason = terminalMetadata ? text(terminalMetadata.output.state).toLowerCase() : lost ? "ownership" : drift && attempts.length === 3 ? "exhaustion"
-    : refusedAge ? "lock-age" : rootChange ? "namespace" : held ? "held/denied" : local ? "local_mode" : writerCalls.length ? "writer" : cleanupFailure ? "cleanup" : "unverified"
+    : refusedAge ? "lock-age" : rootChange ? "namespace" : held ? "held/denied" : local ? "local_mode" : writerCalls.length ? "writer" : cleanupFailure ? "cleanup" : noNew && !drift ? "no-new-findings" : "unverified"
   const stop = terminalMetadata ?? lost ?? (reason === "exhaustion" ? drift : undefined) ?? refusedAge ?? rootChange ?? held
   if (stop && tools.some(tool => tool.index > stop.index && (writer(tool) || detectorCalls.includes(tool) || tool.name === "corvus_review_payload"
     || tool.name === "corvus_review_persist" && !["abort", "status"].includes(text(tool.input.op))))) errors.push("detection/presentation/posting after DB terminal decision")

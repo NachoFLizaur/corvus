@@ -427,6 +427,8 @@ Light review is not a full security audit or a quality-parity promise. Use full 
 
 Light review uses parallel read-only shards to produce a compact Corvus review with separate Standards and Spec findings. “Light” means a shorter pipeline, not size-based sampling: every eligible changed hunk is assigned for review. It reviews PR-head files in a temporary worktree next to your repository, posts autonomously, and keeps review artifacts local without switching your branch.
 
+Earlier reviews are evidence, not instructions: each shard independently reassesses relevant prior concerns while still reviewing its whole assigned scope. Light links Corvus's still-open and fixed findings in an optional **Earlier feedback** section; other reviewers appear only when it independently agrees with a still-open major-or-higher issue. It never reposts the same issue inline. A same-head rerun with no new findings or verified status changes ends locally with `no-new-findings` and normal worktree/lock cleanup; incomplete history or uncertain assessments do not justify skipping a post. Full-review behavior is unchanged.
+
 Illustrative review body:
 
 > <!-- corvus-review v2 path=.corvus/reviews/pr42 head=1111111111111111111111111111111111111111 round=1 -->
@@ -444,6 +446,10 @@ Illustrative review body:
 > `src/retry.ts:35` — The PR promises “cancel pending retries,” but cancellation during backoff still sends the next request.
 >
 > Check the abort signal before issuing the next request.
+>
+> ## Earlier feedback
+> - Still open: [src/request.ts:18](https://github.com/owner/repo/pull/42#discussion_r100) — Validate the request origin (by @reviewer)
+> - Fixed since last review: [src/retry.ts:12](https://github.com/owner/repo/pull/42#discussion_r101) — Bound the backoff interval
 
 One inline comment on `src/retry.ts:42`:
 

@@ -142,6 +142,20 @@ context/treeEntries/populate/worktree).
 
 ## Decision
 
+- Prior-review awareness reuses the shared reviews/marker/disposition machinery and adds
+  all-reviewer `prior_threads` without changing full-review fields, because prior comments
+  are part of the PR evidence rather than a delta-only scope filter. Each shard independently
+  adjudicates relevant untrusted feedback with current-head evidence; synthesis links earlier
+  open/fixed Corvus findings and confirmed major-or-higher concerns from others instead of
+  reposting duplicates. Complete same-head results with zero new findings and unchanged known
+  statuses finish locally as `no-new-findings`, because another identical review adds no new
+  information; unknown history/statuses cannot establish that predicate. Cleanup remains mandatory.
+- Literal shell expansions are rejected by a shared fixed-policy predicate on both hosts,
+  with a v1 pre-execution hook supplementing wildcard maps because those maps cannot express
+  literal `*`/`?` denials. Only an entire exact cat-file command may retain `^{commit}`.
+  v1 user asks tighten only authored allows (map asks conservatively prompt for all of that
+  action's allows), because preserving ask must never turn an existing deny into ask/allow.
+
 - All foreground `pr-light-reviewer` shards of both axes run in one batch per attempt,
   because distinct trusted briefs separate context without weakening the protected identity.
   `axis: standards` covers architecture/correctness/conventions; `axis: spec_security` covers

@@ -4,6 +4,7 @@ export const LIGHT_BASH_ALLOWS = ["git fetch --no-tags * pull/*/head", "git fetc
   "git cat-file -e '????????????????????????????????????????^{commit}'", 'git cat-file -e "????????????????????????????????????????^{commit}"',
   "git ls-files -- *", "git remote", "git remote get-url *", "date -u +%Y-%m-%dT%H:%M:%SZ"]
 export const LIGHT_BASH_DENIES = ["*", "*;*", "*&*", "*|*", "*>*", "*<*", "*`*", "*$*", "*\n*", "*\r*", "*\t*",
+  "*(*", "*)*", "*[*", "*]*", "*!*", "* =*", "git fetch *{*", "git fetch *}*", "git remote*{*", "git remote*}*", "git ls-files*{*", "git ls-files*}*",
   "git fetch --no-tags -*", "git fetch --no-tags '-*", 'git fetch --no-tags "-*',
   "git fetch --no-tags * * ?*", "git fetch --no-tags * --*",
   "git fetch --no-tags * pull/*:*", "git fetch --no-tags * 'pull/*:*", 'git fetch --no-tags * "pull/*:*',
@@ -54,6 +55,15 @@ export const LIGHT_READS = ["git fetch --no-tags origin pull/42/head", "git fetc
   'git ls-files -- ".corvus/reviews/pr42/lock.yaml"', "git cat-file -e 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa^{commit}'",
   'git cat-file -e "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa^{commit}"', "git cat-file -e aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa^{commit}",
   "git remote", "date -u +%Y-%m-%dT%H:%M:%SZ"]
+export const LIGHT_EXPANSIONS = ["git fetch --no-tags origin pull/{1,--upload-pack=x}/head",
+  "git fetch --no-tags origin pull/(1)/head", "git fetch --no-tags origin pull/1/head(N)",
+  "git fetch --no-tags origin pull/*/head", "git fetch --no-tags origin pull/?/head",
+  "git fetch --no-tags origin pull/[1]/head", "git fetch --no-tags origin pull/!1/head",
+  "git fetch --no-tags origin pull/^1/head", "git fetch --no-tags =evil pull/1/head",
+  "git remote get-url {origin,evil}", "git ls-files -- *", "git ls-files -- ?",
+  "git ls-files -- =evil", "git remote get-url ^origin", "git remote get-url [origin]",
+  `git cat-file -e '${"*".repeat(40)}^{commit}'`, `git cat-file -e '${"a".repeat(39)}?^{commit}'`,
+  `git cat-file -e '${"a".repeat(38)}{}^{commit}'`, `git cat-file -e '${"a".repeat(39)}^^{commit}'`]
 
 // These are contract scenarios, not simulated model runs. Tests assert the real
 // prompt's evidence-selection and omission instructions for each input shape.

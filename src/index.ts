@@ -4,7 +4,7 @@ import type { Plugin } from "@opencode-ai/plugin"
 import { z } from "zod"
 import { agentDir, commandDir, skillDir } from "./paths"
 import { loadAgents } from "./load-agents"
-import { enforceFixedDenies } from "./fixed-denies"
+import { buildFixedDenyPolicies, enforceFixedDenies, isFixedDenied } from "./fixed-denies"
 import { loadCommands } from "./load-commands"
 import { hostOmitsOutputLimit, resolveOutputBudget } from "./output-budget"
 import { createReviewToolExecutors } from "./review-payload"
@@ -113,7 +113,23 @@ const plugin: Plugin = async (input) => {
   const sync = createSyncExecutor({ cwd: directory })
   const worktree = createWorktreeExecutor({ cwd: directory })
   const corvusAgents = new Set(existsSync(agentDir) ? Object.keys(loadAgents(agentDir)) : [])
+  const fixedPolicies = buildFixedDenyPolicies()
+  const sessionAgents = new Map<string, string>()
   return {
+    /** Agent oracle: host chat.params records the current generation's agent
+     * when available; tool.execute.before reads it before shell mutation. Only
+     * recorded agents with a packaged fixed policy fail closed on missing commands
+     * or fixed denies. Missing identity and other agents defer to host permissions;
+     * v1 config maps still enforce the light policy. No user permission or prompt
+     * changes disable an identified light check; plugin unload removes the hooks. */
+    "tool.execute.before": async (request, output) => {
+      if (!["bash", "shell"].includes(request.tool)) return
+      const agent = sessionAgents.get(request.sessionID)
+      if (!agent) return
+      const policy = fixedPolicies.get(agent)
+      if (policy && (typeof output.args?.command !== "string" || isFixedDenied(policy, "shell", [output.args.command])))
+        throw new Error(`corvus: ${agent}; shell is denied by the plugin's fixed-deny boundary.`)
+    },
     /**
      * Scope oracle: packaged names read at plugin initialization, never user config.
      * Read the hook-visible budget before mutation; non-Corvus agents and defined
@@ -122,6 +138,7 @@ const plugin: Plugin = async (input) => {
      * Check host model IDs before mutation so host-omitted limits stay unset.
      */
     "chat.params": async (input, output) => {
+      sessionAgents.set(input.sessionID, input.agent)
       if (!corvusAgents.has(input.agent) || output.maxOutputTokens !== undefined) return
       if (hostOmitsOutputLimit({ providerID: input.model.providerID, modelID: input.model.api.id })) return
       const budget = resolveOutputBudget({ current: output.maxOutputTokens, modelLimit: input.model.limit.output })

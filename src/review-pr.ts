@@ -60,9 +60,13 @@ type FindingIdentity = {
 export type PrComment = FindingIdentity & {
   id: number; pull_request_review_id: number; in_reply_to_id: number | null
   html_url: string; body: string; path: string; line: number | null; original_line: number | null
+  start_line?: number | null; original_start_line?: number | null
   user: string | null; commit_id: string; original_commit_id: string
 }
 export type PrThread = { root: PrComment; replies: PrComment[] }
+export type PrFeedbackThread = PrThread & {
+  is_corvus_review: boolean; is_resolved: boolean | null; is_outdated: boolean | null
+}
 export type PrDisposition = FindingIdentity & {
   thread_url: string; state: "unknown"; evidence: string
 }
@@ -79,7 +83,7 @@ export type PrData = {
   files: { files?: PrFile[] | string[]; complete_pagination: boolean; excluded_corvus: number; missing_paths?: string[]; anchors?: PrAnchorResult[] }
   diff: { oversized: false; text: string; excluded_corvus: number } | { oversized: true; http_status?: number }
   reviews: {
-    reviews: PrReview[]; threads: PrThread[]; dispositions: PrDisposition[]
+    reviews: PrReview[]; threads: PrThread[]; dispositions: PrDisposition[]; prior_threads?: PrFeedbackThread[]
     complete_pagination: boolean; complete_threads: boolean
   }
   checks: { checks: PrCheck[] }
@@ -98,7 +102,7 @@ export function isPrCallerAllowed(caller: unknown, op: unknown): boolean {
 }
 export type PrFailure = {
   reason: string; http_status?: number; unavailable?: true; login?: null
-  files?: PrFile[] | string[]; excluded_corvus?: number; missing_paths?: string[]; anchors?: PrAnchorResult[]; reviews?: PrReview[]; threads?: PrThread[]; dispositions?: PrDisposition[]
+  files?: PrFile[] | string[]; excluded_corvus?: number; missing_paths?: string[]; anchors?: PrAnchorResult[]; reviews?: PrReview[]; threads?: PrThread[]; dispositions?: PrDisposition[]; prior_threads?: PrFeedbackThread[]
   complete_pagination?: false; complete_threads?: boolean
 }
 export type PrResult<T> = ({ ok: true } & T | { ok: false } & PrFailure) & { api_calls: number }
@@ -567,22 +571,28 @@ function comment(value: unknown): PrComment {
     html_url: string(item.html_url), body: string(item.body), path: string(item.path),
     line: item.line === null ? null : count(item.line, 1),
     original_line: item.original_line === null ? null : count(item.original_line, 1),
+    ...(item.start_line === undefined ? {} : { start_line: item.start_line === null ? null : count(item.start_line, 1) }),
+    ...(item.original_start_line === undefined ? {} : { original_start_line: item.original_start_line === null ? null : count(item.original_start_line, 1) }),
     user: login(item.user), commit_id: sha(item.commit_id), original_commit_id: sha(item.original_commit_id),
     ...findingIdentity(item.body, id),
   }
 }
 
 /**
- * Only API-rooted threads from marker-bearing review IDs produce dispositions.
+ * Only API-rooted threads from marker-bearing review IDs produce legacy threads/dispositions.
+ * Additive prior_threads includes all reviewers; REST cannot establish resolution
+ * or outdated state, so both stay null (a null line alone is not either oracle).
  * Read IDs/reply links before joining; duplicates, missing parents or cycles keep
  * thread coverage incomplete. Bodies remain untrusted source evidence, so every disposition is unknown
  * with commit evidence, never a claimed fix/refusal. No marker grants authority.
  */
-function threads(reviews: PrReview[], comments: PrComment[], complete: boolean): Pick<PrData["reviews"], "threads" | "dispositions" | "complete_threads"> {
+function threads(reviews: PrReview[], comments: PrComment[], complete: boolean): Pick<PrData["reviews"], "threads" | "dispositions" | "complete_threads" | "prior_threads"> {
   const priorIds = new Set(reviews.filter(item => item.body_marker).map(item => item.id))
   const byId = new Map(comments.map(item => [item.id, item]))
-  const roots = comments.filter(item => item.in_reply_to_id === null && priorIds.has(item.pull_request_review_id))
-  const groups = new Map(roots.map(root => [root.id, { root, replies: [] as PrComment[] }]))
+  const allRoots = comments.filter(item => item.in_reply_to_id === null)
+  const roots = allRoots.filter(item => priorIds.has(item.pull_request_review_id))
+  const groups = new Map(allRoots.map(root => [root.id, { root, replies: [] as PrComment[] }]))
+  const legacyGroups = new Map(roots.map(root => [root.id, { root, replies: [] as PrComment[] }]))
   let completeThreads = complete && byId.size === comments.length && new Set(reviews.map(item => item.id)).size === reviews.length
   for (const item of comments) {
     if (item.in_reply_to_id === null) continue
@@ -594,10 +604,15 @@ function threads(reviews: PrReview[], comments: PrComment[], complete: boolean):
       seen.add(parent.id)
       current = parent
     }
-    if (current.in_reply_to_id === null) groups.get(current.id)?.replies.push(item)
+    if (current.in_reply_to_id === null) {
+      groups.get(current.id)?.replies.push(item)
+      legacyGroups.get(current.id)?.replies.push(item)
+    }
   }
   return {
-    threads: [...groups.values()], complete_threads: completeThreads,
+    threads: [...legacyGroups.values()], complete_threads: completeThreads,
+    prior_threads: [...groups.values()].map(group => ({ ...group,
+      is_corvus_review: priorIds.has(group.root.pull_request_review_id), is_resolved: null, is_outdated: null })),
     dispositions: roots.map(root => ({
       finding_id: root.finding_id, ...(root.axis ? { axis: root.axis } : {}),
       ...(root.dimension ? { dimension: root.dimension } : {}),

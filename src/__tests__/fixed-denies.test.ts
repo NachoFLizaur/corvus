@@ -9,7 +9,7 @@ import { renameAction, toV2Permissions } from "../to-v2-permissions"
 import { enforceProtected } from "../v2/enforce-protected"
 import { registerAgents } from "../v2/register-agents"
 import { createFakeContext, type EvaluationInput } from "./fake-context"
-import { LIGHT_BASH_DENIES, LIGHT_BASH_MAP, LIGHT_TASK_MAP, LIGHT_CHILDREN, LIGHT_MUTATIONS, LIGHT_READS } from "./fixtures/review-light"
+import { LIGHT_BASH_DENIES, LIGHT_BASH_MAP, LIGHT_TASK_MAP, LIGHT_CHILDREN, LIGHT_MUTATIONS, LIGHT_READS, LIGHT_EXPANSIONS } from "./fixtures/review-light"
 
 const light = "corvus-review-light", detector = "pr-light-reviewer", model = "test-provider/user-chosen-fast-model"
 const corpus = loadAgents(agentDir)
@@ -95,7 +95,7 @@ describe("light fixed policy (AC1, AC7)", () => {
     for (const action of ["edit", "write", "patch"]) expect(agent.permission![action]).toBe("deny")
     for (const command of LIGHT_MUTATIONS) expect(evaluateRules(rules, "shell", command), command).toBe("deny")
     for (const command of LIGHT_READS) expect(evaluateRules(rules, "shell", command), command)
-      .toBe(kind === "deny" || kind === "map" && command.startsWith("git remote get-url") ? "deny" : "allow")
+      .toBe(kind === "deny" || kind === "map" && command.startsWith("git remote get-url") ? "deny" : kind === "ask" ? "ask" : "allow")
     expect(config.agent![detector]!.permission).toEqual(corpus[detector].permission)
     expect(config.agent![detector]!.prompt).toBe(corpus[detector].prompt)
     expect(config.agent![detector]!.model).toBe(model)
@@ -126,6 +126,45 @@ describe("light fixed policy (AC1, AC7)", () => {
     expect(evaluateRules(toV2Permissions(config.agent[light].permission), "subagent", "pr-light-reviewer")).toBe("deny")
     await hooks.config!(config as unknown as Config)
     expect(JSON.stringify(config.agent[light])).toBe(before)
+  })
+
+  test.each(["ask", { "git remote": "ask" }])("v1 user bash/task asks tighten authored allows without opening denied capabilities: %j", async ask => {
+    const hooks = await plugin({} as Parameters<typeof plugin>[0])
+    const config: TestConfig = { agent: { [light]: { permission: { bash: ask, task: typeof ask === "string" ? ask : { "pr-light-reviewer": "ask" } } } } }
+    await hooks.config!(config as unknown as Config)
+    const before = JSON.stringify(config.agent[light].permission), rules = toV2Permissions(config.agent[light].permission)
+    for (const command of LIGHT_READS) expect(evaluateRules(rules, "shell", command)).toBe("ask")
+    for (const command of LIGHT_MUTATIONS) expect(evaluateRules(rules, "shell", command)).toBe("deny")
+    expect(evaluateRules(rules, "subagent", "pr-light-reviewer")).toBe("ask")
+    expect(evaluateRules(rules, "subagent", "general")).toBe("deny")
+    await hooks.config!(config as unknown as Config)
+    expect(JSON.stringify(config.agent[light].permission)).toBe(before)
+  })
+
+  test.each(["bash", "shell"])("literal expansion guard scopes v1 %s to recorded light identity and composes with v2; exact commit suffix stays usable", async tool => {
+    const hooks = await plugin({} as Parameters<typeof plugin>[0]), fake = createFakeContext()
+    await registerAgents(fake.ctx)
+    const cleanup = await enforceProtected(fake.ctx)
+    const generation = (agent: string) => hooks["chat.params"]!({ sessionID: "ses_probe", agent } as Parameters<NonNullable<typeof hooks["chat.params"]>>[0],
+      { maxOutputTokens: 1 } as Parameters<NonNullable<typeof hooks["chat.params"]>>[1])
+    const shell = (command: string) => hooks["tool.execute.before"]!({ tool, sessionID: "ses_probe", callID: "call_probe" }, { args: { command } })
+    try {
+      // Without chat.params identity, the hook leaves host permissions in charge.
+      for (const command of [...LIGHT_READS, ...LIGHT_EXPANSIONS]) await expect(shell(command)).resolves.toBeUndefined()
+      await generation(light)
+      for (const command of LIGHT_EXPANSIONS) {
+        await expect(shell(command)).rejects.toThrow("fixed-deny boundary")
+        expect((await fake.evaluate({ agent: light, action: "shell", resources: [command], effect: "allow" })).effect).toBe("deny")
+      }
+      for (const command of LIGHT_READS) {
+        await shell(command)
+        expect((await fake.evaluate({ agent: light, action: "shell", resources: [command], effect: "allow" })).effect).toBe("allow")
+      }
+      for (const agent of ["researcher", "other-plugin-agent"]) {
+        await generation(agent)
+        for (const command of LIGHT_EXPANSIONS) await expect(shell(command)).resolves.toBeUndefined()
+      } // Other identified agents retain their own policy.
+    } finally { await cleanup?.() }
   })
 
   test("v2 request hook denies later user allows without replacing permission arrays or model choices", async () => {

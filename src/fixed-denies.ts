@@ -31,12 +31,14 @@ function isPlainObject(value: unknown): value is PlainObject {
  * pattern is derived from the authored block, so host enforcement cannot drift.
  * Missing/invalid question/edit/write/patch denies or closed bash/task maps aborts
  * loading, fail-closed; write/patch translate to edit on v2.
- * v1 replaces bash/task with authored maps plus additional user denies, discarding
- * user allows/asks for these two actions. v2 requires an authored allow for every
+ * v1 replaces bash/task with authored maps plus additional user denies/asks, discarding
+ * user allows for these two actions. v2 requires an authored allow for every
  * shell/subagent resource and never relaxes a host deny/ask. Metacharacter denies
  * follow allows on v1 and are checked independently on v2. Both hosts may scan
  * compounds into several resources: each component must satisfy this boundary;
- * it cannot reject separators already removed by the host scanner.
+ * it cannot reject separators already removed by the host scanner. The v1
+ * pre-execution hook also checks literal expansions, which wildcard maps cannot
+ * express (notably literal * and ?); v2 checks the same command predicate here.
  * User model choice and unrelated permissions are not policy inputs or outputs.
  * There is no config bypass: removal of the plugin disables the v1 boundary on
  * subsequent config loads and v2 teardown disposes the enforcing hook.
@@ -74,12 +76,25 @@ export function isFixedDenied(policy: FixedDenyPolicy, action: string, resources
     const rules = policy.rules.filter(rule => rule.action === normalized)
     // The wildcard is the fallback, not an unconditional deny of the exceptions.
     const explicitDenies = rules.filter(rule => rule.effect === "deny" && rule.resource !== "*")
-    return resources.some(resource => evaluateRules(rules.filter(rule => rule.effect === "allow"), normalized, resource) !== "allow"
+    return resources.some(resource => normalized === "shell" && hasLightShellExpansion(resource)
+      || evaluateRules(rules.filter(rule => rule.effect === "allow"), normalized, resource) !== "allow"
       || evaluateRules(explicitDenies, normalized, resource) === "deny")
   }
   // Action-wide denies also hold for requests with no resources.
   return (resources.length === 0 ? ["*"] : resources)
     .some((resource) => evaluateRules(policy.rules, normalized, resource) === "deny")
+}
+
+/** Literal command-text oracle, checked before either host executes a light shell
+ * request. Only an entire exact cat-file shape with a lowercase SHA may contain
+ * the ^{commit} suffix; remove that one literal before rejecting expansions.
+ * Quotes do not disable rejection: shell state/globbing semantics differ across
+ * hosts, so no other brace/caret/glob/substitution form is permitted. Unknown
+ * command shapes still fail through the closed allowlist; no config bypass. */
+export function hasLightShellExpansion(command: string): boolean {
+  const exactCommit = /^git cat-file -e (?:[a-f0-9]{40}\^\{commit\}|'[a-f0-9]{40}\^\{commit\}'|"[a-f0-9]{40}\^\{commit\}")$/.test(command)
+  const remaining = exactCommit ? command.replace("^{commit}", "") : command
+  return /[{}()*?\[\]!^\\]/.test(remaining) || /(?:^|\s)["']?=/.test(remaining)
 }
 
 /**
@@ -92,7 +107,10 @@ export function isFixedDenied(policy: FixedDenyPolicy, action: string, resources
  * deny is indistinguishable from a user wildcard denial. On config-hook replay,
  * a map carrying every authored key already has that fallback; it is not an extra
  * wildcard denial. An extra wildcard denial is emitted last and stays last on
- * replay. User scalar allows/asks never expand authority.
+ * replay. User allows never expand authority. Scalar asks replace only authored
+ * allows with asks. Map asks conservatively ask all authored allows for that
+ * action: glob intersections cannot be represented exactly by v1's maps; this
+ * may add prompts but never turns the fallback/explicit denies into asks.
  * Read the packaged policy before constructing a new result; never mutate either
  * input. Other agents retain their original object references and effective rules.
  */
@@ -113,7 +131,9 @@ export function enforceFixedDenies(corpus: Corpus, merged: PlainObject, override
           : typeof current === "string" ? { "*": current } : {}
         const override = isPlainObject(overrides[name]) ? overrides[name].permission : undefined
         const user = isPlainObject(override) ? override[action] : override
-        const userEntries = isPlainObject(user) ? Object.entries(user) : user === "deny" ? [["*", "deny"]] : []
+        const userEntries = isPlainObject(user) ? Object.entries(user) : user === "deny" || user === "ask" ? [["*", user]] : []
+        if (closed && userEntries.some(([, effect]) => effect === "ask"))
+          for (const pattern of Object.keys(resources)) if (resources[pattern] === "allow") resources[pattern] = "ask"
         const hasFallback = isPlainObject(user) && Object.keys(denied).every(key => key in user)
           && Object.keys(user)[0] === "*" && user["*"] === "deny"
         const entries = closed ? userEntries.filter(([pattern, effect]) => effect === "deny"

@@ -5,6 +5,18 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.11.0-beta.7 — 2026-11-02
+
+### Changed
+
+- Light reviews consider the whole assigned PR scope and earlier feedback from all reviewers. Detectors independently reassess prior concerns without repeating their inline comments; an optional Earlier feedback section links Corvus's still-open/fixed findings and independently confirmed major-or-higher concerns from other reviewers.
+- Same-head light reruns with no new findings and no verified status changes finish locally as `no-new-findings`, without writer dispatch, and still clean up their owned worktree and lock. Posted reviews retain normal round increments; full-review behavior is unchanged.
+
+### Fixed
+
+- Both hosts reject light-shell brace, parenthesis, glob, history, caret and token-start equals expansion forms, preserving only the exact SHA `^{commit}` suffix for required cat-file commands. A v1 pre-execution guard supplements wildcard permission maps, which cannot express literal `*`/`?` denials.
+- v1 preserves user `ask` restrictions on light bash/task as well as denies. Map asks conservatively prompt for all authored allows of that action; denied capabilities stay denied and user allows still cannot widen the fixed boundary.
+
 ## 0.11.0-beta.6 — 2026-11-02
 
 ### Changed
