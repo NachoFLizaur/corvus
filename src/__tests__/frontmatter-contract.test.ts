@@ -425,6 +425,6 @@ test("only workflow orchestrators and light retain their distinct ordered bash d
         : [["*", "allow"], ...denies.map((pattern): [string, string] => [pattern, "deny"])])
     }
     const hostRules = toV2Permissions(config.agent?.[name]?.permission).filter(rule => rule.action === "shell")
-    expect(hostRules, name).toHaveLength(name === "corvus-review-light" ? 35 : ["corvus", "corvus-auto"].includes(name) ? 11 : 0)
+    expect(hostRules, name).toHaveLength(name === "corvus-review-light" ? 47 : ["corvus", "corvus-auto"].includes(name) ? 11 : 0)
   }
 })

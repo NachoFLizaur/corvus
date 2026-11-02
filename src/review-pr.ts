@@ -4,7 +4,7 @@ import { resolve } from "node:path"
 import { isReviewCallerAllowed } from "./review-callers"
 
 export type PrExecResult = { code: number; stdout: string; stderr: string; stdout_truncated?: true }
-export type PrExec = (argv: string[], options?: { cwd?: string }) => Promise<PrExecResult>
+export type PrExec = (argv: string[], options?: { cwd?: string; env?: NodeJS.ProcessEnv }) => Promise<PrExecResult>
 export type PrOptions = { exec?: PrExec; timeoutMs?: number; cwd?: string }
 export type PrRepoInput = { cwd?: string }
 export type PrFindInput = PrRepoInput & { branch?: string }
@@ -14,6 +14,7 @@ export type PrLocator = { owner: string; name: string; pr: number | string }
 export type PrAnchor = { path: string; line: number; start_line?: number }
 export type PrAnchorResult = PrAnchor & {
   postable: boolean
+  source: "api" | "local"
   reason?: "path-not-in-pr" | "no-patch" | "outside-hunk" | "spans-hunks" | "incomplete-pagination"
   diff_anchor: string
 }
@@ -241,9 +242,10 @@ function target(op: PrOperation, input: unknown): Target {
  * A deadline starts before every injected exec or owned spawn. Expiry fails the
  * read, kills the owned process and permits no retry of that command; injected exec owns its
  * cancellation. Positive finite timer bounds are required and cannot be disabled.
- * PATH resolves fixed gh/git commands with inherited env and no shell; stdin is always closed.
+ * PATH resolves fixed gh/git commands without a shell; stdin is always closed.
+ * Reads inherit env by default; the local-anchor oracle supplies scrubbed Git env.
  */
-function execute(argv: string[], opts: PrOptions, timeoutMs: number, stdoutLimit?: number): Promise<PrExecResult> {
+function execute(argv: string[], opts: PrOptions & { env?: NodeJS.ProcessEnv }, timeoutMs: number, stdoutLimit?: number): Promise<PrExecResult> {
   return new Promise((resolve, reject) => {
     let child: ChildProcessWithoutNullStreams | undefined
     const timer = setTimeout(() => {
@@ -253,8 +255,8 @@ function execute(argv: string[], opts: PrOptions, timeoutMs: number, stdoutLimit
     const done = (value: PrExecResult) => { clearTimeout(timer); resolve(value) }
     const failed = () => { clearTimeout(timer); reject(new ReadFailure({ reason: "exec-failed" })) }
     try {
-      if (opts.exec) { opts.exec(argv, { cwd: opts.cwd }).then(done, failed); return }
-      child = spawn(argv[0], argv.slice(1), { stdio: "pipe", env: process.env, cwd: opts.cwd })
+      if (opts.exec) { opts.exec(argv, { cwd: opts.cwd, ...(opts.env ? { env: opts.env } : {}) }).then(done, failed); return }
+      child = spawn(argv[0], argv.slice(1), { stdio: "pipe", env: opts.env ?? process.env, cwd: opts.cwd })
       let stdout = ""
       let stderr = ""
       let stdoutBytes = 0
@@ -375,7 +377,7 @@ function pages(text: string): Pages {
   return { pages: result, complete: result.length > 0 }
 }
 
-type Context = { calls: number; run: (argv: string[], stdoutLimit?: number) => Promise<PrExecResult> }
+type Context = { calls: number; run: (argv: string[], stdoutLimit?: number, controls?: { cwd?: string; env: NodeJS.ProcessEnv }) => Promise<PrExecResult> }
 type Listing<T> = { items: T[]; complete: boolean; error?: PrFailure }
 async function listing<T>(endpoint: string, context: Context, project: (value: unknown) => T): Promise<Listing<T>> {
   const items: T[] = []
@@ -411,7 +413,7 @@ function file(value: unknown): PrFile {
 
 const diffAnchor = (path: string): string => `diff-${createHash("sha256").update(path).digest("hex")}`
 type RightHunk = { start: number; end: number }
-/** API patch headers and every body prefix/count are the RIGHT-line oracle,
+/** API/local patch headers and every body prefix/count are the RIGHT-line oracle,
  * read after pagination and before returning postability. Only complete hunks
  * contribute contiguous added/context intervals; deleted lines never advance
  * RIGHT. Malformed/truncated hunks contribute none. No caller bypass exists. */
@@ -453,25 +455,81 @@ function rightHunks(patch: string): RightHunk[] {
  * Incomplete pagination fails every anchor closed, including early matches;
  * missing files/patches and ranges outside one complete hunk remain unpostable.
  * Anchor-only results never include patches. Only omission skips these checks. */
-function verifyAnchors(anchors: PrAnchor[], items: PrFile[], complete: boolean): PrAnchorResult[] {
+const needsLocalPatch = (item: PrFile) => !item.patch || /patch[ _-]?omitted/i.test(item.status)
+function verifyAnchors(anchors: PrAnchor[], items: PrFile[], complete: boolean, localPatches = new Map<string, string>()): PrAnchorResult[] {
   const byPath = new Map(items.map(item => [item.filename, item]))
   const parsed = new Map<string, RightHunk[]>()
   return anchors.map(anchor => {
     const item = byPath.get(anchor.path)
+    const patch = item && (needsLocalPatch(item) ? localPatches.get(anchor.path) : item.patch)
+    const source = complete && localPatches.has(anchor.path) ? "local" : "api"
     let reason: PrAnchorResult["reason"]
     if (!complete) reason = "incomplete-pagination"
     else if (!item) reason = "path-not-in-pr"
-    else if (!item.patch) reason = "no-patch"
+    else if (!patch) reason = "no-patch"
     else {
       let hunks = parsed.get(anchor.path)
-      if (!hunks) { hunks = rightHunks(item.patch); parsed.set(anchor.path, hunks) }
+      if (!hunks) { hunks = rightHunks(patch); parsed.set(anchor.path, hunks) }
       const start = anchor.start_line ?? anchor.line
       if (!hunks.some(hunk => start >= hunk.start && anchor.line <= hunk.end)) {
         reason = hunks.filter(hunk => start <= hunk.end && anchor.line >= hunk.start).length > 1 ? "spans-hunks" : "outside-hunk"
       }
     }
-    return { ...anchor, postable: reason === undefined, ...(reason ? { reason } : {}), diff_anchor: diffAnchor(anchor.path) }
+    return { ...anchor, postable: reason === undefined, source, ...(reason ? { reason } : {}), diff_anchor: diffAnchor(anchor.path) }
   })
+}
+
+/** Fallback oracle: validated REST PR identity/head/base bracket a fresh complete
+ * file listing and local object reads,
+ * before anchor decisions. Exact commit resolution and stable SHAs are required;
+ * missing objects, movement, malformed/truncated output or Git failure leaves
+ * no-patch, never a guessed anchor. Only complete listings with requested patchless
+ * files enable this route; paths-only/unfiltered reads never invoke it. Git controls
+ * are scrubbed before exec, replacement/lazy-fetch disabled and literal pathspecs
+ * plus no external diff/textconv keep PR paths/config out of execution. No bypass. */
+async function localAnchorPatches(target: Target, context: Context, items: PrFile[], complete: boolean): Promise<Map<string, string>> {
+  const patches = new Map<string, string>()
+  const requested = new Set(target.anchors?.map(anchor => anchor.path))
+  const missing = items.filter(item => requested.has(item.filename) && needsLocalPatch(item))
+  if (!complete || !missing.length) return patches
+  try {
+    const identity = async () => {
+      const result = await context.run(["gh", "api", "--method", "GET", target.endpoint, ...ACCEPT_JSON])
+      requireSuccess(result)
+      const item = record(json(result.stdout))
+      if (count(item.number, 1) !== Number(target.pr)
+        || string(item.html_url).toLowerCase() !== `https://github.com/${target.repo}/pull/${target.pr}`.toLowerCase()) return fail("metadata-identity-mismatch")
+      return { head: sha(record(item.head).sha), base: sha(record(item.base).sha) }
+    }
+    const before = await identity()
+    const fresh = await listing(`${target.endpoint}/files`, context, file)
+    if (!fresh.complete || missing.some(item => !fresh.items.some(current => current.filename === item.filename
+      && current.status === item.status && current.additions === item.additions && current.deletions === item.deletions
+      && needsLocalPatch(current)))) return patches
+    const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_")))
+    Object.assign(env, { GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", GIT_NO_REPLACE_OBJECTS: "1",
+      GIT_NO_LAZY_FETCH: "1", GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0", GIT_LITERAL_PATHSPECS: "1" })
+    const git = async (args: string[], cwd?: string) => {
+      const result = await context.run(["git", "-c", "core.fsmonitor=false", ...args], 64 * 1024 * 1024, { ...(cwd ? { cwd } : {}), env })
+      if (result.code !== 0 || result.stdout_truncated) return fail("git-read-failed")
+      return result.stdout
+    }
+    const root = (await git(["rev-parse", "--show-toplevel"])).replace(/\r?\n$/, "")
+    if (!root.startsWith("/") || /[\0\r\n]/.test(root)) return patches
+    for (const ref of [before.base, before.head]) {
+      if (sha((await git(["rev-parse", "--verify", `${ref}^{commit}`], root)).trim()) !== ref) return patches
+    }
+    const merge = sha((await git(["merge-base", before.base, before.head], root)).trim())
+    for (const item of missing) {
+      try {
+        const patch = await git(["diff", "--no-color", "--no-ext-diff", "--no-textconv", "-U3", `${merge}...${before.head}`, "--", item.filename], root)
+        if (patch) patches.set(item.filename, patch)
+      } catch { /* One unreadable file does not discard other verified file hunks. */ }
+    }
+    const after = await identity()
+    if (after.head !== before.head || after.base !== before.base) patches.clear()
+  } catch { patches.clear() }
+  return patches
 }
 function review(value: unknown): PrReview {
   const item = record(value)
@@ -769,10 +827,11 @@ const handlers: Handlers = {
       .filter(item => requested.has(item.filename))
       .map(item => ({ ...item, diff_anchor: diffAnchor(item.filename) }))
     const found = new Set(result.items.map(item => typeof item === "string" ? item : item.filename))
+    const localPatches = target.anchors === undefined ? undefined : await localAnchorPatches(target, context, items as PrFile[], result.complete)
     const data = { ...(target.anchors !== undefined && target.paths === undefined ? {} : { files: selected as PrFile[] | string[] }),
       excluded_corvus: result.items.length - items.length,
       ...(target.paths === undefined ? {} : { missing_paths: target.paths.filter(path => !found.has(path)) }),
-      ...(target.anchors === undefined ? {} : { anchors: verifyAnchors(target.anchors, items as PrFile[], result.complete) }) }
+      ...(target.anchors === undefined ? {} : { anchors: verifyAnchors(target.anchors, items as PrFile[], result.complete, localPatches) }) }
     return result.error ? { ok: false, ...result.error, ...data, complete_pagination: false }
       : { ok: true, ...data, complete_pagination: result.complete }
   },
@@ -846,9 +905,9 @@ async function perform<O extends PrOperation>(op: O, input: unknown, options: Pr
     const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS
     if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0 || timeoutMs > 2_147_483_647) return fail("invalid-timeout")
     if (opts.exec !== undefined && typeof opts.exec !== "function") return fail("invalid-exec")
-    context.run = async (argv, stdoutLimit) => {
+    context.run = async (argv, stdoutLimit, controls) => {
       if (argv[0] === "gh") context.calls++
-      const result = await execute(argv, opts, timeoutMs, stdoutLimit)
+      const result = await execute(argv, controls ? { ...opts, ...controls, cwd: controls.cwd ?? opts.cwd } : opts, timeoutMs, stdoutLimit)
       if (!isRecord(result) || !Number.isInteger(result.code) || typeof result.stdout !== "string" || typeof result.stderr !== "string") return fail("invalid-exec-result")
       return result
     }

@@ -228,8 +228,8 @@ context/treeEntries/populate/worktree).
   because size or omission alone is not that evidence. Zero findings is neither approval nor
   complete coverage. Complete inventories, diagnostics and evidence fields stay in the local
   ledger, because actual coverage must remain auditable without bloating the post (light skill,
-  steps 6/9/10). Minor details stay capped at `min(validated max_minors, 2)`, nitpicks excluded
-  and minor overflow counted by axis.
+  steps 6/9/10). Every retained minor is fully detailed inline or body-only, because count-only
+  overflow hides actionable findings; light ignores max_minors and nitpicks remain excluded.
 - Review state stays local: light candidates, staging and frozen artifacts live in a
   tool-owned storage class inside the shared root, chosen by the tools from caller identity,
   which `corvus_review_sync` excludes from status, snapshot, add/commit and post-commit checks
@@ -347,4 +347,4 @@ large-PR semantics. The 20-turn read-through target is structural, not a live me
   required ownership checks; the lock is never reacquired and is released once if acquired.
   Check the summary ledger against attempts/heads/terminal evidence, and marker-first bodies
   for applicable factual Review limits without a mandatory banner; partial action precedence
-  and minor caps/nitpick exclusion remain unchanged.
+  and every retained minor is detailed while nitpicks remain excluded.

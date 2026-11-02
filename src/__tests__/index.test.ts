@@ -346,7 +346,7 @@ describe("review tool hooks", () => {
         for (const caller of ["pr-comment-writer", "corvus-review-light"]) {
           const result = await call("corvus_review_pr", { ...input, anchors }, caller)
           expect(result).toEqual({ ok: true, excluded_corvus: 1, anchors: anchors.map((item, index) => ({ ...item,
-            postable: index === 0, ...(index ? { reason: index === 1 ? "outside-hunk" : "path-not-in-pr" } : {}),
+            postable: index === 0, source: "api", ...(index ? { reason: index === 1 ? "outside-hunk" : "path-not-in-pr" } : {}),
             diff_anchor: `diff-${createHash("sha256").update(item.path).digest("hex")}`,
           })), complete_pagination: true, api_calls: 2 })
           expect(result).not.toHaveProperty("files")

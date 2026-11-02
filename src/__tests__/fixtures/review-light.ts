@@ -5,9 +5,13 @@ export const LIGHT_BASH_ALLOWS = ["git fetch --no-tags * pull/*/head", "git fetc
   "git ls-files -- *", "git remote", "git remote get-url *", "date -u +%Y-%m-%dT%H:%M:%SZ"]
 export const LIGHT_BASH_DENIES = ["*", "*;*", "*&*", "*|*", "*>*", "*<*", "*`*", "*$*", "*\n*", "*\r*", "*\t*",
   "git fetch --no-tags -*", "git fetch --no-tags '-*", 'git fetch --no-tags "-*',
-  "git fetch --no-tags * * pull/*", "git fetch --no-tags * * 'pull/*", 'git fetch --no-tags * * "pull/*',
+  "git fetch --no-tags * * ?*", "git fetch --no-tags * --*",
   "git fetch --no-tags * pull/*:*", "git fetch --no-tags * 'pull/*:*", 'git fetch --no-tags * "pull/*:*',
-  "git fetch --no-tags *''*", 'git fetch --no-tags *""*', "git fetch --no-tags /*", "git fetch --no-tags '/*", 'git fetch --no-tags "/*']
+  "git fetch --no-tags *''*", 'git fetch --no-tags *""*', "git fetch --no-tags /*", "git fetch --no-tags '/*", 'git fetch --no-tags "/*',
+  "git fetch --no-tags .*", "git fetch --no-tags '.*", 'git fetch --no-tags ".*',
+  "git fetch --no-tags ~*", "git fetch --no-tags '~*", 'git fetch --no-tags "~*',
+  "git fetch --no-tags file:*", "git fetch --no-tags 'file:*", 'git fetch --no-tags "file:*', "git fetch --no-tags *::*",
+  "git fetch --no-tags ssh://*", "git fetch --no-tags 'ssh://*", 'git fetch --no-tags "ssh://*']
 export const LIGHT_BASH_MAP = { "*": "deny", ...Object.fromEntries(LIGHT_BASH_ALLOWS.map(pattern => [pattern, "allow"])),
   ...Object.fromEntries(LIGHT_BASH_DENIES.slice(1).map(pattern => [pattern, "deny"])) }
 export const LIGHT_CHILDREN = ["pr-light-reviewer", "pr-comment-writer"]
@@ -37,7 +41,12 @@ export const LIGHT_MUTATIONS = ["git add .", "git commit -m probe", "git push or
   "git fetch --no-tags origin\ncp a b\npull/15/head", "git fetch --no-tags origin pull/15/head:refs/heads/x/head",
   "git fetch --no-tags 'origin' 'pull/15/head:refs/heads/x/head'", 'git fetch --no-tags "origin" "pull/15/head:refs/heads/x/head"',
   "git fetch --no-tags ''--upload-pack=evil pull/15/head", 'git fetch --no-tags ""--upload-pack=evil pull/15/head',
-  "git fetch --no-tags \\--upload-pack=evil pull/15/head", 'git fetch --no-tags "\\--upload-pack=evil" pull/15/head']
+  "git fetch --no-tags \\--upload-pack=evil pull/15/head", 'git fetch --no-tags "\\--upload-pack=evil" pull/15/head',
+  "git fetch --no-tags . pull/1/head --upload-pack='touch /tmp/x #'/head",
+  "git fetch --no-tags origin pull/1/head --upload-pack=evil/head",
+  "git fetch --no-tags origin --upload-pack=evil pull/1/head",
+  ...[".", "./repo", "../repo", "/repo", "~repo", "file://repo", "ext::evil", "other::evil", "ssh://github.com/example/project"].flatMap(remote =>
+    [remote, `'${remote}'`, `"${remote}"`].map(literal => `git fetch --no-tags ${literal} pull/1/head`))]
 export const LIGHT_READS = ["git fetch --no-tags origin pull/42/head", "git fetch --no-tags https://github.com/example/project.git pull/42/head",
   "git fetch --no-tags 'github' 'pull/42/head'", 'git fetch --no-tags "custom.remote-2" "pull/42/head"',
   "git fetch --no-tags 'https://github.com/example/project.git' pull/42/head",

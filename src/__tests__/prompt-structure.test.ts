@@ -287,7 +287,7 @@ function validate(corpus: Corpus, c: Contract, final = false): string[] {
             && bash["*"] === "allow" && Object.keys(bash)[0] === "*" && commands.every(command => evaluateRules(rules, "shell", command) === "deny"), `safety:${path}:${pattern}`)
         }
         if (path === lightOrchestrator) {
-          check(record(permission.bash) && Object.keys(permission.bash).length === 35
+          check(record(permission.bash) && Object.keys(permission.bash).length === 47
             && LIGHT_MUTATIONS.every(command => evaluateRules(rules, "shell", command) === "deny"), `safety:${path}:fixed-denies`)
           check(LIGHT_READS.every(command => evaluateRules(rules, "shell", command) === "allow"), `safety:${path}:shell-reads`)
         }

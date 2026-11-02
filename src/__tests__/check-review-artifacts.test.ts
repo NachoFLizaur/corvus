@@ -14,7 +14,7 @@ import { post as postReview } from "../review-post"
 import type { DocumentVerdict, LabelCounts } from "../review-verdict"
 import { pull, push, resolve as resolveSync, type PushInput, type SyncExec } from "../review-sync"
 import { bookkeepingRow, checkModelShellPushes, checkModelStateWrites, checkOrchestratorShell, checkRetiredTools,
-  checkWriterExecution, childResult, denied, diagnostic, finalAssistantMessage, readChildSessions, readDescendants,
+  checkWriterExecution, childResult, denied, diagnostic, finalAssistantMessage, lightFocusPaths, readChildSessions, readDescendants,
   readParentTools, storedToolEvidence, toolsFromEvents, verdictClaimContradiction, type Row } from "../../scripts/check-review-artifacts"
 import { readSessionStore } from "../../scripts/session-store"
 import { buildFixedDenyPolicies, isFixedDenied } from "../fixed-denies"
@@ -881,7 +881,7 @@ test("T5 render predicate accepts the skill's extracted literal template, not a 
     "≤3 short source lines of problem/impact": "The unchecked value loses the verified identity.",
     "one ```suggestion``` block (≤~8 lines) or one-sentence fix": "Use the verified value instead.",
     "approach/rationale only when not all diff files, or anything omitted/unavailable": "One context dependency was unavailable.",
-    "omitted/unavailable counts with one short reason; minor overflow count if present": "Unavailable context: 1 file; retrieval failed.",
+    "omitted/unavailable scope counts with one short reason": "Unavailable context: 1 file; retrieval failed.",
     "material intent/head/worktree/config/history/transport/brief gaps, only when present": "The missing dependency limits this conclusion.",
   }
   const example = template.replace(/<state_notices, only when present:>\n> \[!NOTE\]\n> <draft\/self-review\/identity unknown notice>\n/, "")
@@ -902,6 +902,14 @@ test("T5 render predicate accepts the skill's extracted literal template, not a 
   const separated = example.replace(block, `${block}\n\n${next}`)
   expect(lightRenderErrors(separated)).toEqual([])
   expect(lightRenderErrors(example.replace(block, `${block}\n${next}`))).toContain("consecutive body findings lack blank-line separation")
+  const minors = Array.from({ length: 5 }, (_, index) => block.replaceAll("**major**", "**minor**")
+    .replace("ls1-logic-standards-001", `ls1-logic-standards-00${index + 1}`)).join("\n\n")
+  expect(lightRenderErrors(example.replace(block, minors))).toEqual([])
+  expect(lightRenderErrors(example.replaceAll("Keep the validated identity", "Expose the minor overflow"))).toEqual([])
+  for (const wording of ["3 minors counted but not detailed.", "Minor overflow: 3 findings.", "3 minor details omitted."])
+    expect(lightRenderErrors(`${example}\n- ${wording}`)).toContain("count-only minor presentation retained")
+  expect(lightRenderErrors(`${example}\n- X was reviewed from git objects.`)).toContain("unsupported object-only review wording")
+  expect(lightRenderErrors(`${example.replace(/## Review limits[\s\S]*/, "")}## Review limits\n- GitHub returned no patch for X; inline anchors verified from the local diff.`)).toEqual([])
   const inlineOnly = example.replace(block, "").replace("· inline 0**", "· inline 1**")
   expect(inlineOnly).toContain("· 1 major")
   expect(inlineOnly).not.toContain("**major** (standards/")
@@ -940,6 +948,26 @@ test.each(["overlap", "missing path", "duplicate shard", "missing axis"])("shard
 })
 
 test.each([
+  ['[scripts/a.ts, src/b.ts]', ["scripts/a.ts", "src/b.ts"]],
+  ['["scripts/a.ts", "src/b.ts"]', ["scripts/a.ts", "src/b.ts"]],
+  ["['scripts/a.ts', 'src/b.ts']", ["scripts/a.ts", "src/b.ts"]],
+  ["[scripts/a.ts, 7]", null], ["[scripts/a.ts, true]", null], ["[scripts/a.ts, {path: src/b.ts}]", null],
+] as const)("focus_paths parses realistic YAML-flow brief %s", (flow, expected) => {
+  const prompt = `DELEGATED LIGHT REVIEW\nmode: pr\naxis: standards\nshard: 1/2\nattempt: 1\ncode_head: ${lightHead(1)}\nbase_sha: ${lightBase(1)}\nfocus_paths: ${flow}\nhead_worktree: /repo.corvus-review-pr8\nReview every eligible assigned hunk.`
+  expect(lightFocusPaths(prompt)).toEqual(expected ? [...expected] : null)
+})
+
+test("sharded roster accepts unquoted YAML-flow focus paths in dispatches", async () => {
+  const { result } = await replayCase(1, { shards: true }, data => {
+    for (const event of data.events) if ("tool" in event.part && event.part.tool === "task") {
+      const input = event.part.state.input as { prompt?: string }
+      input.prompt = input.prompt?.replace(/focus_paths: \["([xy])"\]/, "focus_paths: [$1]")
+    }
+  })
+  expect(result.rows.find(row => row.check === "light detector roster")?.ok).toBe(true)
+})
+
+test.each([
   ["origin fetch", "git fetch --no-tags origin pull/8/head", true],
   ["quoted fetch", "git fetch --no-tags 'github' 'pull/8/head'", true],
   ["fallback fetch", "git fetch --no-tags 'https://github.com/owner/repo.git' pull/8/head", true],
@@ -956,6 +984,11 @@ test.each([
   ["cat-file chaining", "git cat-file -e x && cp a b", false], ["redirect", "date > f", false],
   ["nonliteral timing", "date +%s", false], ["worktree shell", "git worktree add --detach sibling HEAD", false],
   ["read-tree shell", "git read-tree --reset -u HEAD", false], ["composed shell", "git remote; date -u +%Y-%m-%dT%H:%M:%SZ", false],
+  ["fetch upload-pack exploit", "git fetch --no-tags . pull/1/head --upload-pack='touch /tmp/x #'/head", false],
+  ["fetch option after refspec", "git fetch --no-tags origin pull/8/head --upload-pack=evil/head", false],
+  ["fetch option before refspec", "git fetch --no-tags origin --upload-pack=evil pull/8/head", false],
+  ...[".", "./repo", "../repo", "/repo", "~repo", "file://repo", "ext::evil", "other::evil", "ssh://github.com/owner/repo"].map(remote =>
+    [`fetch forbidden remote ${remote}`, `git fetch --no-tags ${remote} pull/8/head`, false] as const),
 ] as const)("T5 light shell allow-list: %s", (_name, command, allowed) => {
   const { directory } = sessionFixture()
   const input = { ...auditInput(directory), agent: "light" as const }

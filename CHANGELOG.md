@@ -5,6 +5,18 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.11.0-beta.5 — 2026-11-02
+
+### Changed
+
+- Light review discloses every retained minor with full compact inline or body details, removing the minor-detail cap and count-only overflow. Nitpicks stay excluded; full-review filtering is unchanged.
+
+### Fixed
+
+- Patch-free anchor verification falls back to a local Git object diff when GitHub omits a file patch, validating stable PR head/base identities and exact local commit SHAs before accepting anchors. Missing objects or mismatches fail closed; per-anchor provenance distinguishes API and local verification without mislabeling worktree-based review.
+- Light fetch permissions reject extra options/arguments, dot/parent/absolute/home paths, and file/SSH/helper URLs on both hosts, closing the upload-pack allowlist bypass while preserving named remotes and the validated HTTPS fallback.
+- The light checker accepts quoted and unquoted YAML-flow focus paths, rejects non-string paths and count-only minor rendering, and removes unreachable light fragments without changing full-review rows.
+
 ## 0.11.0-beta.4 — 2026-11-01
 
 ### Fixed

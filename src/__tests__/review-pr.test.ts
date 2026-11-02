@@ -277,6 +277,7 @@ describe("review PR tool-verified RIGHT anchors", () => {
   const listing = JSON.stringify([changed, added]) + "\n" + JSON.stringify([deleted, binary])
   const resultAnchor = (path: string, line: number, reason?: string, start_line?: number) => ({ path, line,
     ...(start_line === undefined ? {} : { start_line }), postable: reason === undefined, ...(reason ? { reason } : {}),
+    source: "api",
     diff_anchor: `diff-${createHash("sha256").update(path).digest("hex")}` })
 
   test("verifies added/context lines, new files and exact single-hunk ranges without returning patches", async () => {
@@ -369,6 +370,68 @@ describe("review PR tool-verified RIGHT anchors", () => {
     const { exec } = recordingExec(success(JSON.stringify([added])))
     const expected = `{"ok":true,"files":[{"filename":"new.ts","status":"added","additions":2,"deletions":0,"has_patch":true,"patch":${JSON.stringify(added.patch)},"diff_anchor":${JSON.stringify(resultAnchor(added.filename, 1).diff_anchor)}}],"excluded_corvus":0,"missing_paths":[],"complete_pagination":true,"api_calls":1}`
     expect(await createPrExecutor({ exec })({ ...input, paths: [added.filename] })).toBe(expected)
+  })
+
+  const prIdentity = { number: 42, html_url: "https://github.com/example/project/pull/42", head: { sha: HEAD_SHA }, base: { sha: BASE_SHA } }
+  const merge = "c".repeat(40)
+  function localExec(mode = "success", status = "modified") {
+    const calls: { argv: string[]; options: Parameters<PrExec>[1] }[] = []
+    let snapshots = 0, listings = 0
+    const exec: PrExec = async (argv, options) => {
+      calls.push({ argv, options })
+      if (argv[0] === "gh") {
+        if (argv.includes(`${endpoint}/files`)) {
+          listings++
+          return success(JSON.stringify(mode === "listing-moved" && listings === 2 ? [] : [{ ...binary, filename: ":(glob)*.ts", status }]))
+        }
+        snapshots++
+        return success(JSON.stringify(mode === "head-moved" && snapshots === 2 ? { ...prIdentity, head: { sha: "d".repeat(40) } }
+          : mode === "base-moved" && snapshots === 2 ? { ...prIdentity, base: { sha: "d".repeat(40) } }
+          : mode === "wrong-pr" ? { ...prIdentity, number: 7 } : prIdentity))
+      }
+      const args = argv.slice(3)
+      if (args[0] === "rev-parse" && args[1] === "--show-toplevel") return success("/session/repo\n")
+      if (args[0] === "rev-parse") {
+        if (mode === "missing") return { code: 128, stdout: "", stderr: "missing object" }
+        return success(mode === "sha-mismatch" ? merge : args[2].slice(0, 40))
+      }
+      if (args[0] === "merge-base") return success(merge)
+      if (args[0] === "diff") return { ...success("diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1 +1,2 @@\n context\n+added\n"),
+        ...(mode === "truncated" ? { stdout_truncated: true as const } : {}) }
+      throw new Error("Unexpected command")
+    }
+    return { exec, calls }
+  }
+
+  test.each(["modified", "patch omitted"])("API %s without a patch verifies local object hunks with literal paths and scrubbed env", async status => {
+    const { exec, calls } = localExec("success", status)
+    const result = await files({ ...locator, paginate: true, anchors: [{ path: ":(glob)*.ts", line: 2 }] }, { exec, cwd: "/session/repo/subdir" })
+    expect(result).toMatchObject({ ok: true, anchors: [{ path: ":(glob)*.ts", line: 2, postable: true, source: "local" }], complete_pagination: true, api_calls: 4 })
+    expect(result).not.toHaveProperty("files")
+    const git = calls.filter(call => call.argv[0] === "git")
+    expect(git[0].options?.cwd).toBe("/session/repo/subdir")
+    expect(git.slice(1).every(call => call.options?.cwd === "/session/repo")).toBe(true)
+    expect(git.at(-1)?.argv).toEqual(["git", "-c", "core.fsmonitor=false", "diff", "--no-color", "--no-ext-diff", "--no-textconv", "-U3", `${merge}...${HEAD_SHA}`, "--", ":(glob)*.ts"])
+    for (const call of git) expect(call.options?.env).toMatchObject({ GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null",
+      GIT_NO_REPLACE_OBJECTS: "1", GIT_NO_LAZY_FETCH: "1", GIT_LITERAL_PATHSPECS: "1", GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0" })
+  })
+
+  test.each(["missing", "sha-mismatch", "head-moved", "base-moved", "wrong-pr", "truncated", "listing-moved"])("local fallback %s fails closed to no-patch", async mode => {
+    const { exec, calls } = localExec(mode)
+    const result = await files({ ...locator, paginate: true, anchors: [{ path: ":(glob)*.ts", line: 2 }] }, { exec })
+    expect(result).toMatchObject({ ok: true, anchors: [{ postable: false, reason: "no-patch", source: "api" }] })
+    if (["missing", "sha-mismatch", "wrong-pr"].includes(mode)) expect(calls.some(call => call.argv.includes("diff"))).toBe(false)
+  })
+
+  test("patchless unfiltered/paths output is byte-identical and performs no fallback I/O", async () => {
+    const record = { ...binary, filename: "huge.ts" }
+    for (const paths of [undefined, [record.filename]]) {
+      const { exec, calls } = recordingExec(success(JSON.stringify([record])))
+      const projected = { ...record, has_patch: false, ...(paths ? { diff_anchor: resultAnchor(record.filename, 1).diff_anchor } : {}) }
+      expect(await createPrExecutor({ exec })({ ...input, ...(paths ? { paths } : {}) })).toBe(JSON.stringify({ ok: true,
+        files: [projected], excluded_corvus: 0, ...(paths ? { missing_paths: [] } : {}), complete_pagination: true, api_calls: 1 }))
+      expect(calls).toHaveLength(1)
+    }
   })
 
   test("PR #15-sized selected README patch verifies all three anchors in less than 2 KB", async () => {

@@ -1104,7 +1104,7 @@ export function checkOrchestratorShell(tools: Tool[], input: Pick<Inputs, "fixtu
     for (const remote of ["origin", "github"]) for (const literal of [remote, `'${remote}'`, `"${remote}"`]) allowed.add(`git remote get-url ${literal}`)
      const remotes = new Set(["origin", "github", `https://github.com/${input.owner}/${input.repo}.git`])
      for (const tool of tools.filter(tool => shell(tool) && tool.state.status === "completed" && text(tool.input.command) === "git remote")) {
-       for (const remote of lines(text(tool.state.output)).filter(remote => /^(?!-)[A-Za-z0-9._-]+$/.test(remote))) remotes.add(remote)
+        for (const remote of lines(text(tool.state.output)).filter(remote => /^(?![-.])[A-Za-z0-9._-]+$/.test(remote))) remotes.add(remote)
      }
      for (const remote of remotes) for (const literal of [remote, `'${remote}'`, `"${remote}"`]) {
        allowed.add(`git remote get-url ${literal}`)
@@ -1444,6 +1444,9 @@ export function lightRenderErrors(body: string, local = false, comments?: Candid
   if (/^(?:[-*] )?(?:reviewed|inspected|selected|omitted|unavailable)[ _-]*(?:paths|files|scope inventory)\s*[:=]|^(?:assessment|strategy|evidence_reads|reviewed_scope|trigger|impact|introduced_by_pr|narrow_fix|evidence)\s*:/im.test(content)) errors.push("local inventory/evidence fields rendered")
   if ([...content.matchAll(/^(#{1,6}) Review limits\s*$/gm)].some(match => match[1] !== "##")) errors.push("Review limits must be review-wide")
   const limits = content.split(/^## Review limits\s*$/m)
+  // These are presentation disclosures, not keywords forbidden in finding evidence.
+  if (/minor[^\n]*(?:counted (?:but|not)|not detailed|overflow|details? (?:cap|omitted))|(?:counted (?:but|not)|not detailed|overflow)[^\n]*minor/i.test(limits[1] ?? "")) errors.push("count-only minor presentation retained")
+  if (/reviewed from (?:local )?git objects/i.test(limits[1] ?? "")) errors.push("unsupported object-only review wording")
   if (limits.length > 2 || limits.length === 2 && (lines(limits[1]).length > 3 || lines(limits[1]).some(line => !/^- \S/.test(line)))) errors.push("Review limits exceeds three factual bullets")
   const findingLines = [...content.matchAll(/^\*\*.*\*\* \((?:standards|spec)\/[^\n]*$/gm)]
   for (const [index, finding] of findingLines.entries()) {
@@ -1497,14 +1500,15 @@ function lightFieldValues(value: string, key: string): string[] {
   })
 }
 
-/** Trusted JSON path arrays are decoded before roster validation, never executed.
+/** Trusted JSON/YAML-flow path arrays are decoded before roster validation, never executed.
  * Missing, duplicate or non-string paths fail the roster; no size setting disables
  * disjointness or coverage. The complete intake listing is the coverage oracle. */
-function lightFocusPaths(prompt: string): string[] | null {
-  const arrays = [...prompt.matchAll(/\bfocus_paths"?\s*[:=]\s*(\[(?:[^\]"\\]|"(?:\\.|[^"\\])*")*\])/g)]
+export function lightFocusPaths(prompt: string): string[] | null {
+  const arrays = [...prompt.matchAll(/\bfocus_paths"?\s*[:=]\s*(\[(?:[^\]"'\\]|"(?:\\.|[^"\\])*"|'(?:''|[^'])*')*\])/g)]
   if (arrays.length !== 1) return null
   try {
-    const paths: unknown = JSON.parse(arrays[0][1])
+    let paths: unknown
+    try { paths = JSON.parse(arrays[0][1]) } catch { paths = load(arrays[0][1]) }
     return Array.isArray(paths) && paths.every(path => typeof path === "string" && path && !path.startsWith("/")
       && !path.split("/").some(part => ["", ".", ".."].includes(part))) && new Set(paths).size === paths.length ? paths : null
   } catch { return null }
@@ -2282,7 +2286,6 @@ export async function checkReviewArtifacts(input: Inputs) {
     try { const status = String(yaml(join(root, name)).status); lockDetail = `${name}: ${status}`; lockOK &&= status === "completed" }
     catch { lockOK = false; lockDetail = `invalid ${name}` }
   }
-  if (light) lockOK &&= !["lock.yaml", ".lock"].some(name => existsSync(join(root, name))) && released?.input.mode === "delete"
   /**
    * Terminal cleanup oracle: the owned release result and subsequent parent tool
    * events, read after shutdown alongside both lock files. Posted, non-post and
@@ -2372,7 +2375,7 @@ export async function checkReviewArtifacts(input: Inputs) {
         && typeof tool.output.fitted === "boolean" && tool.output.fitted === (measured.output.ok === false)
     } catch { return false }
   })
-  const digest = (!local || light) && validIdentity && existsSync(artifact) ? createHash("sha256").update(readFileSync(artifact)).digest("hex") : ""
+  const digest = !local && validIdentity && existsSync(artifact) ? createHash("sha256").update(readFileSync(artifact)).digest("hex") : ""
   const candidateRow: Row = { check: "candidate producer", ok: local || candidateOK, code: 5, detail: candidateError || "candidate provenance valid" }
   const lockRow: Row = { check: "owned state writes", ok: Boolean(acquired && released && matched(acquired) && matched(released)), code: 5,
     detail: "successful state writes require a DB-matched owned lock and release" }
@@ -2428,7 +2431,7 @@ export async function checkReviewArtifacts(input: Inputs) {
             && tool.output.sha256 === digest))
       } catch { return false }
     })
-    add("tool chain", Boolean(measured && (inertAbsent || frozen) && previewsOK && (!light || previews.some(succeeded)) && (!notExposed || notExposedOK)), 5,
+    add("tool chain", Boolean(measured && (inertAbsent || frozen) && previewsOK && (!notExposed || notExposedOK)), 5,
       notExposed ? notExposedDetail : `producer=${candidateWrite?.index ?? "missing"} → measure=${measured?.index ?? "missing"} → freeze=${frozen?.index ?? "missing"}; ${previews.length} read-only preview(s)`)
     const digestOK = /^[a-f0-9]{64}$/.test(digest) && frozen?.output.sha256 === digest
     add("SHA-256", inertAbsent ? notExposedOK : digestOK, 5, inertAbsent ? notExposedDetail : digestOK ? digest : "forged: freeze digest contradicts independent artifact bytes")
