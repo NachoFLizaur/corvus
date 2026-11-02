@@ -5,6 +5,15 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.11.0-beta.4 — 2026-11-01
+
+### Fixed
+
+- PR metadata returns validated additions and deletions on both hosts, so light review headers can render numeric line counts.
+- Light orchestration fixes shell access to the skill's command allowlist and child dispatch to `pr-light-reviewer`/`pr-comment-writer` on both hosts; user allows cannot widen them, while extra denials and model overrides survive. Together with fixed edit/write/patch denies and `.light` candidate/freeze routing, this closes shell-write and alternate-child full-class artifact authoring.
+- Full-review sync retries temporarily neutralize excluded tracked locks during rebase and restore their exact local bytes or deletion afterward, keeping locks out of state commits. Roots without `.light` retain their existing Git argv.
+- Light agent wording now reflects concurrent detector shards, and the skill-set reference describes compact patch-free `files` `anchors` verification.
+
 ## 0.11.0-beta.3 — 2026-11-01
 
 ### Fixed

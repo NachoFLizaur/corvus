@@ -13,7 +13,7 @@ import { toV2Permissions } from "../to-v2-permissions"
 import { registerCommands } from "../v2/register-commands"
 import type { SetupContext } from "../v2/types"
 import { createFakeContext, type CommandInvocation } from "./fake-context"
-import { LIGHT_BASH_DENIES } from "./fixtures/review-light"
+import { LIGHT_BASH_DENIES, LIGHT_BASH_MAP, LIGHT_BASH_ALLOWS, LIGHT_CHILDREN } from "./fixtures/review-light"
 
 /**
  * CORPUS CONTRACT GUARD — the packaged `agent/*.md`, `command/*.md`, and
@@ -93,8 +93,10 @@ const COMMAND_KEYS: readonly string[] = ["description", "agent", "model"]
 const KNOWN_PERMISSION_ACTIONS: readonly string[] = [
   "*",
   "edit",
+  "patch",
   "write",
   "bash",
+  "task",
   "question",
 ]
 
@@ -163,22 +165,29 @@ describe("agent corpus frontmatter", () => {
       const name = file.replace(/\.md$/, "")
       const expected = [
         ...(LEAF_REVIEWERS.includes(name) ? ["edit", "write"] : []),
+        ...(name === "corvus-review-light" ? ["edit", "write", "patch"] : []),
         ...(["corvus-auto", "corvus-review-auto", "corvus-review-light"].includes(name) ? ["question"] : []),
         ...(["corvus", "corvus-auto"].includes(name) ? DESTRUCTIVE_BASH.map(pattern => `bash:${pattern}`) : []),
         ...(name === "corvus-review-light" ? LIGHT_BASH_DENIES.map(pattern => `bash:${pattern}`) : []),
+        ...(name === "corvus-review-light" ? ["task:*"] : []),
       ]
       expect(permission["*"], file).toBe("allow")
       expect(Object.keys(permission)[0], file).toBe("*")
       const entries = Object.entries(permission).flatMap(([action, effect]): [string, unknown][] =>
         isRecord(effect) ? Object.entries(effect).map(([pattern, value]) => [`${action}:${pattern}`, value]) : [[action, effect]])
       expect(entries.filter(([, effect]) => effect === "deny").map(([key]) => key).sort(), file).toEqual(expected.sort())
-      expect(entries.filter(([, effect]) => effect !== "deny").sort(), file).toEqual([
-        ["*", "allow"], ...(["corvus", "corvus-auto", "corvus-review-light"].includes(name) ? [["bash:*", "allow"] as [string, string]] : []),
-      ])
+      const expectedAllows: [string, unknown][] = [
+        ["*", "allow"], ...(["corvus", "corvus-auto"].includes(name) ? [["bash:*", "allow"] as [string, string]] : []),
+        ...(name === "corvus-review-light" ? [...LIGHT_BASH_ALLOWS.map((pattern): [string, string] => [`bash:${pattern}`, "allow"]),
+          ...LIGHT_CHILDREN.map((name): [string, string] => [`task:${name}`, "allow"])] : []),
+      ]
+      expect(entries.filter(([, effect]) => effect !== "deny").sort(), file).toEqual(expectedAllows.sort())
       expect(Object.keys(permission).sort(), file).toEqual([
         "*", ...(LEAF_REVIEWERS.includes(name) ? ["edit", "write"] : []),
+        ...(name === "corvus-review-light" ? ["edit", "write", "patch"] : []),
         ...(["corvus-auto", "corvus-review-auto", "corvus-review-light"].includes(name) ? ["question"] : []),
         ...(["corvus", "corvus-auto", "corvus-review-light"].includes(name) ? ["bash"] : []),
+        ...(name === "corvus-review-light" ? ["task"] : []),
       ].sort())
     }
   })
@@ -412,9 +421,10 @@ test("only workflow orchestrators and light retain their distinct ordered bash d
       }
       if (!isRecord(bash)) throw new Error(`Missing bash map: ${name}`)
       const denies = name === "corvus-review-light" ? LIGHT_BASH_DENIES : DESTRUCTIVE_BASH
-      expect(Object.entries(bash), name).toEqual([["*", "allow"], ...denies.map((pattern): [string, string] => [pattern, "deny"])])
+      expect(Object.entries(bash), name).toEqual(name === "corvus-review-light" ? Object.entries(LIGHT_BASH_MAP)
+        : [["*", "allow"], ...denies.map((pattern): [string, string] => [pattern, "deny"])])
     }
     const hostRules = toV2Permissions(config.agent?.[name]?.permission).filter(rule => rule.action === "shell")
-    expect(hostRules, name).toHaveLength(name === "corvus-review-light" ? 52 : ["corvus", "corvus-auto"].includes(name) ? 11 : 0)
+    expect(hostRules, name).toHaveLength(name === "corvus-review-light" ? 35 : ["corvus", "corvus-auto"].includes(name) ? 11 : 0)
   }
 })

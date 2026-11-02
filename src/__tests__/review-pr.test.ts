@@ -43,7 +43,7 @@ describe("review PR metadata, head and files", () => {
     const data = {
       number: 42, url: "https://github.com/example/project/pull/42", title: "A change", state: "OPEN",
       isDraft: false, isCrossRepository: false, mergeable: "MERGEABLE", author: { login: "contributor" },
-      baseRefName: "main", baseRefOid: BASE_SHA, headRefName: "feature", headRefOid: HEAD_SHA, changedFiles: 2,
+      baseRefName: "main", baseRefOid: BASE_SHA, headRefName: "feature", headRefOid: HEAD_SHA, changedFiles: 2, additions: 137, deletions: 19,
       body: `${BODY}\n\n## Description\nKeep this text as-is.`,
       labels: [{ id: "L_1", name: "breaking-change", description: BODY, color: "ff0000" }],
       closingIssuesReferences: [{ number: 7, url: "https://github.com/example/project/issues/7", title: BODY }],
@@ -64,7 +64,7 @@ describe("review PR metadata, head and files", () => {
     const data = {
       number: 42, url: "https://github.com/example/project/pull/42", title: "A change", state: "OPEN",
       isDraft: false, isCrossRepository: false, mergeable: "MERGEABLE",
-      baseRefName: "main", baseRefOid: BASE_SHA, headRefName: "feature", headRefOid: HEAD_SHA, changedFiles: 2,
+      baseRefName: "main", baseRefOid: BASE_SHA, headRefName: "feature", headRefOid: HEAD_SHA, changedFiles: 2, additions: 0, deletions: 0,
       body: BODY, labels: [], closingIssuesReferences: [], latestReviews: [], reviewDecision: null,
     }
 
@@ -88,6 +88,16 @@ describe("review PR metadata, head and files", () => {
     ])("rejects malformed metadata author login %j", async name => {
       const { exec } = recordingExec(success(JSON.stringify({ ...data, author: { login: name }, files: [] })), commits)
       expect(await metadata(locator, { exec })).toEqual({ ok: false, reason: "invalid-response", api_calls: 2 })
+    })
+
+    test.each(["additions", "deletions"])("validates numeric %s counts, including zero", async field => {
+      const valid = { ...data, author: { login: "contributor" } }
+      for (const value of [undefined, null, "12", -1, 0.5, Number.MAX_SAFE_INTEGER + 1]) {
+        const { exec } = recordingExec(success(JSON.stringify({ ...valid, [field]: value })), commits)
+        expect(await metadata(locator, { exec })).toEqual({ ok: false, reason: "invalid-response", api_calls: 2 })
+      }
+      const { exec } = recordingExec(success(JSON.stringify(valid)), commits)
+      expect(await metadata(locator, { exec })).toMatchObject({ ok: true, additions: 0, deletions: 0 })
     })
   })
 
@@ -771,7 +781,7 @@ describe("committed review state PR reads", () => {
     const data = {
       number: 42, url: "https://github.com/example/project/pull/42", title: "A change", state: "OPEN",
       isDraft: false, isCrossRepository: false, mergeable: "MERGEABLE", author: { login: "contributor" },
-      baseRefName: "main", baseRefOid: BASE_SHA, headRefName: "feature", headRefOid: tip, changedFiles: 2,
+      baseRefName: "main", baseRefOid: BASE_SHA, headRefName: "feature", headRefOid: tip, changedFiles: 2, additions: 137, deletions: 19,
       body: BODY, labels: [], closingIssuesReferences: [], latestReviews: [], reviewDecision: null,
     }
     const metadataExec = recordingExec(success(JSON.stringify(data)), pages)

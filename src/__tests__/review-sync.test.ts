@@ -77,10 +77,15 @@ function assertAllowed(argv: string[]): void {
     case "diff-tree":
       expect(args[5]).toMatch(sha)
       exact([op, "--no-commit-id", "--name-only", "-r", "-z", args[5], "--"]); return
+    case "ls-tree":
+      expect(PR_ROOTS.map(namespace => [op, "-z", "HEAD", "--", `${namespace}/lock.yaml`, `${namespace}/.lock`])).toContainEqual(args); return
+    case "show":
+      expect(PR_ROOTS.flatMap(namespace => ["lock.yaml", ".lock"].map(name => [op, `HEAD:${namespace}/${name}`]))).toContainEqual(args); return
     case "diff":
       exact(...PR_ROOTS.flatMap(namespace => [[op, "--quiet", "HEAD", "--", ".", `:(top,exclude)${namespace}/**`],
         [op, "--cached", "--quiet", "--", ".", `:(top,exclude)${namespace}/**`]]),
-        [op, "--name-only", "--diff-filter=U", "-z", "--"]); return
+        [op, "--name-only", "--diff-filter=U", "-z", "--"],
+        ...PR_ROOTS.map(namespace => [op, "--cached", "--quiet", "HEAD", "--", `${namespace}/lock.yaml`, `${namespace}/.lock`])); return
     case "rebase":
       if (args.length === 2) { exact([op, "--abort"]); return }
       expect(args[4]).toMatch(sha)
@@ -339,6 +344,67 @@ describe("review sync pull", () => {
 })
 
 describe("review sync push", () => {
+  test.each(PR_ROOTS.flatMap(root => ["active", "deleted"].flatMap(mode => [false, true].map(conflict => ({ root, mode, conflict })))))
+    ("non-ff $root replays with $mode tracked locks, conflict=$conflict, preserving local bytes/deletion", ({ root, mode, conflict }) => withRepo(async f => {
+      const locks = ["lock.yaml", ".lock"].map(name => `${root}/${name}`)
+      for (const lock of locks) f.write(f.workspace, lock, "Previous terminal lock\n")
+      f.git(f.workspace, "add", "--", ...locks)
+      f.git(f.workspace, "commit", "-m", "corvus(review-state): prior terminal locks")
+      f.git(f.workspace, "push", "origin", `HEAD:${BRANCH}`)
+      const tip = advance(f, f.peer(), conflict ? `${root}/review.md` : "remote.txt", conflict ? "Concurrent full state\n" : "Remote product\n")
+      f.write(f.workspace, `${root}/.light/post-request.json`, "Local light bytes\n")
+      const before = Buffer.from([0, 255, 13, 10, 65])
+      for (const lock of locks) {
+        if (mode === "active") { fs.writeFileSync(join(f.workspace, lock), before); fs.chmodSync(join(f.workspace, lock), 0o600) }
+        else fs.unlinkSync(join(f.workspace, lock))
+      }
+      f.write(f.workspace, `${root}/review.md`, STATE_BYTES)
+      const result = await push({ ...pushInput(f), root }, { exec: f.exec })
+      expect(result).toMatchObject({ synced: true })
+      assertStateCommit(f, result.state_commit!, tip, root)
+      for (const lock of locks) {
+        if (mode === "active") {
+          expect(fs.readFileSync(join(f.workspace, lock))).toEqual(before)
+          expect(fs.statSync(join(f.workspace, lock)).mode & 0o777).toBe(0o600)
+        } else expect(fs.existsSync(join(f.workspace, lock))).toBe(false)
+        expect(f.git(f.workspace, "show", `HEAD:${lock}`)).toBe("Previous terminal lock")
+      }
+      expect(fs.readFileSync(join(f.workspace, `${root}/.light/post-request.json`), "utf8")).toBe("Local light bytes\n")
+      expect(f.git(f.workspace, "diff", "--cached", "--name-only")).toBe("")
+      expect(callsFor(f, "push")).toHaveLength(2)
+      expect(callsFor(f, "-c")).toHaveLength(conflict ? 1 : 0)
+    }))
+
+  test.each(["abort", "throw", "staged", "binary-head", "symlink"])("tracked lock replay %s fails safely with unchanged local lock", mode => withRepo(async f => {
+    const lock = `${ROOT}/lock.yaml`, target = join(f.workspace, lock)
+    f.write(f.workspace, lock, "Previous terminal lock\n")
+    if (mode === "binary-head") fs.writeFileSync(target, Buffer.from([255, 254]))
+    f.git(f.workspace, "add", "--", lock)
+    f.git(f.workspace, "commit", "-m", "corvus(review-state): prior terminal lock")
+    f.git(f.workspace, "push", "origin", `HEAD:${BRANCH}`)
+    advance(f, f.peer())
+    f.write(f.workspace, `${ROOT}/.light/candidate.json`, "Private light bytes\n")
+    f.write(f.workspace, lock, "Active working lock\n")
+    if (mode === "staged") f.git(f.workspace, "add", "--", lock)
+    if (mode === "symlink") { fs.unlinkSync(target); fs.symlinkSync(join(f.workspace, "product.txt"), target) }
+    f.write(f.workspace, STATE, STATE_BYTES)
+    const before = fs.readFileSync(target)
+    const exec: SyncExec = async (argv, options) => {
+      if (argv[1] === "rebase" && argv[2] === "--no-autostash") {
+        if (mode === "throw") throw new Error("Injected rebase transport failure")
+        if (mode === "abort") { assertAllowed(argv); const result = { code: 1, stdout: "", stderr: "Injected replay refusal" }; f.calls.push({ argv, result }); return result }
+      }
+      return f.exec(argv, options)
+    }
+    const result = await push(pushInput(f), { exec })
+    expect(result).toMatchObject({ synced: false, reason: mode === "throw" ? "exec-failed" : mode === "staged" ? "index-busy" : mode === "symlink" ? "invalid-root" : "replay-refused" })
+    expect(fs.readFileSync(target)).toEqual(before)
+    expect(fs.lstatSync(target).isSymbolicLink()).toBe(mode === "symlink")
+    expect(f.git(f.workspace, "show", "--format=", "--name-only", "HEAD")).toBe(STATE)
+    if (mode === "staged") expect(f.git(f.workspace, "show", `:${lock}`)).toBe("Active working lock")
+    if (!["abort", "throw"].includes(mode)) expect(callsFor(f, "rebase")).toHaveLength(0)
+  }))
+
   test.each(PR_ROOTS)("nested head/class-named directories stay ordinary state during conflict replay: %s", root => withRepo(async f => {
     const nested = `${root}/${f.head}/.light/x`
     const tip = advance(f, f.peer(), nested, "Remote ordinary bytes\n")

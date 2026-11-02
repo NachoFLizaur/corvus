@@ -213,6 +213,10 @@ context/treeEntries/populate/worktree).
   rails alone cannot enforce the never-APPROVE contract at the mutation boundary; full-review
   APPROVE is unchanged (`src/review-persist.ts`, rejectLightApproval; `src/review-payload.ts`,
   freeze; `src/review-post.ts`, readArtifact).
+  Fixed edit/write/patch denies, caller-routed `.light` persistence/freeze and
+  packaged shell/child-dispatch allowlists enforced on both hosts close direct-tool,
+  shell-write and alternate-child full-class artifact authoring because user allows
+  cannot widen those capabilities, while additional user denials still hold.
   The marker leads directly into the literal Corvus opening: PR identity, action/head/statistics
   and axis counts, then Standards and Spec sections with one-line headlines. Each finding has
   its Conventional Comments identity, ≤3 short problem/impact lines and one suggestion/fix,
@@ -236,9 +240,16 @@ context/treeEntries/populate/worktree).
   class's PR post request. These exclusions keep "do not push review files" true even when
   a full review later synchronizes the same root; full-review synchronization is otherwise
   unchanged.
+- On non-fast-forward push retries, excluded HEAD-tracked locks are temporarily
+  restored from hash-verified HEAD blobs and their saved working bytes/modes or
+  deletion restored after replay, including abort, because rebase requires a clean
+  tracked worktree without stashing or committing light lock state; staged locks
+  refuse replay and roots without `.light` keep their original argv
+  (`src/review-sync.ts`, prepareReplayLocks).
 - The light identity may call `corvus_review_sync` only for `resolve` (pull/push rejected by
-  the tool), its persist calls are limited to candidate operations, and its fixed `question`
-  and Git-mutation denies are re-applied tighten-only at both host boundaries, because these
+  the tool), its persist calls are limited to candidate operations, and its fixed
+  `question`, edit/write/patch and Git-mutation denies are re-applied tighten-only at
+  both host boundaries, because these
   guarantees must survive repository config and user permission overrides while preserving
   the user's additional denials and model choice.
 - Light runs share the root's lock and the standard v2 marker and write no `<code_head>/`

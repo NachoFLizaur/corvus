@@ -8,7 +8,7 @@ import { root, skillDir } from "../paths"
 import v2Plugin from "../server"
 import { toV2Permissions } from "../to-v2-permissions"
 import { createFakeContext } from "./fake-context"
-import { LIGHT_BASH_DENIES, LIGHT_MUTATIONS, LIGHT_READS } from "./fixtures/review-light"
+import { LIGHT_BASH_MAP, LIGHT_TASK_MAP, LIGHT_MUTATIONS, LIGHT_READS } from "./fixtures/review-light"
 
 type Corpus = Record<string, string>
 type Kind = "agent" | "command" | "skill" | "reference"
@@ -114,9 +114,10 @@ const gitDenies: Record<string, string[]> = {
 const permissionFor = (path: string): Record<string, unknown> => ({
   "*": "allow",
   ...(leafReviewers.includes(path) ? { edit: "deny", write: "deny" } : {}),
+  ...(path === lightOrchestrator ? { edit: "deny", write: "deny", patch: "deny" } : {}),
   ...(autonomous.includes(path) ? { question: "deny" } : {}),
   ...(orchestrators.includes(path) ? { bash: { "*": "allow", ...Object.fromEntries(Object.keys(gitDenies).map(pattern => [pattern, "deny"])) } } : {}),
-  ...(path === lightOrchestrator ? { bash: { "*": "allow", ...Object.fromEntries(LIGHT_BASH_DENIES.map(pattern => [pattern, "deny"])) } } : {}),
+  ...(path === lightOrchestrator ? { bash: LIGHT_BASH_MAP, task: LIGHT_TASK_MAP } : {}),
 })
 const permissionEntries = (permission: Record<string, unknown>): [string, unknown][] => Object.entries(permission)
   .flatMap(([action, effect]): [string, unknown][] => record(effect) ? Object.entries(effect).map(([pattern, value]) => [`${action}:${pattern}`, value]) : [[action, effect]])
@@ -275,10 +276,10 @@ function validate(corpus: Corpus, c: Contract, final = false): string[] {
           && (!(orchestrators.includes(path) || path === lightOrchestrator) || record(permission.bash) && Object.keys(permission.bash)[0] === "*")
           && sameNames(entries.filter(([, effect]) => effect === "deny").map(([key]) => key),
             permissionEntries(expected).filter(([, effect]) => effect === "deny").map(([key]) => key))
-          && entries.every(([key, effect]) => effect === (key === "*" || key === "bash:*" ? "allow" : "deny")), `safety:${path}`)
+          && entries.every(([key, effect]) => effect === new Map(permissionEntries(expected)).get(key)), `safety:${path}`)
         check(externalSkillResources.every(resource => ["read", "external_directory"].every(action =>
           evaluateRules(rules, action, resource) === "allow")), `safety:${path}:skill-references`)
-        check(evaluateRules(rules, "edit", "src/file.ts") === (leafReviewers.includes(path) ? "deny" : "allow")
+        check(evaluateRules(rules, "edit", "src/file.ts") === (leafReviewers.includes(path) || path === lightOrchestrator ? "deny" : "allow")
           && evaluateRules(rules, "question", "*") === (autonomous.includes(path) ? "deny" : "allow"), `safety:${path}`)
         if (orchestrators.includes(path)) {
           const bash = record(permission.bash) ? permission.bash : {}, rules = toV2Permissions(permission)
@@ -286,7 +287,7 @@ function validate(corpus: Corpus, c: Contract, final = false): string[] {
             && bash["*"] === "allow" && Object.keys(bash)[0] === "*" && commands.every(command => evaluateRules(rules, "shell", command) === "deny"), `safety:${path}:${pattern}`)
         }
         if (path === lightOrchestrator) {
-          check(record(permission.bash) && Object.keys(permission.bash).length === 52
+          check(record(permission.bash) && Object.keys(permission.bash).length === 35
             && LIGHT_MUTATIONS.every(command => evaluateRules(rules, "shell", command) === "deny"), `safety:${path}:fixed-denies`)
           check(LIGHT_READS.every(command => evaluateRules(rules, "shell", command) === "allow"), `safety:${path}:shell-reads`)
         }
@@ -663,13 +664,22 @@ describe("prompt structure", () => {
     const contract = structuredClone(budgets)
     for (const flag of Object.values(contract.enforcementClasses)) flag.enforced = false
 
-    test.each(reviewOrchestrators)("review-state access inherits default allow without path maps: %s", path => {
+    test.each(fullReviewOrchestrators)("full review-state access inherits default allow without path maps: %s", path => {
       const { permission } = parseFrontmatter(readCorpus()[path]).frontmatter
       const rules = toV2Permissions(permission)
       for (const resource of [...reviewStateResources, "src/foo.ts", ".corvus/tasks/x/PLAN.md"])
         for (const target of [resource, `../${resource}`]) expect(evaluateRules(rules, "edit", target)).toBe("allow")
       expect(permission).not.toHaveProperty("edit")
       expect(permission).not.toHaveProperty("write")
+    })
+
+    test("light review-state writes use review tools rather than edit/write/patch", () => {
+      const { permission } = parseFrontmatter(readCorpus()[lightOrchestrator]).frontmatter
+      const rules = toV2Permissions(permission)
+      for (const resource of [...reviewStateResources, "src/foo.ts", ".corvus/tasks/x/PLAN.md"])
+        for (const target of [resource, `../${resource}`]) expect(evaluateRules(rules, "edit", target)).toBe("deny")
+      for (const action of ["edit", "write", "patch"]) expect(permission).toHaveProperty(action, "deny")
+      for (const tool of reviewTools) expect(evaluateRules(rules, tool, "*")).toBe("allow")
     })
 
     test("lock acquisition checks both names and denial preserves evidence without halting analysis", () => {
@@ -704,7 +714,7 @@ describe("prompt structure", () => {
           (p: Record<string, unknown>) => { p.task = "ask" },
         ]) expect(validate(mutatePermission(corpus, path, mutate), contract)).toContain(`safety:${path}`)
         if (!orchestrators.includes(path)) expect(validate(mutatePermission(corpus, path, p => { p.bash = { "*": "allow" } }), contract)).toContain(`safety:${path}`)
-        for (const key of [...(leafReviewers.includes(path) ? ["edit", "write"] : []), ...(autonomous.includes(path) ? ["question"] : [])]) {
+        for (const key of [...(leafReviewers.includes(path) ? ["edit", "write"] : []), ...(path === lightOrchestrator ? ["edit", "write", "patch"] : []), ...(autonomous.includes(path) ? ["question"] : [])]) {
           for (const effect of [undefined, "allow", "ask"]) expect(validate(mutatePermission(corpus, path, p => {
             if (effect === undefined) delete p[key]
             else p[key] = effect
@@ -729,10 +739,10 @@ describe("prompt structure", () => {
       for (const target of externalSkillResources) {
         expect(evaluateRules(rules, "external_directory", target)).toBe("allow")
         expect(evaluateRules(rules, "read", target)).toBe("allow")
-        expect(evaluateRules(rules, "edit", target)).toBe("allow")
+        expect(evaluateRules(rules, "edit", target)).toBe(path === lightOrchestrator ? "deny" : "allow")
       }
-      expect(evaluateRules(rules, "shell", "git rev-parse HEAD")).toBe("allow")
-      expect(evaluateRules(rules, "shell", "git rev-parse --show-toplevel")).toBe("allow")
+      expect(evaluateRules(rules, "shell", "git rev-parse HEAD")).toBe(path === lightOrchestrator ? "deny" : "allow")
+      expect(evaluateRules(rules, "shell", "git rev-parse --show-toplevel")).toBe(path === lightOrchestrator ? "deny" : "allow")
       for (const target of ["/etc/passwd", "/home/user/.ssh/id_ed25519", "/home/user/.config/opencode/opencode.json",
         "/cache/opencode/packages-other/secret", "/cache/opencode2-other/secret", "/custom/config/opencode/agents/reviewer.md"]) {
         expect(evaluateRules(rules, "external_directory", target)).toBe("allow")
@@ -980,15 +990,16 @@ describe("prompt structure", () => {
       const corpus = readCorpus()
       for (const path of [...reviewOrchestrators, writer]) {
         const { frontmatter } = parseFrontmatter(corpus[path]), rules = toV2Permissions(frontmatter.permission)
-        expect(evaluateRules(rules, "shell", "shasum -a 256 .corvus/reviews/o__r__pr1/post-request.json")).toBe("allow")
+        const expected = path === lightOrchestrator ? "deny" : "allow"
+        expect(evaluateRules(rules, "shell", "shasum -a 256 .corvus/reviews/o__r__pr1/post-request.json")).toBe(expected)
         for (const root of [".corvus/reviews/pr1", ".corvus/tasks/topic/reviews/pr1"]) {
           for (const diagnostic of ["shasum -a 256", "jq .", "python3 -m json.tool"]) {
-            expect(evaluateRules(rules, "shell", `${diagnostic} ${root}/post-request.json`)).toBe("allow")
+            expect(evaluateRules(rules, "shell", `${diagnostic} ${root}/post-request.json`)).toBe(expected)
           }
         }
         for (const command of ["shasum -a 256 /tmp/post-request.json", "shasum -a 256 .corvus/tasks/1/post-request.json",
           "shasum -a 256 .corvus/reviews/o__r__pr1/other.json"]) {
-          expect(evaluateRules(rules, "shell", command)).toBe("allow")
+          expect(evaluateRules(rules, "shell", command)).toBe(expected)
         }
       }
       for (const key of ["edit", "write"]) {

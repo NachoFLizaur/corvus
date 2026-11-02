@@ -309,7 +309,7 @@ test("every review-pr argv form reaches the read-only shim, including identity f
     { input: { op: "repo" }, argv: [["repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"]], replies: [success("o/r\n")] },
     { input: { op: "metadata", ...locator }, argv: [["pr", "view", "8", "--repo", "o/r", "--json", metadataFields], commitsArgv], replies: [success({
       number: 8, url: "https://github.com/o/r/pull/8", title: "Fixture", body: "", author: { login: "alice" }, baseRefName: "main", baseRefOid: base,
-      headRefName: "feature", headRefOid: head, labels: [], reviewRequests: [], isDraft: false, mergeable: "MERGEABLE", state: "OPEN", changedFiles: 1,
+      headRefName: "feature", headRefOid: head, labels: [], reviewRequests: [], isDraft: false, mergeable: "MERGEABLE", state: "OPEN", changedFiles: 1, additions: 1, deletions: 0,
       closingIssuesReferences: [], latestReviews: [], reviewDecision: null, isCrossRepository: false,
     }), commits] },
     { input: { op: "head", ...locator }, argv: [["api", "--method", "GET", endpoint, ...accept], commitsArgv], replies: [success({ head: { sha: head }, base: { sha: base } }), commits] },

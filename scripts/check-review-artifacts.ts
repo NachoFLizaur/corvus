@@ -12,6 +12,7 @@ import { createPersistExecutor, localReviewNamespace, read_document, type Review
 import { parseReviewMarker } from "../src/review-pr"
 import { readSessionStore, type StoredSession } from "./session-store"
 import { isLightClassPath, LIGHT_REVIEW_DIRECTORY } from "../src/review-storage-class"
+import { buildFixedDenyPolicies, isFixedDenied } from "../src/fixed-denies"
 
 type RecordValue = Record<string, unknown>
 type Row = { check: string; ok: boolean; code: number; detail: string }
@@ -1091,11 +1092,12 @@ export function checkOrchestratorShell(tools: Tool[], input: Pick<Inputs, "fixtu
   const allowed = new Set(["gh auth status", `gh pr checkout ${input.pr} --repo ${input.owner}/${input.repo} --detach`,
     "git rev-parse HEAD", "date -u +%Y-%m-%dT%H:%M:%SZ", `shasum -a 256 ${reviewRoot(input)}/post-request.json`])
   if (input.agent === "light") {
-    allowed.delete(`gh pr checkout ${input.pr} --repo ${input.owner}/${input.repo} --detach`)
+    // Packaged frontmatter is the capability oracle; this concrete inventory also
+    // binds PR/head/path/remote arguments to this run's evidence, not arbitrary text.
+    allowed.clear()
+    allowed.add("date -u +%Y-%m-%dT%H:%M:%SZ")
     const root = reviewRoot(input)
-    allowed.delete(`shasum -a 256 ${root}/post-request.json`)
-     for (const command of [`git ls-files -- ${root}/lock.yaml`, `git ls-files -- '${root}/lock.yaml'`, `git ls-files -- "${root}/lock.yaml"`, "git remote",
-      `shasum -a 256 ${root}/${LIGHT_REVIEW_DIRECTORY}/post-request.json`]) allowed.add(command)
+     for (const command of [`git ls-files -- ${root}/lock.yaml`, `git ls-files -- '${root}/lock.yaml'`, `git ls-files -- "${root}/lock.yaml"`, "git remote"]) allowed.add(command)
     for (const head of validatedHeads.filter(head => /^[a-f0-9]{40}$/.test(head))) {
       for (const expression of [`'${head}^{commit}'`, `"${head}^{commit}"`, `${head}^{commit}`]) allowed.add(`git cat-file -e ${expression}`)
     }
@@ -1110,6 +1112,8 @@ export function checkOrchestratorShell(tools: Tool[], input: Pick<Inputs, "fixtu
          allowed.add(`git fetch --no-tags ${literal} ${ref}`)
        }
     }
+    const policy = buildFixedDenyPolicies().get("corvus-review-light")!
+    for (const command of allowed) if (isFixedDenied(policy, "shell", [command])) allowed.delete(command)
   }
   const forbidden = tools.filter(tool => shell(tool) && !allowed.has(text(tool.input.command)))
   return { check: "orchestrator GitHub reads", ok: !evidenceError && forbidden.length === 0, code: 5,

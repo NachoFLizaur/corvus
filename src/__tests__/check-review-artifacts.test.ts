@@ -17,6 +17,8 @@ import { bookkeepingRow, checkModelShellPushes, checkModelStateWrites, checkOrch
   checkWriterExecution, childResult, denied, diagnostic, finalAssistantMessage, readChildSessions, readDescendants,
   readParentTools, storedToolEvidence, toolsFromEvents, verdictClaimContradiction, type Row } from "../../scripts/check-review-artifacts"
 import { readSessionStore } from "../../scripts/session-store"
+import { buildFixedDenyPolicies, isFixedDenied } from "../fixed-denies"
+import { LIGHT_READS, LIGHT_MUTATIONS } from "./fixtures/review-light"
 import { bookkeepingCases as storedBookkeepingCases, bookkeepingOps, captureEvents, captureIDs, corruptStore, hosts, materialize, shellCases,
   projectionCases, syntheticIDs, unavailableCases, writeCases } from "./fixtures/session-store/synthetic-fixtures"
 
@@ -945,12 +947,36 @@ test.each([
   ["tracked lock", "git ls-files -- '.corvus/reviews/pr8/lock.yaml'", true],
   ["remote URL", "git remote get-url 'origin'", true],
   ["timing literal", "date -u +%Y-%m-%dT%H:%M:%SZ", true],
+  ["remote list", "git remote", true],
+  ["auth removed", "gh auth status", false], ["rev-parse removed", "git rev-parse HEAD", false],
+  ["shasum removed", "shasum -a 256 .corvus/reviews/pr8/.light/post-request.json", false],
+  ["write bypass", "cp src.json .corvus/reviews/pr8/post-request.json", false],
+  ["python bypass", "python3 -c 'print(1)'", false], ["node bypass", "node -e 'console.log(1)'", false],
+  ["wrapper bypass", "sh -c 'cp a b'", false], ["fetch chaining", "git fetch --no-tags origin pull/8/head; cp a b", false],
+  ["cat-file chaining", "git cat-file -e x && cp a b", false], ["redirect", "date > f", false],
   ["nonliteral timing", "date +%s", false], ["worktree shell", "git worktree add --detach sibling HEAD", false],
   ["read-tree shell", "git read-tree --reset -u HEAD", false], ["composed shell", "git remote; date -u +%Y-%m-%dT%H:%M:%SZ", false],
 ] as const)("T5 light shell allow-list: %s", (_name, command, allowed) => {
   const { directory } = sessionFixture()
   const input = { ...auditInput(directory), agent: "light" as const }
   expect(checkOrchestratorShell(toolsFromEvents([toolEvent("shell", { command }, {})]), input, "", [lightHead(1)]).ok).toBe(allowed)
+})
+
+test("checker light command inventory is confined to the same packaged shell policy", () => {
+  const { directory } = sessionFixture()
+  const input = { ...auditInput(directory), pr: "42", owner: "example", repo: "project", agent: "light" as const }
+  const policy = buildFixedDenyPolicies().get("corvus-review-light")!
+  const commands = LIGHT_READS.map(command => command.replaceAll(".corvus/tasks/task/reviews", ".corvus/reviews"))
+  const remoteEvidence = toolEvent("shell", { command: "git remote" }, {})
+  remoteEvidence.part.state.output = "origin\ngithub\ncustom.remote-2\n"
+  for (const command of commands) {
+    expect(isFixedDenied(policy, "shell", [command]), command).toBe(false)
+    expect(checkOrchestratorShell(toolsFromEvents([remoteEvidence, toolEvent("shell", { command }, {})]), input, "", ["a".repeat(40)]).ok, command).toBe(true)
+  }
+  for (const command of LIGHT_MUTATIONS) {
+    expect(isFixedDenied(policy, "shell", [command]), command).toBe(true)
+    expect(checkOrchestratorShell(toolsFromEvents([toolEvent("shell", { command }, {})]), input, "", ["a".repeat(40)]).ok, command).toBe(false)
+  }
 })
 
 test.each([

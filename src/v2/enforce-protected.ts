@@ -43,7 +43,7 @@ import type { Registrar, Rule, SetupContext } from "./types"
  * matching a requested resource forces `e.effect = "deny"`; otherwise an authored
  * `ask` downgrades an `allow` to `ask`. `evaluateRules` returning `undefined`
  * ("corvus has no opinion") leaves the host decision intact. The light primary's
- * deny-only policy is owned by `src/fixed-denies.ts` and shares this evaluate hook;
+ * fixed shell/dispatch allowlist is owned by `src/fixed-denies.ts` and shares this evaluate hook;
  * it has no context/prompt protection. Other NON-PROTECTED agents — and requests
  * without an agent id — are untouched. At setup the same direction
  * applies: a protected agent missing from the corpus, or carrying no permission

@@ -6,15 +6,15 @@ import type { Rule } from "./v2/types"
 
 type PlainObject = Record<string, unknown>
 type Corpus = ReturnType<typeof loadAgents>
-type DenyPermission = Readonly<Record<string, "deny" | Readonly<Record<string, "deny">>>>
+type FixedPermission = Readonly<Record<string, "deny" | Readonly<Record<string, "allow" | "deny">>>>
 
-/** Identities with tighten-only fixed denies, not whole-object protection. */
+/** Identities with a fixed capability policy, not whole-object protection. */
 export const FIXED_DENY_AGENTS = ["corvus-review-light"] as const
 
 export interface FixedDenyPolicy {
-  /** v1 action names and resource insertion order from the packaged block. */
-  readonly permission: DenyPermission
-  /** The same denies translated onto v2 action names. No allow/ask rules. */
+  /** v1 fixed denies and closed bash/task maps in packaged insertion order. */
+  readonly permission: FixedPermission
+  /** The same boundary translated onto v2 action names. */
   readonly rules: readonly Rule[]
 }
 
@@ -29,9 +29,14 @@ function isPlainObject(value: unknown): value is PlainObject {
  * Both hosts read it through loadAgents before mutation (v1 config merge result;
  * v2 hook registration). Only identity membership is maintained here; every deny
  * pattern is derived from the authored block, so host enforcement cannot drift.
- * Missing/invalid policy, question deny or bash denies aborts loading, fail-closed.
- * The v1 consumer appends only denies after user-wins merging; the v2 consumer
- * only changes matching requests to deny, preserving host deny/ask decisions.
+ * Missing/invalid question/edit/write/patch denies or closed bash/task maps aborts
+ * loading, fail-closed; write/patch translate to edit on v2.
+ * v1 replaces bash/task with authored maps plus additional user denies, discarding
+ * user allows/asks for these two actions. v2 requires an authored allow for every
+ * shell/subagent resource and never relaxes a host deny/ask. Metacharacter denies
+ * follow allows on v1 and are checked independently on v2. Both hosts may scan
+ * compounds into several resources: each component must satisfy this boundary;
+ * it cannot reject separators already removed by the host scanner.
  * User model choice and unrelated permissions are not policy inputs or outputs.
  * There is no config bypass: removal of the plugin disables the v1 boundary on
  * subsequent config loads and v2 teardown disposes the enforcing hook.
@@ -41,15 +46,17 @@ export function buildFixedDenyPolicies(corpus: Corpus = loadAgents(agentDir)): R
     const authored = corpus[agent]?.permission
     // Validate the complete block before extracting denies, including its allows.
     toV2Permissions(authored)
-    if (!isPlainObject(authored) || authored.question !== "deny" || !isPlainObject(authored.bash))
-      throw new Error(`corvus: refusing to load without the fixed-deny boundary for "${agent}" — missing question or bash policy`)
+    if (!isPlainObject(authored) || ["question", "edit", "write", "patch"].some(action => authored[action] !== "deny")
+      || ["bash", "task"].some(action => !isPlainObject(authored[action]) || authored[action]["*"] !== "deny"
+        || !Object.values(authored[action]).includes("allow") || Object.values(authored[action]).includes("ask")))
+      throw new Error(`corvus: refusing to load without the fixed-deny boundary for "${agent}" — missing question/edit/write/patch or closed bash/task policy`)
 
-    const permission: Record<string, "deny" | Readonly<Record<string, "deny">>> = {}
+    const permission: Record<string, "deny" | Readonly<Record<string, "allow" | "deny">>> = {}
     for (const [action, value] of Object.entries(authored)) {
       if (value === "deny") permission[action] = "deny"
       else if (isPlainObject(value)) {
-        const denies = Object.fromEntries(Object.entries(value).filter(([, effect]) => effect === "deny")) as Record<string, "deny">
-        if (Object.keys(denies).length > 0) permission[action] = Object.freeze(denies)
+        const fixed = Object.fromEntries(Object.entries(value).filter(([, effect]) => effect === "deny" || ["bash", "task"].includes(action))) as Record<string, "allow" | "deny">
+        if (Object.keys(fixed).length > 0) permission[action] = Object.freeze(fixed)
       }
     }
     const rules = toV2Permissions(permission)
@@ -59,10 +66,18 @@ export function buildFixedDenyPolicies(corpus: Corpus = loadAgents(agentDir)): R
   }))
 }
 
-/** Deny-only request check; unmatched actions/resources leave the host untouched. */
+/** Closed actions need an authored allow; other actions retain deny-only behavior. */
 export function isFixedDenied(policy: FixedDenyPolicy, action: string, resources: readonly string[]): boolean {
   const normalized = renameAction(action)
-  // Action-wide denies (question) also hold for requests with no resources.
+  if (["shell", "subagent"].includes(normalized)) {
+    if (resources.length === 0) return true
+    const rules = policy.rules.filter(rule => rule.action === normalized)
+    // The wildcard is the fallback, not an unconditional deny of the exceptions.
+    const explicitDenies = rules.filter(rule => rule.effect === "deny" && rule.resource !== "*")
+    return resources.some(resource => evaluateRules(rules.filter(rule => rule.effect === "allow"), normalized, resource) !== "allow"
+      || evaluateRules(explicitDenies, normalized, resource) === "deny")
+  }
+  // Action-wide denies also hold for requests with no resources.
   return (resources.length === 0 ? ["*"] : resources)
     .some((resource) => evaluateRules(policy.rules, normalized, resource) === "deny")
 }
@@ -71,11 +86,17 @@ export function isFixedDenied(policy: FixedDenyPolicy, action: string, resources
  * Re-append denies at the END of both action and resource maps. Reassigning an
  * existing key leaves its old position intact, letting later user allows win;
  * remove it first. Scalar permissions retain their wildcard effect when expanded
- * into a map, so a user bash deny remains a deny beyond the fixed subset too.
+ * into a map, so a user bash/task deny closes the whole action. For closed actions
+ * the authored map is rebuilt first, then only extra user denies are appended.
+ * Read raw overrides before the general merge: otherwise the authored wildcard
+ * deny is indistinguishable from a user wildcard denial. On config-hook replay,
+ * a map carrying every authored key already has that fallback; it is not an extra
+ * wildcard denial. An extra wildcard denial is emitted last and stays last on
+ * replay. User scalar allows/asks never expand authority.
  * Read the packaged policy before constructing a new result; never mutate either
  * input. Other agents retain their original object references and effective rules.
  */
-export function enforceFixedDenies(corpus: Corpus, merged: PlainObject): PlainObject {
+export function enforceFixedDenies(corpus: Corpus, merged: PlainObject, overrides: PlainObject = merged): PlainObject {
   let result = merged
   for (const [name, policy] of buildFixedDenyPolicies(corpus)) {
     const existing = result[name]
@@ -87,9 +108,17 @@ export function enforceFixedDenies(corpus: Corpus, merged: PlainObject): PlainOb
       delete permission[action]
       if (denied === "deny") permission[action] = denied
       else {
-        const resources: PlainObject = isPlainObject(current) ? { ...current }
+        const closed = ["bash", "task"].includes(action)
+        const resources: PlainObject = closed ? { ...denied } : isPlainObject(current) ? { ...current }
           : typeof current === "string" ? { "*": current } : {}
-        for (const [pattern, effect] of Object.entries(denied)) {
+        const override = isPlainObject(overrides[name]) ? overrides[name].permission : undefined
+        const user = isPlainObject(override) ? override[action] : override
+        const userEntries = isPlainObject(user) ? Object.entries(user) : user === "deny" ? [["*", "deny"]] : []
+        const hasFallback = isPlainObject(user) && Object.keys(denied).every(key => key in user)
+          && Object.keys(user)[0] === "*" && user["*"] === "deny"
+        const entries = closed ? userEntries.filter(([pattern, effect]) => effect === "deny"
+          && !(pattern === "*" && hasFallback) && !(pattern !== "*" && denied[pattern] === "deny")) : Object.entries(denied)
+        for (const [pattern, effect] of entries) {
           delete resources[pattern]
           resources[pattern] = effect
         }

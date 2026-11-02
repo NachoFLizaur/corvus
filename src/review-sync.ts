@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process"
+import { createHash } from "node:crypto"
 import * as fs from "node:fs"
 import { dirname, isAbsolute, relative, resolve as resolvePath } from "node:path"
 import { localReviewNamespace } from "./review-persist"
@@ -144,6 +145,59 @@ function lightExclusions(cwd: string, root: string): string[] {
     `:(exclude)${namespace}/lock.yaml`, `:(exclude)${namespace}/.lock`,
   ])
 }
+
+/**
+ * Replay oracle: only HEAD-tracked namespace locks excluded by an existing
+ * .light class. Read HEAD blobs, index cleanliness and regular working files
+ * before mutation; verify blob hashes because exec's UTF-8 output is not a
+ * binary transport. Invalid/symlink/binary HEAD entries or staged lock changes
+ * fail closed without writes. Save working Buffers/modes or absence, temporarily
+ * write HEAD bytes without checkout/filters/index changes, and restore in finally
+ * through conflict repair/abort too. Locks never enter replay add/commit paths.
+ * No-class roots return before any git call; no input disables these checks.
+ * Concurrent external file replacement is outside this preflight guarantee.
+ */
+async function prepareReplayLocks(root: string, ctx: Context): Promise<() => void> {
+  const locks = lightRoots(ctx.cwd, root).flatMap(namespace => [`${namespace}/lock.yaml`, `${namespace}/.lock`])
+  if (!locks.length) return () => {}
+  const entries = (await ctx.read(["ls-tree", "-z", "HEAD", "--", ...locks])).split("\0").filter(Boolean)
+  if (!entries.length) return () => {}
+  if ((await ctx.run(["diff", "--cached", "--quiet", "HEAD", "--", ...locks])).code !== 0) return fail("index-busy")
+  const saved = new Map<string, { bytes: Buffer; mode: number } | null>()
+  const originals = new Map<string, { bytes: Buffer; mode: number }>()
+  rootPath(ctx.cwd, root)
+  for (const entry of entries) {
+    const match = /^(100644|100755) blob ([a-f0-9]{40})\t(.+)$/.exec(entry)
+    if (!match || !locks.includes(match[3])) return fail("replay-refused")
+    const bytes = Buffer.from(await ctx.read(["show", `HEAD:${match[3]}`]), "utf8")
+    const digest = createHash("sha1").update(`blob ${bytes.length}\0`).update(bytes).digest("hex")
+    if (digest !== match[2]) return fail("replay-refused")
+    const target = resolvePath(ctx.cwd, match[3]), mode = parseInt(match[1], 8) & 0o777
+    let current: { bytes: Buffer; mode: number } | null = null
+    try {
+      const stat = fs.lstatSync(target)
+      if (!stat.isFile()) return fail("invalid-root")
+      current = { bytes: fs.readFileSync(target), mode: stat.mode & 0o7777 }
+    } catch (error) { if (!missing(error)) throw error }
+    if (current?.bytes.equals(bytes) && Boolean(current.mode & 0o111) === Boolean(mode & 0o111)) continue
+    saved.set(target, current)
+    originals.set(target, { bytes, mode })
+  }
+  const write = (target: string, value: { bytes: Buffer; mode: number } | null) => {
+    rootPath(ctx.cwd, root)
+    try { if (!fs.lstatSync(target).isFile()) return fail("invalid-root") }
+    catch (error) { if (!missing(error)) throw error }
+    if (value) {
+      fs.mkdirSync(dirname(target), { recursive: true })
+      fs.writeFileSync(target, value.bytes)
+      fs.chmodSync(target, value.mode)
+    } else if (fs.existsSync(target)) fs.unlinkSync(target)
+  }
+  const restore = () => { for (const [target, value] of saved) write(target, value) }
+  try { for (const [target, value] of originals) write(target, value) }
+  catch (error) { restore(); throw error }
+  return restore
+}
 async function chooseRemote(pr: SyncPr, ctx: Context): Promise<string> {
   if (pr.number === null) return "origin"
   const remotes = (await ctx.read(["remote"])).split(/\r?\n/).filter(Boolean)
@@ -256,32 +310,35 @@ async function pushState(args: Record<string, unknown>, branch: string, remote: 
     if ((await ctx.run(["diff", "--quiet", "HEAD", "--", ".", `:(top,exclude)${root}/**`])).code !== 0
       || (await ctx.run(["diff", "--cached", "--quiet", "--", ".", `:(top,exclude)${root}/**`])).code !== 0) return { synced: false, state_commit, reason: "index-busy" }
     if ((await ctx.read(["rev-parse", "HEAD"])).trim() !== state_commit) return { synced: false, state_commit, reason: "head-not-at-expected-tip" }
-    const rebased = await ctx.run(["rebase", "--no-autostash", "--no-update-refs", "--onto", tip, parent])
-    if (rebased.code !== 0) {
-      const conflicts = (await ctx.read(["diff", "--name-only", "--diff-filter=U", "-z", "--"])).split("\0").filter(Boolean)
-      if (!conflicts.length || conflicts.some(name => !name.startsWith(`${root}/`) || name.split("/").includes("..") || privatePath(name))) {
-        await ctx.run(["rebase", "--abort"])
-        return { synced: false, state_commit, reason: "replay-refused" }
-      }
-      rootPath(ctx.cwd, root)
-      for (const name of conflicts) {
-        const target = resolvePath(ctx.cwd, name), saved = snapshot.get(target)
-        const rel = relative(path, dirname(target))
-        let parentPath = path
-        for (const part of rel.split("/").filter(Boolean)) {
-          parentPath = resolvePath(parentPath, part)
-          if (!fs.existsSync(parentPath)) fs.mkdirSync(parentPath)
-          if (fs.lstatSync(parentPath).isSymbolicLink() || !fs.statSync(parentPath).isDirectory()) return fail("invalid-root")
+    const restoreLocks = await prepareReplayLocks(root, ctx)
+    try {
+      const rebased = await ctx.run(["rebase", "--no-autostash", "--no-update-refs", "--onto", tip, parent])
+      if (rebased.code !== 0) {
+        const conflicts = (await ctx.read(["diff", "--name-only", "--diff-filter=U", "-z", "--"])).split("\0").filter(Boolean)
+        if (!conflicts.length || conflicts.some(name => !name.startsWith(`${root}/`) || name.split("/").includes("..") || privatePath(name))) {
+          await ctx.run(["rebase", "--abort"])
+          return { synced: false, state_commit, reason: "replay-refused" }
         }
-        if (fs.existsSync(target) && !fs.lstatSync(target).isFile()) return fail("invalid-root")
-        if (saved) fs.writeFileSync(target, saved.bytes, { mode: saved.mode })
-        else if (fs.existsSync(target)) fs.unlinkSync(target)
+        rootPath(ctx.cwd, root)
+        for (const name of conflicts) {
+          const target = resolvePath(ctx.cwd, name), saved = snapshot.get(target)
+          const rel = relative(path, dirname(target))
+          let parentPath = path
+          for (const part of rel.split("/").filter(Boolean)) {
+            parentPath = resolvePath(parentPath, part)
+            if (!fs.existsSync(parentPath)) fs.mkdirSync(parentPath)
+            if (fs.lstatSync(parentPath).isSymbolicLink() || !fs.statSync(parentPath).isDirectory()) return fail("invalid-root")
+          }
+          if (fs.existsSync(target) && !fs.lstatSync(target).isFile()) return fail("invalid-root")
+          if (saved) fs.writeFileSync(target, saved.bytes, { mode: saved.mode })
+          else if (fs.existsSync(target)) fs.unlinkSync(target)
+        }
+        if ((await ctx.run(["add", "--", ...paths()])).code !== 0 || (await ctx.run(["-c", "core.editor=true", "rebase", "--continue"])).code !== 0) {
+          await ctx.run(["rebase", "--abort"])
+          return { synced: false, state_commit, reason: "replay-refused" }
+        }
       }
-      if ((await ctx.run(["add", "--", ...paths()])).code !== 0 || (await ctx.run(["-c", "core.editor=true", "rebase", "--continue"])).code !== 0) {
-        await ctx.run(["rebase", "--abort"])
-        return { synced: false, state_commit, reason: "replay-refused" }
-      }
-    }
+    } finally { restoreLocks() }
     parent = tip
     state_commit = (await ctx.read(["rev-parse", "HEAD"])).trim()
     if (!matches(state_commit, SHA)) return fail("invalid-state-commit")

@@ -306,6 +306,7 @@ const plugin: Plugin = async (input) => {
         config.agent = enforceFixedDenies(
           agents,
           enforceProtectedAgents(agents, merged),
+          (existingAgents ?? {}) as PlainObject,
         ) as NonNullable<typeof config.agent>
       }
 

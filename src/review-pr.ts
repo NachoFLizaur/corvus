@@ -40,6 +40,8 @@ export type PrMetadata = {
   code_head: string
   isCrossRepository: boolean
   changedFiles: number
+  additions: number
+  deletions: number
 }
 export type PrFile = {
   filename: string; status: string; additions: number; deletions: number
@@ -743,6 +745,7 @@ const handlers: Handlers = {
       author: item.author === null ? null : { login: login(item.author)! },
       baseRefName: string(item.baseRefName), baseRefOid: sha(item.baseRefOid),
       headRefName: string(item.headRefName), headRefOid: sha(item.headRefOid), changedFiles: count(item.changedFiles),
+      additions: count(item.additions), deletions: count(item.deletions),
     }
   },
   async head(target, context) {

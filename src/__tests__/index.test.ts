@@ -291,6 +291,30 @@ async function withReviewTools(host: "v1" | "v2", run: (directory: string, call:
 }
 
 describe("review tool hooks", () => {
+  test.each(["v1", "v2"] as const)("%s returns PR additions/deletions to light and full consumers", async host => {
+    await withReviewTools(host, async (directory, call) => {
+      const bin = join(directory, "bin"), head = "a".repeat(40)
+      mkdirSync(bin)
+      const data = { number: 42, url: "https://github.com/example/project/pull/42", title: "Line counts", body: "",
+        author: { login: "contributor" }, state: "OPEN", isDraft: false, isCrossRepository: false, mergeable: "MERGEABLE",
+        baseRefName: "main", baseRefOid: "b".repeat(40), headRefName: "feature", headRefOid: head,
+        changedFiles: 2, additions: 137, deletions: 19, labels: [], closingIssuesReferences: [], latestReviews: [], reviewDecision: null }
+      writeFileSync(join(bin, "gh.metadata"), JSON.stringify(data))
+      writeFileSync(join(bin, "gh.commits"), JSON.stringify([{ sha: head, commit: { message: "Product change" } }]))
+      writeFileSync(join(bin, "gh"), '#!/bin/sh\nif [ "$1" = "pr" ]; then exec /bin/cat "$0.metadata"; else exec /bin/cat "$0.commits"; fi\n', { mode: 0o755 })
+      const beforePath = process.env.PATH
+      process.env.PATH = `${bin}:${beforePath ?? ""}`
+      try {
+        for (const agent of ["corvus-review-light", "corvus-review", "corvus-review-auto", "pr-context-gatherer"])
+          expect(await call("corvus_review_pr", { op: "metadata", owner: "example", name: "project", pr: 42 }, agent))
+            .toEqual({ ok: true, ...data, head_sha: head, code_head: head, api_calls: 2 })
+      } finally {
+        if (beforePath === undefined) delete process.env.PATH
+        else process.env.PATH = beforePath
+      }
+    })
+  })
+
   test.each(["v1", "v2"] as const)("%s filters complete PR patches and keeps unfiltered JSON byte-identical", async host => {
     await withReviewTools(host, async (directory, call, rawCall) => {
       // A local gh double serves fixed pages; no network or PR code executes.
