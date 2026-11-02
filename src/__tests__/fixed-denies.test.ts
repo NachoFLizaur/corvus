@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test"
+import { execFileSync } from "node:child_process"
+import { mkdtempSync, mkdirSync, realpathSync, rmSync, symlinkSync } from "node:fs"
+import { join } from "node:path"
 import { evaluateRules } from "../evaluate-rules"
 import { buildFixedDenyPolicies, enforceFixedDenies, FIXED_DENY_AGENTS, isFixedDenied } from "../fixed-denies"
 import plugin from "../index"
@@ -9,7 +12,7 @@ import { renameAction, toV2Permissions } from "../to-v2-permissions"
 import { enforceProtected } from "../v2/enforce-protected"
 import { registerAgents } from "../v2/register-agents"
 import { createFakeContext, type EvaluationInput } from "./fake-context"
-import { LIGHT_BASH_DENIES, LIGHT_BASH_MAP, LIGHT_TASK_MAP, LIGHT_CHILDREN, LIGHT_MUTATIONS, LIGHT_READS, LIGHT_EXPANSIONS } from "./fixtures/review-light"
+import { LIGHT_BASH_DENIES, LIGHT_BASH_MAP, LIGHT_TASK_MAP, LIGHT_CHILDREN, LIGHT_MUTATIONS, LIGHT_READS, LIGHT_EXPANSIONS, LIGHT_TOOLS, LIGHT_DENIED_TOOLS } from "./fixtures/review-light"
 
 const light = "corvus-review-light", detector = "pr-light-reviewer", model = "test-provider/user-chosen-fast-model"
 const corpus = loadAgents(agentDir)
@@ -23,17 +26,89 @@ type TestConfig = Omit<Config, "agent"> & { agent: Record<string,
  * Fake host changes are test-local. Widening, model loss or extra-denial loss fails;
  * no environment flag disables these assertions. Teardown alone disables v2 hooks. */
 describe("light fixed policy (AC1, AC7)", () => {
+  test("both hosts default-deny tools despite user allows; required tools and tighter asks/denies survive", async () => {
+    const hooks = await plugin({ directory: process.cwd() } as Parameters<typeof plugin>[0]), fake = createFakeContext(process.cwd())
+    const cleanup = await enforceProtected(fake.ctx)
+    const permission = Object.fromEntries([...LIGHT_TOOLS, ...LIGHT_DENIED_TOOLS].map(tool => [tool, "allow"]))
+    const config: TestConfig = { agent: { [light]: { model, permission: { "*": "allow", ...permission } } } }
+    await hooks.config!(config as unknown as Config)
+    await hooks["chat.params"]!({ sessionID: "ses_probe", agent: light } as Parameters<NonNullable<typeof hooks["chat.params"]>>[0],
+      { maxOutputTokens: 1 } as Parameters<NonNullable<typeof hooks["chat.params"]>>[1])
+    try {
+      for (const tool of LIGHT_DENIED_TOOLS) {
+        expect(evaluateRules(toV2Permissions(config.agent[light].permission), renameAction(tool), "*")).toBe("deny")
+        await expect(hooks["tool.execute.before"]!({ tool, sessionID: "ses_probe", callID: "call_probe" }, { args: {} })).rejects.toThrow("fixed-deny boundary")
+        expect((await fake.evaluate({ agent: light, action: tool, resources: [], effect: "allow" })).effect).toBe("deny")
+      }
+      for (const tool of LIGHT_TOOLS) {
+        expect(evaluateRules(toV2Permissions(config.agent[light].permission), tool, "*")).toBe("allow")
+        await hooks["tool.execute.before"]!({ tool, sessionID: "ses_probe", callID: "call_probe" }, { args: {} })
+        expect((await fake.evaluate({ agent: light, action: tool, resources: ["*"], effect: "allow" })).effect).toBe("allow")
+        expect((await fake.evaluate({ agent: light, action: tool, resources: ["*"], effect: "ask" })).effect).toBe("ask")
+      }
+      const tightened: TestConfig = { agent: { [light]: { permission: { skill: "ask", read: { "private/*": "deny" }, corvus_review_lock: "deny" } } } }
+      await hooks.config!(tightened as unknown as Config)
+      const before = JSON.stringify(tightened.agent[light].permission)
+      const rules = toV2Permissions(tightened.agent[light].permission)
+      expect(evaluateRules(rules, "skill", "*")).toBe("ask")
+      expect(evaluateRules(rules, "read", "private/x")).toBe("deny")
+      expect(evaluateRules(rules, "read", "public/x")).toBe("allow")
+      expect(evaluateRules(rules, "corvus_review_lock", "*")).toBe("deny")
+      await hooks.config!(tightened as unknown as Config)
+      expect(JSON.stringify(tightened.agent[light].permission)).toBe(before)
+    } finally { await cleanup?.() }
+  })
+
+  test("both hosts allow only realpath session repository top-level shell workdir", async () => {
+    const temp = mkdtempSync("/private/var/folders/gw/03ckh14x03b6pgn_sk4p29640000gn/T/opencode/light-workdir-"), root = join(temp, "repo")
+    mkdirSync(root); execFileSync("git", ["init", "-q", root])
+    const nested = join(root, "nested"), sibling = join(temp, "repo.corvus-review"), other = join(temp, "other"), link = join(temp, "alias")
+    for (const path of [nested, sibling, other]) mkdirSync(path)
+    execFileSync("git", ["init", "-q", nested]) // PR-committed fake nested repo is not an oracle.
+    symlinkSync(root, link)
+    const hooks = await plugin({ directory: root } as Parameters<typeof plugin>[0]), fake = createFakeContext(root)
+    const cleanup = await enforceProtected(fake.ctx)
+    const generation = (agent: string) => hooks["chat.params"]!({ sessionID: "ses_probe", agent } as Parameters<NonNullable<typeof hooks["chat.params"]>>[0],
+      { maxOutputTokens: 1 } as Parameters<NonNullable<typeof hooks["chat.params"]>>[1])
+    const callV1 = (workdir: unknown) => hooks["tool.execute.before"]!({ tool: "bash", sessionID: "ses_probe", callID: "call_probe" }, { args: { command: "git remote", ...(workdir === undefined ? {} : { workdir }) } })
+    const callV2 = (workdir: unknown, agent = light) => fake.beforeTool({ agent: agent as Parameters<typeof fake.beforeTool>[0]["agent"], tool: "shell",
+      input: { command: "git remote", ...(workdir === undefined ? {} : { workdir }) } })
+    try {
+      await generation(light)
+      for (const workdir of [undefined, root, realpathSync(root), link, "."]) {
+        await expect(callV1(workdir)).resolves.toBeUndefined()
+        await expect(callV2(workdir)).resolves.toBeUndefined()
+      }
+      for (const workdir of [sibling, nested, other, "nested", "missing", "", null, 42]) {
+        await expect(callV1(workdir)).rejects.toThrow("fixed-deny boundary")
+        await expect(callV2(workdir)).rejects.toThrow("fixed-deny boundary")
+      }
+      // Root is cached: a later nested repository never replaces the oracle.
+      await expect(callV1(root)).resolves.toBeUndefined()
+      await expect(callV2(root)).resolves.toBeUndefined()
+      await generation(detector)
+      await expect(callV1(sibling)).resolves.toBeUndefined()
+      await expect(callV2(sibling, detector)).resolves.toBeUndefined()
+      const missing = createFakeContext(join(temp, "missing")), missingCleanup = await enforceProtected(missing.ctx)
+      try { await expect(missing.beforeTool({ agent: light as Parameters<typeof missing.beforeTool>[0]["agent"], tool: "shell", input: { command: "git remote" } })).rejects.toThrow("fixed-deny boundary") }
+      finally { await missingCleanup?.() }
+    } finally { await cleanup?.(); rmSync(temp, { recursive: true, force: true }) }
+  })
+
   test("derives fixed denies and closed maps from the packaged block; malformed policy fails closed", () => {
     expect(PROTECTED_AGENTS).toEqual(["pr-code-reviewer", "security-reviewer", "pr-light-reviewer", "pr-comment-writer"])
     expect(PROTECTED_AGENTS).not.toContain(light)
     const policies = buildFixedDenyPolicies(corpus), policy = policies.get(light)!
-    expect(policy.rules).toHaveLength(4 + Object.keys(LIGHT_BASH_MAP).length + Object.keys(LIGHT_TASK_MAP).length)
-    expect(toV2Permissions(corpus[light].permission)).toHaveLength(policy.rules.length + 1)
+    expect(policy.rules).toHaveLength(6 + LIGHT_TOOLS.length + Object.keys(LIGHT_BASH_MAP).length + Object.keys(LIGHT_TASK_MAP).length)
+    expect(toV2Permissions(corpus[light].permission)).toHaveLength(policy.rules.length)
     expect([...policies.keys()]).toEqual([...FIXED_DENY_AGENTS])
     expect(policy.rules).toEqual([
+      { action: "*", resource: "*", effect: "deny" },
+      ...LIGHT_TOOLS.map(action => ({ action, resource: "*", effect: "allow" as const })),
       { action: "question", resource: "*", effect: "deny" },
       ...["edit", "write", "patch"].map(action => ({ action: renameAction(action), resource: "*", effect: "deny" as const })),
       ...toV2Permissions({ bash: LIGHT_BASH_MAP, task: LIGHT_TASK_MAP }),
+      ...toV2Permissions({ external_directory: corpus[light].permission!.external_directory }),
     ])
     for (const command of LIGHT_MUTATIONS) expect(evaluateRules(policy.rules, "shell", command), command).toBe("deny")
     for (const command of LIGHT_READS) expect(evaluateRules(policy.rules, "shell", command), command).toBe("allow")
@@ -142,7 +217,7 @@ describe("light fixed policy (AC1, AC7)", () => {
   })
 
   test.each(["bash", "shell"])("literal expansion guard scopes v1 %s to recorded light identity and composes with v2; exact commit suffix stays usable", async tool => {
-    const hooks = await plugin({} as Parameters<typeof plugin>[0]), fake = createFakeContext()
+    const hooks = await plugin({ directory: process.cwd() } as Parameters<typeof plugin>[0]), fake = createFakeContext()
     await registerAgents(fake.ctx)
     const cleanup = await enforceProtected(fake.ctx)
     const generation = (agent: string) => hooks["chat.params"]!({ sessionID: "ses_probe", agent } as Parameters<NonNullable<typeof hooks["chat.params"]>>[0],

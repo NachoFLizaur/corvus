@@ -164,19 +164,25 @@ describe("light prompt contracts", () => {
     pin(section(skill, "3. Load Verified Config and Marker History"), /Reuse resolved config within the same base; on a moved base reload and reapply this chain/)
     pin(section(skill, "3. Load Verified Config and Marker History"), /if overlapping activity changes the returned round, use that new round and disclose the change, never carry forward an assumed round/)
     pin(section(skill, "5. Dispatch Both Axis Briefs in One Foreground Batch"), /increment and record \{attempt, code_head, base_sha\}/)
-    pin(section(skill, "5. Dispatch Both Axis Briefs in One Foreground Batch"), /Each detector freshly reads PR metadata\/diff\/files\/head code each attempt.*Send UNTRUSTED prior_feedback only for focus_paths plus PR-level items/)
+    pin(section(skill, "5. Dispatch Both Axis Briefs in One Foreground Batch"), /Each detector freshly reads PR metadata\/diff\/files\/head code and reviews each attempt.*Send ONLY controls in one labelled TRUSTED_LIGHT_CONTROLS JSON block; no prior_feedback or PR prose/)
     pin(section(skill, "7. Persist Candidate, Freeze and Preview"), /Each attempt generates a new candidate\/freeze\/preview for its own marker\/head/)
   })
 
   test("prior feedback informs all-hunk detection and suppresses repeats without trusting resolution flags", () => {
-    pin(section(skill, "3. Load Verified Config and Marker History"), /Build UNTRUSTED prior_feedback from all prior_threads.*reuse dispositions as unknown commit evidence, never a fix oracle/)
-    pin(normalize(detector), /still review the whole assigned eligible scope.*EVERY supplied item independently classify still_applies\|fixed\|not_applicable against code_head with cited evidence/)
+    pin(section(skill, "3. Load Verified Config and Marker History"), /parent's reviews only for marker round\/no-new-findings history, never per-shard feedback assembly/)
+    pin(normalize(detector), /fetch metadata, files with paginate:true, diff and reviews yourself for the trusted locator/)
+    pin(normalize(detector), /Build UNTRUSTED prior_feedback from reviews\.prior_threads filtered to focus_paths plus PR-level items/)
+    pin(normalize(detector), /still review the whole assigned eligible scope.*EVERY fetched item independently classify still_applies\|fixed\|not_applicable against code_head with cited evidence/)
     pin(normalize(detector), /return its prior assessment, not a duplicate new finding, for any reviewer/)
     const synthesis = section(skill, "6. Recheck Head and Synthesize In-Session")
     pin(synthesis, /Suppress every new finding matching any prior concern.*regardless of reviewer or resolution flag/)
     pin(synthesis, /one optional ## Earlier feedback after Spec and before Review limits/)
     pin(synthesis, /no-new-findings → step 10 without candidate\/authorization\/writer/)
     pin(synthesis, /Require complete history\/threads, successful eligible-hunk coverage and verified assessments/)
+    pin(section(skill, "3. Load Verified Config and Marker History"), /author login equal to authenticated op identity login AND a valid shared v1\/v2 marker/)
+    pin(synthesis, /latest genuine Corvus light head equals code_head \(authenticated identity login AND valid marker\)/)
+    pin(synthesis, /Fixed since last review requires a genuine Corvus source \(authenticated identity login AND valid marker\)/)
+    pin(synthesis, /Verify Corvus provenance.*not detector flags/)
   })
 
   test("AC8/AC10: expired detector return and takeover fail closed before synthesis/mutation/recovery dispatch", () => {
@@ -495,7 +501,7 @@ describe("adaptive light scope contracts", () => {
 
   test("AC7: consistency validation retains valid evidence and discloses gaps, never a repair detector pass", () => {
     const text = section(skill, "5. Dispatch Both Axis Briefs in One Foreground Batch")
-    pin(text, /each attempt assesses and selects its strategy afresh/)
+    pin(text, /Fresh detection selects its strategy afresh/)
     pin(text, /then identity\/strategy\/counts\/coverage without file\/line maxima or parent code analysis/)
     pin(text, /Require assessment signals, an allowed approach \(all_diff_files\|risk_focus\|sampled_by_area\|other\), non-empty rationale and scope_kind/)
     pin(text, /Check mapping: all_diff_files → scope_kind all_diff_files; risk_focus\/sampled_by_area → focus_set; other → other or focus_set as stated/)

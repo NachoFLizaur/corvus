@@ -145,11 +145,29 @@ context/treeEntries/populate/worktree).
 - Prior-review awareness reuses the shared reviews/marker/disposition machinery and adds
   all-reviewer `prior_threads` without changing full-review fields, because prior comments
   are part of the PR evidence rather than a delta-only scope filter. Each shard independently
-  adjudicates relevant untrusted feedback with current-head evidence; synthesis links earlier
+  fetches reviews and filters its own focus-path/PR-level untrusted feedback, then
+  adjudicates it with current-head evidence, because per-shard parent feedback assembly
+  serializes dispatch. Trusted control blocks contain no prior_feedback; reports retain
+  source metadata/classifications, while parent history serves rounds/no-new-findings.
+  Synthesis links earlier
   open/fixed Corvus findings and confirmed major-or-higher concerns from others instead of
   reposting duplicates. Complete same-head results with zero new findings and unchanged known
   statuses finish locally as `no-new-findings`, because another identical review adds no new
-  information; unknown history/statuses cannot establish that predicate. Cleanup remains mandatory.
+  information; unknown history/statuses cannot establish that predicate. Fixed-status and
+  skip history require authenticated author login AND a valid Corvus marker, because copied
+  marker text from another reviewer cannot establish Corvus lineage. Cleanup remains mandatory.
+- Light defaults to denying all tools with authored exceptions for required review tools,
+  skill/reference reads, restricted shell and the two children, because direct Code Mode,
+  web or mutation tools otherwise bypass the orchestration boundary. Both hosts keep the
+  packaged capability ceiling tighten-only, preserving user restrictions/model choices.
+  Shell workdir must realpath to the session repository top-level, discovered once and
+  cached from that trusted directory before execution, because a sibling or PR-selected
+  nested/fake repository must never become the shell oracle. v2 `tool.execute.before`
+  exposes host identity and input; permission evaluation lacks workdir, and shell.create
+  lacks identity (`src/v2/enforce-protected.ts`). Unknown paths/discovery fail closed;
+  external concurrent directory replacement remains a realpath TOCTOU residual.
+  The light checker accepts sourced review-body IDs as well as thread-comment IDs and
+  parses only trusted brief controls, because feedback text is not a control oracle.
 - Literal shell expansions are rejected by a shared fixed-policy predicate on both hosts,
   with a v1 pre-execution hook supplementing wildcard maps because those maps cannot express
   literal `*`/`?` denials. Only an entire exact cat-file command may retain `^{commit}`.

@@ -8,7 +8,7 @@ import { root, skillDir } from "../paths"
 import v2Plugin from "../server"
 import { toV2Permissions } from "../to-v2-permissions"
 import { createFakeContext } from "./fake-context"
-import { LIGHT_BASH_MAP, LIGHT_TASK_MAP, LIGHT_MUTATIONS, LIGHT_READS } from "./fixtures/review-light"
+import { LIGHT_BASH_MAP, LIGHT_TASK_MAP, LIGHT_MUTATIONS, LIGHT_READS, LIGHT_TOOLS } from "./fixtures/review-light"
 
 type Corpus = Record<string, string>
 type Kind = "agent" | "command" | "skill" | "reference"
@@ -112,7 +112,8 @@ const gitDenies: Record<string, string[]> = {
   "sudo *": ["sudo command"],
 }
 const permissionFor = (path: string): Record<string, unknown> => ({
-  "*": "allow",
+  "*": path === lightOrchestrator ? "deny" : "allow",
+  ...(path === lightOrchestrator ? Object.fromEntries(LIGHT_TOOLS.map(tool => [tool, "allow"])) : {}),
   ...(leafReviewers.includes(path) ? { edit: "deny", write: "deny" } : {}),
   ...(path === lightOrchestrator ? { edit: "deny", write: "deny", patch: "deny" } : {}),
   ...(autonomous.includes(path) ? { question: "deny" } : {}),
@@ -271,14 +272,14 @@ function validate(corpus: Corpus, c: Contract, final = false): string[] {
         check(fm.color === undefined || typeof fm.color === "string" && /^#[\da-f]{6}$/i.test(fm.color), `frontmatter:${path}`)
         const permission = record(fm.permission) ? fm.permission : {}
         const expected = permissionFor(path), entries = permissionEntries(permission), rules = toV2Permissions(permission)
-        check(permission["*"] === "allow" && Object.keys(permission)[0] === "*"
+        check(permission["*"] === expected["*"] && Object.keys(permission)[0] === "*"
           && sameNames(Object.keys(permission), Object.keys(expected))
           && (!(orchestrators.includes(path) || path === lightOrchestrator) || record(permission.bash) && Object.keys(permission.bash)[0] === "*")
           && sameNames(entries.filter(([, effect]) => effect === "deny").map(([key]) => key),
             permissionEntries(expected).filter(([, effect]) => effect === "deny").map(([key]) => key))
           && entries.every(([key, effect]) => effect === new Map(permissionEntries(expected)).get(key)), `safety:${path}`)
         check(externalSkillResources.every(resource => ["read", "external_directory"].every(action =>
-          evaluateRules(rules, action, resource) === "allow")), `safety:${path}:skill-references`)
+          evaluateRules(rules, action, resource) === (path === lightOrchestrator && action === "external_directory" ? "deny" : "allow"))), `safety:${path}:skill-references`)
         check(evaluateRules(rules, "edit", "src/file.ts") === (leafReviewers.includes(path) || path === lightOrchestrator ? "deny" : "allow")
           && evaluateRules(rules, "question", "*") === (autonomous.includes(path) ? "deny" : "allow"), `safety:${path}`)
         if (orchestrators.includes(path)) {
@@ -517,8 +518,9 @@ describe("prompt structure", () => {
           expect(evaluateRules(rules, "read", ".corvus/reviews/x/review-input.json")).toBe("allow")
         }
         for (const tool of reviewTools) {
-          expect(evaluateRules(v1Rules, tool, "*")).toBe("allow")
-          expect(evaluateRules(v2Rules, tool, "*")).toBe("allow")
+          const expected = name === "corvus-review-light" && !LIGHT_TOOLS.includes(tool) ? "deny" : "allow"
+          expect(evaluateRules(v1Rules, tool, "*")).toBe(expected)
+          expect(evaluateRules(v2Rules, tool, "*")).toBe(expected)
         }
       }
     } finally { await cleanup() }
@@ -679,7 +681,7 @@ describe("prompt structure", () => {
       for (const resource of [...reviewStateResources, "src/foo.ts", ".corvus/tasks/x/PLAN.md"])
         for (const target of [resource, `../${resource}`]) expect(evaluateRules(rules, "edit", target)).toBe("deny")
       for (const action of ["edit", "write", "patch"]) expect(permission).toHaveProperty(action, "deny")
-      for (const tool of reviewTools) expect(evaluateRules(rules, tool, "*")).toBe("allow")
+      for (const tool of reviewTools) expect(evaluateRules(rules, tool, "*")).toBe(LIGHT_TOOLS.includes(tool) ? "allow" : "deny")
     })
 
     test("lock acquisition checks both names and denial preserves evidence without halting analysis", () => {
@@ -698,18 +700,18 @@ describe("prompt structure", () => {
       expect(denial).toContain("without claiming lock ownership or durability")
     })
 
-    test("every agent defaults to allow with exactly its expected denies and no extra rules", () => {
+    test("every agent has exactly its expected capability policy and no extra rules", () => {
       const corpus = readCorpus()
       expect(validate(corpus, contract)).toEqual([])
       for (const name of identities.agent) {
         const path = `agent/${name}.md`, { permission } = parseFrontmatter(corpus[path]).frontmatter
         const rules = toV2Permissions(permission)
-        for (const tool of reviewTools) expect(evaluateRules(rules, tool, "*")).toBe("allow")
+        for (const tool of reviewTools) expect(evaluateRules(rules, tool, "*")).toBe(path === lightOrchestrator && !LIGHT_TOOLS.includes(tool) ? "deny" : "allow")
         for (const mutate of [
           (p: Record<string, unknown>) => { delete p["*"] },
-          (p: Record<string, unknown>) => { p["*"] = "deny" },
+          (p: Record<string, unknown>) => { p["*"] = path === lightOrchestrator ? "allow" : "deny" },
           (p: Record<string, unknown>) => { p.skill = "deny" },
-          (p: Record<string, unknown>) => { p.corvus_review_pr = "allow" },
+          (p: Record<string, unknown>) => { p.corvus_review_pr = path === lightOrchestrator ? "deny" : "allow" },
           (p: Record<string, unknown>) => { p.external_directory = { "/cache/*": "deny" } },
           (p: Record<string, unknown>) => { p.task = "ask" },
         ]) expect(validate(mutatePermission(corpus, path, mutate), contract)).toContain(`safety:${path}`)
@@ -734,10 +736,10 @@ describe("prompt structure", () => {
         expect(evaluateRules(hostAllows, "external_directory", target)).toBe("allow")
         expect(evaluateRules(beforeRules, "external_directory", target)).toBe("deny")
         expect({ path, target, effect: evaluateRules(rules, "external_directory", target) })
-          .toEqual({ path, target, effect: "allow" })
+          .toEqual({ path, target, effect: path === lightOrchestrator ? "deny" : "allow" })
       }
       for (const target of externalSkillResources) {
-        expect(evaluateRules(rules, "external_directory", target)).toBe("allow")
+        expect(evaluateRules(rules, "external_directory", target)).toBe(path === lightOrchestrator ? "deny" : "allow")
         expect(evaluateRules(rules, "read", target)).toBe("allow")
         expect(evaluateRules(rules, "edit", target)).toBe(path === lightOrchestrator ? "deny" : "allow")
       }
@@ -745,7 +747,7 @@ describe("prompt structure", () => {
       expect(evaluateRules(rules, "shell", "git rev-parse --show-toplevel")).toBe(path === lightOrchestrator ? "deny" : "allow")
       for (const target of ["/etc/passwd", "/home/user/.ssh/id_ed25519", "/home/user/.config/opencode/opencode.json",
         "/cache/opencode/packages-other/secret", "/cache/opencode2-other/secret", "/custom/config/opencode/agents/reviewer.md"]) {
-        expect(evaluateRules(rules, "external_directory", target)).toBe("allow")
+        expect(evaluateRules(rules, "external_directory", target)).toBe(path === lightOrchestrator ? "deny" : "allow")
       }
     })
 
@@ -755,9 +757,9 @@ describe("prompt structure", () => {
         const path = `agent/${name}.md`
         const code = `safety:${path}:skill-references`
         expect(validate(corpus, contract)).not.toContain(code)
-        for (const action of ["read", "external_directory", "*"]) {
+        for (const action of path === lightOrchestrator ? ["read", "*"] : ["read", "external_directory", "*"]) {
           const changed = mutatePermission(corpus, path, p => {
-            p[action] = "deny"
+            p[action] = path === lightOrchestrator && action === "*" ? "allow" : "deny"
           })
           expect(validate(changed, contract)).toContain(code)
         }

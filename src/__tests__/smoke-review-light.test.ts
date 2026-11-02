@@ -69,6 +69,43 @@ test("light fixture keeps dirty sentinels and ignores unchanged until the model-
   expect(checkLightSnapshots(stable, snapshotLightFixture(fixture, join(work, "bare.git"))).every(row => row.ok)).toBe(true)
 })
 
+test.each(["v1", "v2"] as const)("%s light exposure requires all seven tools and denies direct post", host => {
+  const work = mkdtempSync(join(tmpdir(), "corvus-smoke-light-exposure-"))
+  directories.push(work)
+  const preflight = /bun -e '(\n  const data = await Bun\.file[\s\S]*?)\n' \|\| die 6 'posting barrier not installed; model was not started'/.exec(harness)?.[1]
+  if (!preflight?.trim()) throw new Error("Orchestrator preflight snippet not found")
+  expect(harness).toMatch(/export [^\n]*SMOKE_AGENT="\$AGENT"/)
+  expect(preflight).toContain(': ["corvus_review_payload", "corvus_review_post"]')
+  const required = ["corvus_review_pr", "corvus_review_lock", "corvus_review_persist", "corvus_review_payload",
+    "corvus_review_verdict", "corvus_review_sync", "corvus_review_worktree"]
+  const run = (missing?: string, post: "allow" | "deny" | "ask" = "deny") => {
+    const tools = Object.fromEntries(required.map(name => [name, name !== missing]))
+    writeFileSync(join(work, "agents.json"), JSON.stringify(host === "v1"
+      ? { name: "corvus-review-light", tools: { ...tools, corvus_review_post: post === "allow" },
+        permission: [{ permission: "task", pattern: "pr-comment-writer", action: "deny" }] }
+      : [{ id: "corvus-review-light", permissions: [
+        ...required.filter(name => name !== missing).map(name => ({ action: name, resource: "*", effect: "allow" })),
+        { action: "corvus_review_post", resource: "*", effect: post },
+        { action: "subagent", resource: "pr-comment-writer", effect: "deny" },
+      ] }]))
+    return Bun.spawnSync([process.execPath, "-e", preflight], { env: { ...process.env,
+      SMOKE_AGENT: "light", SMOKE_AGENT_ID: "corvus-review-light", SMOKE_WORK: work,
+      SMOKE_HOST: host, SMOKE_ROOT: root, SMOKE_WRITER: "0" } })
+  }
+  const valid = run()
+  expect(valid.exitCode, valid.stderr.toString()).toBe(0)
+  for (const missing of required) {
+    const result = run(missing)
+    expect(result.exitCode, missing).toBe(1)
+    expect(result.stderr.toString()).toContain("Orchestrator requires " + required.join(", "))
+  }
+  for (const post of host === "v2" ? ["allow", "ask"] as const : ["allow"] as const) {
+    const result = run(undefined, post)
+    expect(result.exitCode).toBe(1)
+    expect(result.stderr.toString()).toContain("Light direct post must remain denied")
+  }
+})
+
 test("light rejects writer/full and preflight exits before run; auto remains the default", () => {
   expect(harness).toContain("AGENT=auto")
   expect(harness).toContain("AGENT_ID=corvus-review-auto")

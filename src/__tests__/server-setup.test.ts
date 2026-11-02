@@ -26,6 +26,7 @@ const REGISTRATION_ORDER = [
   "agent.transform",
   "permission.hook",
   "session.hook",
+  "tool.hook",
   "command.transform",
   "skill.transform",
   "tool.transform",
@@ -72,7 +73,7 @@ function traceRegistrations(fake: FakeContext, failAt: string): Traced {
     command: { transform: wrap("command", "transform") },
     skill: { transform: wrap("skill", "transform") },
     mcp: { transform: wrap("mcp", "transform") },
-    tool: { transform: wrap("tool", "transform") },
+    tool: { transform: wrap("tool", "transform"), hook: wrap("tool", "hook") },
     permission: { hook: wrap("permission", "hook") },
     session: { ...(domains.session as unknown as Record<string, unknown>), hook: wrap("session", "hook") },
   } as unknown as SetupContext

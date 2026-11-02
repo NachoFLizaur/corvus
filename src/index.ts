@@ -4,7 +4,7 @@ import type { Plugin } from "@opencode-ai/plugin"
 import { z } from "zod"
 import { agentDir, commandDir, skillDir } from "./paths"
 import { loadAgents } from "./load-agents"
-import { buildFixedDenyPolicies, enforceFixedDenies, isFixedDenied } from "./fixed-denies"
+import { buildFixedDenyPolicies, createLightShellWorkdirGuard, enforceFixedDenies, isFixedDenied } from "./fixed-denies"
 import { loadCommands } from "./load-commands"
 import { hostOmitsOutputLimit, resolveOutputBudget } from "./output-budget"
 import { createReviewToolExecutors } from "./review-payload"
@@ -114,6 +114,7 @@ const plugin: Plugin = async (input) => {
   const worktree = createWorktreeExecutor({ cwd: directory })
   const corvusAgents = new Set(existsSync(agentDir) ? Object.keys(loadAgents(agentDir)) : [])
   const fixedPolicies = buildFixedDenyPolicies()
+  const allowedShellWorkdir = createLightShellWorkdirGuard(directory)
   const sessionAgents = new Map<string, string>()
   return {
     /** Agent oracle: host chat.params records the current generation's agent
@@ -123,12 +124,15 @@ const plugin: Plugin = async (input) => {
      * v1 config maps still enforce the light policy. No user permission or prompt
      * changes disable an identified light check; plugin unload removes the hooks. */
     "tool.execute.before": async (request, output) => {
-      if (!["bash", "shell"].includes(request.tool)) return
       const agent = sessionAgents.get(request.sessionID)
       if (!agent) return
       const policy = fixedPolicies.get(agent)
-      if (policy && (typeof output.args?.command !== "string" || isFixedDenied(policy, "shell", [output.args.command])))
-        throw new Error(`corvus: ${agent}; shell is denied by the plugin's fixed-deny boundary.`)
+      if (!policy) return
+      const shell = ["bash", "shell"].includes(request.tool)
+      if (shell ? typeof output.args?.command !== "string" || isFixedDenied(policy, "shell", [output.args.command])
+        || !allowedShellWorkdir(output.args?.workdir) : isFixedDenied(policy, request.tool,
+          request.tool === "task" ? [String(output.args?.subagent_type ?? "")] : ["*"]))
+        throw new Error(`corvus: ${agent}; ${request.tool} is denied by the plugin's fixed-deny boundary.`)
     },
     /**
      * Scope oracle: packaged names read at plugin initialization, never user config.

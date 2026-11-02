@@ -148,7 +148,7 @@ test.each(["v1", "v2"] as const)("%s writer preflight resolves wildcard fallback
   const harness = readFileSync(resolve(import.meta.dirname, "../../scripts/smoke-review.sh"), "utf8")
   const preflight = /bun -e '(\n  const data = await Bun\.file[\s\S]*?)\n' \|\| die 6 'posting barrier not installed; model was not started'/.exec(harness)?.[1]
   if (!preflight?.trim()) throw new Error("Writer preflight snippet not found")
-  const env = { ...process.env, SMOKE_AGENT_ID: "corvus-review-auto", SMOKE_WORK: directory, SMOKE_HOST: host, SMOKE_ROOT: resolve(import.meta.dirname, "../..") }
+  const env = { ...process.env, SMOKE_AGENT: "auto", SMOKE_AGENT_ID: "corvus-review-auto", SMOKE_WORK: directory, SMOKE_HOST: host, SMOKE_ROOT: resolve(import.meta.dirname, "../..") }
   for (const script of ["smoke-writer.sh", "smoke-review.sh"]) {
     const source = readFileSync(resolve(import.meta.dirname, "../../scripts", script), "utf8")
     const exposure = /# Exposure invariant:[\s\S]*?\n\s*bun -e '([\s\S]+?)\n\s*' \|\| die 6 'writer tool exposure failed; model was not started'/.exec(source)?.[1]

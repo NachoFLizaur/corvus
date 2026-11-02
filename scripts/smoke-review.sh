@@ -484,8 +484,9 @@ fi
 
 # Barrier invariant: inspect the host-resolved rule before sending the model any
 # PR content. Barrier mode: an absent/non-deny final writer rule aborts both hosts.
-# Orchestrator tools: require corvus_review_payload and corvus_review_post via v1
-# resolved tools or v2 permissions (local matcher; inventory is probed separately).
+# Orchestrator tools: light requires pr/lock/persist/payload/verdict/sync/worktree
+# and denies direct post; auto requires payload/post. Inspect v1 resolved tools or
+# v2 permissions (local matcher; inventory is probed separately).
 # Writer mode (v1): the final rule must allow, and the writer must expose pr/post.
 # Missing tools/permissions abort; the shim remains the mutation barrier. This grants
 # no permissions, and neither --keep nor a timeout disables it.
@@ -498,9 +499,12 @@ bun -e '
   const agent = v2 ? data.find(a => a.id === (process.env.SMOKE_AGENT_ID || "corvus-review-auto")) : data
   const rules = v2 ? agent?.permissions : agent?.permission
   const { evaluateRules } = await import(process.env.SMOKE_ROOT + "/src/evaluate-rules.ts")
-  const required = ["corvus_review_payload", "corvus_review_post"]
+  const required = process.env.SMOKE_AGENT === "light"
+    ? ["corvus_review_pr", "corvus_review_lock", "corvus_review_persist", "corvus_review_payload", "corvus_review_verdict", "corvus_review_sync", "corvus_review_worktree"]
+    : ["corvus_review_payload", "corvus_review_post"]
   const exposed = required.every(name => v2 ? evaluateRules(rules ?? [], name, "*") === "allow" : agent?.tools?.[name] === true)
-  if (!exposed) { console.error("Orchestrator requires corvus_review_payload and corvus_review_post"); process.exit(1) }
+  if (!exposed) { console.error("Orchestrator requires " + required.join(", ")); process.exit(1) }
+  if (process.env.SMOKE_AGENT === "light" && (v2 ? evaluateRules(rules ?? [], "corvus_review_post", "*") !== "deny" : agent?.tools?.corvus_review_post === true)) { console.error("Light direct post must remain denied"); process.exit(1) }
   const writer = rules?.findLast(r => v2 ? r.action === "subagent" && r.resource === "pr-comment-writer" : r.permission === "task" && r.pattern === "pr-comment-writer")
     ?? rules?.findLast(r => v2 ? r.action === "subagent" && r.resource === "*" : r.permission === "task" && r.pattern === "*")
     ?? rules?.findLast(r => v2 ? r.action === "*" : r.permission === "*")

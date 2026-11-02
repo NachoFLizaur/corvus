@@ -4,7 +4,7 @@ import { agentDir, root } from "../paths"
 import { toV2Agent } from "../to-v2-agent"
 import { renameAction, toV2Permissions } from "../to-v2-permissions"
 import { evaluateRules } from "../evaluate-rules"
-import { LIGHT_BASH_MAP, LIGHT_BASH_DENIES, LIGHT_TASK_MAP } from "./fixtures/review-light"
+import { LIGHT_BASH_MAP, LIGHT_BASH_DENIES, LIGHT_TASK_MAP, LIGHT_TOOLS } from "./fixtures/review-light"
 
 /**
  * Translator contract tests (task 06).
@@ -29,7 +29,7 @@ describe("toV2Agent over the real corpus", () => {
     const pattern = `${root.replaceAll("\\", "/")}/*`
     for (const [name, config] of Object.entries(corpus)) {
       const rules = toV2Agent({ name, config }).fields.permissions!
-      expect(rules.some(rule => rule.resource === pattern)).toBe(false)
+      expect(rules.some(rule => rule.resource === pattern)).toBe(name === "corvus-review-light")
       for (const resource of [`${root}/skill/corvus-review-extras/schemas.md`, `${root}/skill/corvus-review-extras/*`]) {
         expect(evaluateRules(rules, "external_directory", resource)).toBe("allow")
         expect(evaluateRules(rules, "read", resource)).toBe("allow")
@@ -111,11 +111,11 @@ describe("toV2Agent field mapping", () => {
 
 describe("toV2Permissions", () => {
   test("review tools inherit default allow; caller checks are not frontmatter rules", () => {
-    for (const config of Object.values(corpus)) {
+    for (const [name, config] of Object.entries(corpus)) {
       const rules = toV2Permissions(config.permission)
       for (const op of ["find", "local"]) expect(evaluateRules(rules, "corvus_review_pr", op)).toBe("allow")
       for (const op of ["resolve", "pull", "push"]) expect(evaluateRules(rules, "corvus_review_sync", op)).toBe("allow")
-      expect(rules.some(rule => rule.action.startsWith("corvus_review_"))).toBe(false)
+      expect(rules.some(rule => rule.action.startsWith("corvus_review_"))).toBe(name === "corvus-review-light")
     }
   })
 
@@ -152,9 +152,9 @@ describe("toV2Permissions", () => {
       const light = name === "corvus-review-light"
       const leaf = ["pr-context-gatherer", "pr-comment-writer", "pr-code-reviewer", "security-reviewer", "pr-light-reviewer"].includes(name)
       const autonomous = ["corvus-auto", "corvus-review-auto", "corvus-review-light"].includes(name)
-      expect(rules[0]).toEqual({ action: "*", resource: "*", effect: "allow" })
-      expect(rules).toHaveLength(1 + (orchestrator ? 11 : light ? Object.keys(LIGHT_BASH_MAP).length + 3 + Object.keys(LIGHT_TASK_MAP).length : 0) + (leaf ? 2 : 0) + (autonomous ? 1 : 0))
-      expect(rules.filter(rule => rule.effect === "deny")).toHaveLength((orchestrator ? 10 : light ? LIGHT_BASH_DENIES.length + 4 : 0) + (leaf ? 2 : 0) + (autonomous ? 1 : 0))
+      expect(rules[0]).toEqual({ action: "*", resource: "*", effect: light ? "deny" : "allow" })
+      expect(rules).toHaveLength(1 + (orchestrator ? 11 : light ? LIGHT_TOOLS.length + Object.keys(LIGHT_BASH_MAP).length + 4 + Object.keys(LIGHT_TASK_MAP).length : 0) + (leaf ? 2 : 0) + (autonomous ? 1 : 0))
+      expect(rules.filter(rule => rule.effect === "deny")).toHaveLength((orchestrator ? 10 : light ? LIGHT_BASH_DENIES.length + 5 : 0) + (leaf ? 2 : 0) + (autonomous ? 1 : 0))
       if (!orchestrator && !light) {
         expect(shell).toEqual([])
         continue

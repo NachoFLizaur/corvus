@@ -5,6 +5,19 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.11.0-beta.8 — 2026-11-02
+
+### Changed
+
+- Light detector shards fetch and filter their own prior-review evidence. Orchestrator dispatches contain only trusted controls, avoiding serialized per-shard feedback assembly; the parent keeps history for marker rounds and no-new-findings decisions. Runtime improvement remains unmeasured.
+- The light orchestrator defaults to denying tools, with explicit review-tool, skill/reference-read, shell and two-child permissions. Both hosts enforce the packaged ceiling despite user allows, preserving additional restrictions.
+
+### Fixed
+
+- Light shell calls require a realpath workdir equal to the cached session repository top-level; sibling worktrees, nested/fake repositories and other directories are denied. v2 enforces arguments through `tool.execute.before`, since permission evaluation lacks them.
+- Same-head no-new-findings skips and Fixed since last review statuses require the authenticated author's login and a valid Corvus marker, not another reviewer's copied marker text.
+- The light artifact checker accepts genuine review-body source IDs alongside thread IDs and parses trusted brief controls independently of untrusted feedback text. Detector-owned history and classifications remain auditable.
+
 ## 0.11.0-beta.7 — 2026-11-02
 
 ### Changed

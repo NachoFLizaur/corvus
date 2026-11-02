@@ -1,5 +1,5 @@
 import { evaluateRules } from "../evaluate-rules"
-import { buildFixedDenyPolicies, isFixedDenied } from "../fixed-denies"
+import { buildFixedDenyPolicies, createLightShellWorkdirGuard, isFixedDenied } from "../fixed-denies"
 import { loadAgents } from "../load-agents"
 import { agentDir } from "../paths"
 import { PROTECTED_AGENTS } from "../protected-agents"
@@ -28,8 +28,8 @@ import type { Registrar, Rule, SetupContext } from "./types"
  * consulting `ctx.agent` or trusting what `register-agents.ts` wrote.
  *
  * Read timing relative to mutations: the corpus is read before either hook is
- * registered, and both hook callbacks are pure over that snapshot — no I/O, no
- * captured mutable state — so config reloads cannot change what the boundary
+ * registered; permission/context callbacks are pure over that snapshot, so
+ * config reloads cannot change what the boundary
  * enforces. The host fires `permission.evaluate` AFTER completing its own rule
  * evaluation: at `core/src/permission.ts:170` a `deny` from the host's configured
  * rules returns early, so the hook is never reached for an already-denied request;
@@ -51,7 +51,7 @@ import type { Registrar, Rule, SetupContext } from "./types"
  * degrade into a hook that tightens nothing.
  *
  * What disables this control: only plugin teardown — the returned cleanup disposes
- * both hooks (plugin unload, or `server.ts` unwinding a failed `setup()`). There is
+ * all hooks (plugin unload, or `server.ts` unwinding a failed `setup()`). There is
  * no flag, environment switch, or config key that turns it off, and no code path
  * that skips it for a protected agent.
  *
@@ -138,6 +138,7 @@ export const enforceProtected: Registrar = async (ctx) => {
     PROTECTED_AGENTS.map((agent) => [agent, buildPolicy(agent, corpus[agent])]),
   )
   const fixedDenies = buildFixedDenyPolicies(corpus)
+  const allowedShellWorkdir = createLightShellWorkdirGuard(ctx.location.directory)
 
   const permission = await ctx.permission.hook("evaluate", (e) => {
     const agent = e.agent
@@ -183,7 +184,26 @@ export const enforceProtected: Registrar = async (ctx) => {
     c.system.push({ type: "text", text: policy.system })
   })
 
+  /** v2 permission.evaluate has command resources, not shell tool arguments.
+   * Tool.execute.before exposes input + host agent immediately before execution;
+   * use that seam, not shell.create.before (which has cwd but no identity).
+   * Read the packaged policy and cached session-root oracle before the shell can
+   * run. Recheck command and realpath workdir here; malformed input fails closed.
+   * Other identities are untouched; only teardown disables this extra guard. */
+  const tool = await ctx.tool.hook("execute.before", e => {
+    const fixed = fixedDenies.get(e.agent)
+    if (!fixed || !["shell", "bash"].includes(e.tool)) return
+    const args = e.input !== null && typeof e.input === "object" ? e.input as Record<string, unknown> : {}
+    if (typeof args.command !== "string" || isFixedDenied(fixed, "shell", [args.command]) || !allowedShellWorkdir(args.workdir))
+      throw new Error(`corvus: ${e.agent}; shell is denied by the plugin's fixed-deny boundary.`)
+  }).catch(async error => {
+    await release(context, "context")
+    await release(permission, "permission")
+    throw error
+  })
+
   return async () => {
+    await release(tool, "tool")
     await release(context, "context")
     await release(permission, "permission")
   }

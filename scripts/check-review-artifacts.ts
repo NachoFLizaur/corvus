@@ -1354,7 +1354,9 @@ export function checkPluginLoaded(input: Pick<Inputs, "host" | "hostlog" | "agen
         ["name", agent.name === agentName],
         ["native=false", agent.native === false],
         ["Corvus prompt", text(agent.prompt).startsWith(input.agent === "light" ? "# Corvus Review Light" : "# Corvus Review Auto")],
-        ["review tools", ["corvus_review_payload", "corvus_review_post", "corvus_review_persist", "corvus_review_lock", "corvus_review_pr", "corvus_review_verdict", "corvus_review_sync", ...(input.agent === "light" ? ["corvus_review_worktree"] : [])].every(name => tools[name] === true)
+        ["review tools", ["corvus_review_payload", "corvus_review_persist", "corvus_review_lock", "corvus_review_pr", "corvus_review_verdict", "corvus_review_sync",
+          ...(input.agent === "light" ? ["corvus_review_worktree"] : ["corvus_review_post"])].every(name => tools[name] === true)
+          && (input.agent !== "light" || tools.corvus_review_post !== true)
           && tools[["corvus", "review", "verify"].join("_")] !== true],
         [input.writer ? "writer allow" : "writer deny", input.writer ? writerRule(agent) === "allow" : writerDenyRule(agent)],
         ["sandbox install permission", rules.some(rule => rule.pattern === install || text(rule.pattern).startsWith(install + "/"))],
@@ -1538,10 +1540,27 @@ function lightFieldValues(value: string, key: string): string[] {
   })
 }
 
-/** Trusted JSON/YAML-flow path arrays are decoded before roster validation, never executed.
- * Missing, duplicate or non-string paths fail the roster; no size setting disables
- * disjointness or coverage. The complete intake listing is the coverage oracle. */
+/** Read only the labelled trusted JSON control block. Legacy stopped-host briefs
+ * use the prefix before an UNTRUSTED envelope; never scan feedback bodies for
+ * control keys. Missing/malformed labelled blocks yield no controls, failing the
+ * roster closed. This compatibility path grants no evidence-derived authority. */
+export function lightBriefControls(prompt: string): string {
+  const label = /^TRUSTED_LIGHT_CONTROLS\b/m.exec(prompt)
+  if (label) {
+    const source = prompt.slice(label.index + label[0].length).replace(/^\s*[:=]?\s*(?:```json\s*)?/, "")
+    const control = source.startsWith("{") ? lightObjects(source)[0] : undefined
+    return control && !Object.hasOwn(control, "prior_feedback") ? JSON.stringify(control) : ""
+  }
+  try {
+    const control = json(prompt)
+    return Object.hasOwn(control, "prior_feedback") ? "" : JSON.stringify(control)
+  } catch { return prompt.split(/\bUNTRUSTED\b|\{\s*"prior_feedback"\s*:/, 1)[0] }
+}
+
+/** Trusted path arrays are decoded before roster validation, never executed.
+ * Duplicate/invalid paths fail closed; the complete intake is the coverage oracle. */
 export function lightFocusPaths(prompt: string): string[] | null {
+  prompt = lightBriefControls(prompt)
   const arrays = [...prompt.matchAll(/\bfocus_paths"?\s*[:=]\s*(\[(?:[^\]"'\\]|"(?:\\.|[^"\\])*"|'(?:''|[^'])*')*\])/g)]
   if (arrays.length !== 1) return null
   try {
@@ -1557,10 +1576,12 @@ export function lightFocusPaths(prompt: string): string[] | null {
  * coverage fail toward the normal route, not a summary-selected skip. Auto never
  * calls this; no flag or summary text disables the evidence requirements. */
 export function lightNoNewFindings(history: RecordValue, head: string,
-  briefs: { prompt: string; texts: string[] }[]): boolean {
+  briefs: { prompt: string; texts: string[] }[], authenticatedLogin: string): boolean {
   if (history.complete_pagination !== true || history.complete_threads !== true || !briefs.length
-    || !Array.isArray(history.prior_threads) || !Array.isArray(history.reviews)) return false
-  const latest = history.reviews.map(record).filter(review => parseReviewMarker(review.body)
+    || !authenticatedLogin || !Array.isArray(history.prior_threads) || !Array.isArray(history.reviews)) return false
+  const genuine = (review: RecordValue) => text(review.user).toLowerCase() === authenticatedLogin.toLowerCase()
+    && !!parseReviewMarker(review.body)
+  const latest = history.reviews.map(record).filter(review => genuine(review)
     && /^## Corvus Light Review — /m.test(text(review.body))).sort((a, b) =>
       text(a.submitted_at).localeCompare(text(b.submitted_at)) || Number(a.id) - Number(b.id)).at(-1)
   if (!latest || parseReviewMarker(latest.body)?.head !== head) return false
@@ -1577,11 +1598,12 @@ export function lightNoNewFindings(history: RecordValue, head: string,
   const covered = new Set<string>(), statuses = new Map<string, string>()
   try {
     for (const brief of briefs) {
-      const feedback = lightObjects(brief.prompt).find(value => Array.isArray(value.prior_feedback))?.prior_feedback
       const blocks = brief.texts.flatMap(source => [...source.matchAll(/```ya?ml\s*\n([\s\S]*?)```/g)]
         .map(match => record(record(load(match[1])).LIGHT_REVIEW_REPORT)))
-      if (!Array.isArray(feedback) || blocks.length !== 1) return false
+      if (blocks.length !== 1) return false
       const report = blocks[0], counts = record(report.counts)
+      const feedback = report.prior_feedback, prior = record(report.prior_history)
+      if (!Array.isArray(feedback) || prior.complete_pagination !== true || prior.complete_threads !== true || prior.gap != null) return false
       const focus = lightFocusPaths(brief.prompt)
       const inventory = Array.isArray(report.inventory) ? report.inventory.map(record) : []
       const reviewed = Array.isArray(report.reviewed_scope) ? report.reviewed_scope.map(record) : []
@@ -1615,10 +1637,23 @@ export function lightNoNewFindings(history: RecordValue, head: string,
         const id = text(item.id)
         if (!id || statuses.has(id) && statuses.get(id) !== assessment.status) return false
         statuses.set(id, text(assessment.status)); covered.add(id)
-        if (Array.isArray(item.source_ids)) for (const source of item.source_ids) {
+        if (!Array.isArray(item.source_ids)) return false
+        for (const source of [item.id, ...item.source_ids]) {
           const root = required.find(root => `thread-${root.id}` === source)
-          if (!root || root.path !== item.path || ![root.line, root.original_line].some(line =>
-            typeof line === "number" && line >= Number(item.line_start) && line <= Number(item.line_end))) return false
+          if (root) {
+            if (root.path !== item.path || ![root.line, root.original_line].some(line =>
+              typeof line === "number" && line >= Number(item.line_start) && line <= Number(item.line_end))) return false
+            const urls = [item.url, ...(Array.isArray(item.source_urls) ? item.source_urls : [])]
+            if (!urls.includes(root.html_url)) return false
+          } else {
+            // Review-body findings use review IDs/ordinals, not comment IDs. Match
+            // the originating body finding and its review URL before counting an
+            // alias as covered; body sources have no thread-coordinate oracle.
+            if (!bodyIDs.includes(text(source))) return false
+            const review = history.reviews.map(record).find(review => text(source).startsWith(`review-${review.id}-`))
+            const urls = [item.url, ...(Array.isArray(item.source_urls) ? item.source_urls : [])]
+            if (!review || !urls.includes(review.html_url)) return false
+          }
           covered.add(text(source))
         }
       }
@@ -1702,14 +1737,14 @@ export async function checkLightAttempts(input: Inputs, events: RecordValue[], t
   const rosterError = (message: string) => { rosterErrors.push(message); errors.push(message) }
   const groups = new Map<number, Tool[]>()
   for (const dispatch of detectorCalls) {
-    const number = Number(/\battempt[\s"_:=-]+(\d+)\b/i.exec(text(dispatch.input.prompt))?.[1])
+    const number = Number(/\battempt[\s"_:=-]+(\d+)\b/i.exec(lightBriefControls(text(dispatch.input.prompt)))?.[1])
     if (!Number.isSafeInteger(number) || number < 1 || number > 3) { rosterError("invalid detector attempt control"); continue }
     groups.set(number, [...(groups.get(number) ?? []), dispatch])
   }
   const attempts: LightAttempt[] = []
   for (const [index, [number, dispatches]] of [...groups].entries()) {
     const firstDispatch = dispatches[0], dispatch = dispatches.at(-1)!
-    const axes = dispatches.map(tool => /\baxis[\s"_:=-]+(standards|spec_security)\b/i.exec(text(tool.input.prompt))?.[1])
+    const axes = dispatches.map(tool => /\baxis[\s"_:=-]+(standards|spec_security)\b/i.exec(lightBriefControls(text(tool.input.prompt)))?.[1])
     const between = controls.filter(tool => tool.index >= firstDispatch.index && tool.index <= dispatch.index)
     if (number !== index + 1 || new Set(axes).size !== 2 || axes.some(axis => !axis)
       || between.length !== dispatches.length || dispatches.some(tool => tool.input.background === true)
@@ -1729,7 +1764,7 @@ export async function checkLightAttempts(input: Inputs, events: RecordValue[], t
       const shards = dispatches.filter((_, i) => axes[i] === axis)
       const paths: string[] = [], ordinals: number[] = []
       for (const shard of shards) {
-        const prompt = text(shard.input.prompt), parts = /^([1-9]\d*)\/([1-9]\d*)$/.exec(lightFieldValues(prompt, "shard")[0] ?? "")
+        const prompt = lightBriefControls(text(shard.input.prompt)), parts = /^([1-9]\d*)\/([1-9]\d*)$/.exec(lightFieldValues(prompt, "shard")[0] ?? "")
         const focus = lightFocusPaths(prompt)
         if (lightFieldValues(prompt, "shard").length !== 1 || !parts || Number(parts[2]) !== shards.length
           || Number(parts[1]) > shards.length || !focus || inventory?.length && !focus.length) rosterError(`attempt ${number}: invalid ${axis} shard/focus_paths`)
@@ -1746,14 +1781,14 @@ export async function checkLightAttempts(input: Inputs, events: RecordValue[], t
     }
     for (const dispatch of dispatches) {
       const child = detectorChildren.find(child => child.id === childResult(dispatch).sessionID && child.parentID === parentID)
-      const prompt = text(dispatch.input.prompt)
+      const prompt = lightBriefControls(text(dispatch.input.prompt))
       if (/\bmax_targeted_reads\b/.test(prompt) || lightFieldPresent(prompt, "read_budget")) rosterError(`attempt ${number}: retired read ceiling in detector control`)
       if (!underLock(dispatch) || !["completed", "error", "cancelled"].includes(childResult(dispatch).status) || !child || !oid(head) || !oid(base)
         || !prompt.includes(head) || !prompt.includes(base)) rosterError(`attempt ${number}: dispatch/child/head/base accounting invalid`)
       const failed = ["error", "cancelled"].includes(childResult(dispatch).status)
       if (failed && !(lightFocusPaths(prompt) ?? []).every(path => summary.split(/\r?\n/).some(line => line.includes(path) && /shard|uncovered/i.test(line)))) rosterError(`attempt ${number}: failed shard lacks uncovered-path disclosure`)
-      if (!failed && !local && child && !["metadata", "files", "diff"].every(op => child.tools.some(tool => prCall(tool, op) && ok(tool)
-        && (op !== "metadata" || tool.output.code_head === head && tool.output.baseRefOid === base)))) rosterError(`attempt ${number}: detector lacks fresh metadata/files/diff`)
+      if (!failed && !local && child && !["metadata", "files", "diff", "reviews"].every(op => child.tools.some(tool => prCall(tool, op) && ok(tool)
+        && (op !== "metadata" || tool.output.code_head === head && tool.output.baseRefOid === base)))) rosterError(`attempt ${number}: detector lacks fresh metadata/files/diff/reviews`)
     }
     const previous = attempts[index - 1]
     const start = previous?.dispatch.index ?? -1
@@ -1838,7 +1873,7 @@ export async function checkLightAttempts(input: Inputs, events: RecordValue[], t
       if (!remove || !released || remove.index <= (attempt?.dispatch.index ?? create.index) || remove.index >= released.index || next && remove.index >= next.index) treeErrors.push("owned worktree not removed after dispatch and before release/re-creation")
       if (remove && (remove.output.path !== path && ok(remove) || ok(remove) && !["removed", "absent"].includes(text(remove.output.state)))) treeErrors.push("remove contradicts owned path/absence outcome")
       if (!worktreeLedgerMatches(attempt, path, remove && ok(remove) ? text(remove.output.state) : "failed")) treeErrors.push("worktree path/cleanup ledger mismatch")
-      for (const dispatch of attempt?.dispatches ?? []) if (!isDeepStrictEqual(lightFieldValues(text(dispatch.input.prompt), "head_worktree"), [path])) treeErrors.push("detector lacks verified worktree control")
+      for (const dispatch of attempt?.dispatches ?? []) if (!isDeepStrictEqual(lightFieldValues(lightBriefControls(text(dispatch.input.prompt)), "head_worktree"), [path])) treeErrors.push("detector lacks verified worktree control")
       if (remove && !ok(remove)) {
         const disclosed = summary.split(/\r?\n/).some(line => /worktree remove/i.test(line) && line.includes(path) && /git worktree remove --force /.test(line))
         treeRows.push(bookkeepingRow("light worktree cleanup", { op: "worktree remove", summary, consistent: false,
@@ -1850,12 +1885,12 @@ export async function checkLightAttempts(input: Inputs, events: RecordValue[], t
       treeRows.push(bookkeepingRow("light worktree create", { op: "worktree create", summary, consistent: false,
         diagnostic: diagnostic(create), detail: "object-read fallback" }))
       if (!worktreeLedgerMatches(attempt, "none", "not-created")) treeErrors.push("uncreated worktree ledger mismatch")
-      if (attempt?.dispatches.some(tool => lightFieldPresent(text(tool.input.prompt), "head_worktree"))) treeErrors.push("failed create supplied head_worktree")
+      if (attempt?.dispatches.some(tool => lightFieldPresent(lightBriefControls(text(tool.input.prompt)), "head_worktree"))) treeErrors.push("failed create supplied head_worktree")
       if (record(create.output.cleanup).ok === false && (!summary.includes(path) || !/manual|inspect/i.test(summary))) treeErrors.push("failed-create rollback path/manual inspection undisclosed")
     }
   }
   if (local && attempts.some(attempt => !worktreeLedgerMatches(attempt, "none", "not-created")
-    || attempt.dispatches.some(tool => lightFieldPresent(text(tool.input.prompt), "head_worktree")))) treeErrors.push("LOCAL supplied worktree control or mismatched uncreated ledger")
+    || attempt.dispatches.some(tool => lightFieldPresent(lightBriefControls(text(tool.input.prompt)), "head_worktree")))) treeErrors.push("LOCAL supplied worktree control or mismatched uncreated ledger")
   if (!local && attempts.some(attempt => !creates.some(tool => tool.index > attempt.metadata.index && tool.index < attempt.firstDispatch.index))) treeErrors.push("PR attempt lacks worktree create outcome")
   if (removals.some(remove => !creates.some(create => ok(create) && create.index < remove.index && sameTuple(create, remove)))) treeErrors.push("remove without successful owned create")
   if (creates.some((create, index) => removals.filter(remove => remove.index > create.index && remove.index < (creates[index + 1]?.index ?? Infinity) && sameTuple(create, remove)).length > 1)) treeErrors.push("duplicate worktree removal")
@@ -1962,10 +1997,11 @@ export async function checkLightAttempts(input: Inputs, events: RecordValue[], t
   const lastAttempt = attempts.at(-1)
   const priorHistory = lastAttempt && tools.findLast(tool => prCall(tool, "reviews") && correlated(tool) && ok(tool)
     && tool.index < lastAttempt.firstDispatch.index)
+  const authenticatedIdentity = tools.findLast(tool => tool.name === "corvus_review_pr" && tool.input.op === "identity" && correlated(tool) && ok(tool))
   const noNew = !local && !writerCalls.length && !presentationCalls.length && !!lastAttempt && !!priorHistory
     && lightNoNewFindings(priorHistory.output, lastAttempt.head, lastAttempt.dispatches.map(dispatch => ({
       prompt: text(dispatch.input.prompt), texts: detectorChildren.find(child => child.id === childResult(dispatch).sessionID)?.texts ?? [],
-    })))
+    })), text(authenticatedIdentity?.output.login))
   const inertPreexisting = (path: string) => {
     if (!noNew || !/pre.existing[^\n]*inert/i.test(summary) || realpathSync(path) !== path) return false
     const value = json(read(path)), measured = measure(value)

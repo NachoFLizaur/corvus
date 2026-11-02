@@ -4,7 +4,16 @@ description: "Autonomous light PR review orchestrator. Bounded fresh detector at
 mode: primary
 temperature: 0.2
 permission:
-  "*": "allow"
+  "*": "deny"
+  skill: "allow"
+  read: "allow"
+  corvus_review_pr: "allow"
+  corvus_review_lock: "allow"
+  corvus_review_persist: "allow"
+  corvus_review_payload: "allow"
+  corvus_review_verdict: "allow"
+  corvus_review_sync: "allow"
+  corvus_review_worktree: "allow"
   question: "deny"
   edit: "deny"
   write: "deny"

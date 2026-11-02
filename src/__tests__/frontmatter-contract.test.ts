@@ -13,7 +13,7 @@ import { toV2Permissions } from "../to-v2-permissions"
 import { registerCommands } from "../v2/register-commands"
 import type { SetupContext } from "../v2/types"
 import { createFakeContext, type CommandInvocation } from "./fake-context"
-import { LIGHT_BASH_DENIES, LIGHT_BASH_MAP, LIGHT_BASH_ALLOWS, LIGHT_CHILDREN } from "./fixtures/review-light"
+import { LIGHT_BASH_DENIES, LIGHT_BASH_MAP, LIGHT_BASH_ALLOWS, LIGHT_CHILDREN, LIGHT_TOOLS } from "./fixtures/review-light"
 
 /**
  * CORPUS CONTRACT GUARD — the packaged `agent/*.md`, `command/*.md`, and
@@ -98,6 +98,7 @@ const KNOWN_PERMISSION_ACTIONS: readonly string[] = [
   "bash",
   "task",
   "question",
+  ...LIGHT_TOOLS,
 ]
 
 /**
@@ -159,11 +160,12 @@ const invoke = async (definition: { execute: (input: CommandInvocation) => Promi
  * ------------------------------------------------------------------ */
 
 describe("agent corpus frontmatter", () => {
-  test("every agent defaults to allow and authors exactly its deny exceptions", () => {
+  test("light defaults to deny; every agent authors exactly its capability policy", () => {
     for (const file of markdownFiles(agentDir)) {
       const permission = frontmatterOf(resolve(agentDir, file)).permission as Record<string, unknown>
       const name = file.replace(/\.md$/, "")
       const expected = [
+        ...(name === "corvus-review-light" ? ["*"] : []),
         ...(LEAF_REVIEWERS.includes(name) ? ["edit", "write"] : []),
         ...(name === "corvus-review-light" ? ["edit", "write", "patch"] : []),
         ...(["corvus-auto", "corvus-review-auto", "corvus-review-light"].includes(name) ? ["question"] : []),
@@ -171,13 +173,14 @@ describe("agent corpus frontmatter", () => {
         ...(name === "corvus-review-light" ? LIGHT_BASH_DENIES.map(pattern => `bash:${pattern}`) : []),
         ...(name === "corvus-review-light" ? ["task:*"] : []),
       ]
-      expect(permission["*"], file).toBe("allow")
+      expect(permission["*"], file).toBe(name === "corvus-review-light" ? "deny" : "allow")
       expect(Object.keys(permission)[0], file).toBe("*")
       const entries = Object.entries(permission).flatMap(([action, effect]): [string, unknown][] =>
         isRecord(effect) ? Object.entries(effect).map(([pattern, value]) => [`${action}:${pattern}`, value]) : [[action, effect]])
       expect(entries.filter(([, effect]) => effect === "deny").map(([key]) => key).sort(), file).toEqual(expected.sort())
       const expectedAllows: [string, unknown][] = [
-        ["*", "allow"], ...(["corvus", "corvus-auto"].includes(name) ? [["bash:*", "allow"] as [string, string]] : []),
+        ...(name === "corvus-review-light" ? LIGHT_TOOLS.map((tool): [string, string] => [tool, "allow"]) : [["*", "allow"] as [string, string]]),
+        ...(["corvus", "corvus-auto"].includes(name) ? [["bash:*", "allow"] as [string, string]] : []),
         ...(name === "corvus-review-light" ? [...LIGHT_BASH_ALLOWS.map((pattern): [string, string] => [`bash:${pattern}`, "allow"]),
           ...LIGHT_CHILDREN.map((name): [string, string] => [`task:${name}`, "allow"])] : []),
       ]
@@ -187,7 +190,7 @@ describe("agent corpus frontmatter", () => {
         ...(name === "corvus-review-light" ? ["edit", "write", "patch"] : []),
         ...(["corvus-auto", "corvus-review-auto", "corvus-review-light"].includes(name) ? ["question"] : []),
         ...(["corvus", "corvus-auto", "corvus-review-light"].includes(name) ? ["bash"] : []),
-        ...(name === "corvus-review-light" ? ["task"] : []),
+        ...(name === "corvus-review-light" ? ["task", ...LIGHT_TOOLS] : []),
       ].sort())
     }
   })

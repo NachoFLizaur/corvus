@@ -1,3 +1,6 @@
+import { execFileSync } from "node:child_process"
+import { realpathSync } from "node:fs"
+import { resolve } from "node:path"
 import { evaluateRules } from "./evaluate-rules"
 import { loadAgents } from "./load-agents"
 import { agentDir } from "./paths"
@@ -6,7 +9,7 @@ import type { Rule } from "./v2/types"
 
 type PlainObject = Record<string, unknown>
 type Corpus = ReturnType<typeof loadAgents>
-type FixedPermission = Readonly<Record<string, "deny" | Readonly<Record<string, "allow" | "deny">>>>
+type FixedPermission = Readonly<Record<string, "allow" | "deny" | Readonly<Record<string, "allow" | "deny">>>>
 
 /** Identities with a fixed capability policy, not whole-object protection. */
 export const FIXED_DENY_AGENTS = ["corvus-review-light"] as const
@@ -29,17 +32,17 @@ function isPlainObject(value: unknown): value is PlainObject {
  * Both hosts read it through loadAgents before mutation (v1 config merge result;
  * v2 hook registration). Only identity membership is maintained here; every deny
  * pattern is derived from the authored block, so host enforcement cannot drift.
- * Missing/invalid question/edit/write/patch denies or closed bash/task maps aborts
+ * Missing/invalid default-deny, question/edit/write/patch or closed bash/task maps aborts
  * loading, fail-closed; write/patch translate to edit on v2.
- * v1 replaces bash/task with authored maps plus additional user denies/asks, discarding
- * user allows for these two actions. v2 requires an authored allow for every
- * shell/subagent resource and never relaxes a host deny/ask. Metacharacter denies
+ * v1 rebuilds every action from authored policy plus user denies/asks, discarding
+ * user allows. v2 requires an authored allow for every action/resource and never
+ * relaxes a host deny/ask. Metacharacter denies
  * follow allows on v1 and are checked independently on v2. Both hosts may scan
  * compounds into several resources: each component must satisfy this boundary;
  * it cannot reject separators already removed by the host scanner. The v1
  * pre-execution hook also checks literal expansions, which wildcard maps cannot
  * express (notably literal * and ?); v2 checks the same command predicate here.
- * User model choice and unrelated permissions are not policy inputs or outputs.
+ * User model choice is preserved; unknown tools remain denied.
  * There is no config bypass: removal of the plugin disables the v1 boundary on
  * subsequent config loads and v2 teardown disposes the enforcing hook.
  */
@@ -48,16 +51,17 @@ export function buildFixedDenyPolicies(corpus: Corpus = loadAgents(agentDir)): R
     const authored = corpus[agent]?.permission
     // Validate the complete block before extracting denies, including its allows.
     toV2Permissions(authored)
-    if (!isPlainObject(authored) || ["question", "edit", "write", "patch"].some(action => authored[action] !== "deny")
+    if (!isPlainObject(authored) || authored["*"] !== "deny" || Object.keys(authored)[0] !== "*"
+      || ["question", "edit", "write", "patch"].some(action => authored[action] !== "deny")
       || ["bash", "task"].some(action => !isPlainObject(authored[action]) || authored[action]["*"] !== "deny"
         || !Object.values(authored[action]).includes("allow") || Object.values(authored[action]).includes("ask")))
-      throw new Error(`corvus: refusing to load without the fixed-deny boundary for "${agent}" — missing question/edit/write/patch or closed bash/task policy`)
+      throw new Error(`corvus: refusing to load without the fixed-deny boundary for "${agent}" — missing default-deny, question/edit/write/patch or closed bash/task policy`)
 
-    const permission: Record<string, "deny" | Readonly<Record<string, "allow" | "deny">>> = {}
+    const permission: Record<string, "allow" | "deny" | Readonly<Record<string, "allow" | "deny">>> = {}
     for (const [action, value] of Object.entries(authored)) {
-      if (value === "deny") permission[action] = "deny"
+      if (value === "deny" || value === "allow") permission[action] = value
       else if (isPlainObject(value)) {
-        const fixed = Object.fromEntries(Object.entries(value).filter(([, effect]) => effect === "deny" || ["bash", "task"].includes(action))) as Record<string, "allow" | "deny">
+        const fixed = Object.fromEntries(Object.entries(value)) as Record<string, "allow" | "deny">
         if (Object.keys(fixed).length > 0) permission[action] = Object.freeze(fixed)
       }
     }
@@ -68,7 +72,7 @@ export function buildFixedDenyPolicies(corpus: Corpus = loadAgents(agentDir)): R
   }))
 }
 
-/** Closed actions need an authored allow; other actions retain deny-only behavior. */
+/** Every action needs an authored allow; closed maps also reject explicit denies. */
 export function isFixedDenied(policy: FixedDenyPolicy, action: string, resources: readonly string[]): boolean {
   const normalized = renameAction(action)
   if (["shell", "subagent"].includes(normalized)) {
@@ -82,7 +86,32 @@ export function isFixedDenied(policy: FixedDenyPolicy, action: string, resources
   }
   // Action-wide denies also hold for requests with no resources.
   return (resources.length === 0 ? ["*"] : resources)
-    .some((resource) => evaluateRules(policy.rules, normalized, resource) === "deny")
+    .some((resource) => evaluateRules(policy.rules, normalized, resource) !== "allow")
+}
+
+/** Workdir oracle: realpath of git's top-level from the trusted session directory,
+ * computed once on the first light shell request (including failure), before
+ * execution. Each request re-realpaths its workdir, relative to that session;
+ * omission means the session directory, not process.cwd(). Missing/invalid paths
+ * or repository discovery deny closed. Nested/fake repositories and sibling trees
+ * never supply the oracle. No config disables this guard; plugin unload does.
+ * The realpath check does not eliminate external concurrent directory replacement. */
+export function createLightShellWorkdirGuard(sessionDirectory: unknown): (workdir: unknown) => boolean {
+  let initialized = false, root: string | undefined
+  return workdir => {
+    if (!initialized) {
+      initialized = true
+      try {
+        if (typeof sessionDirectory !== "string" || !sessionDirectory) return false
+        root = realpathSync(execFileSync("git", ["rev-parse", "--show-toplevel"], {
+          cwd: sessionDirectory, encoding: "utf8", timeout: 10_000, stdio: ["ignore", "pipe", "ignore"],
+        }).trim())
+      } catch { return false }
+    }
+    if (!root || typeof sessionDirectory !== "string" || workdir !== undefined && (typeof workdir !== "string" || !workdir)) return false
+    try { return realpathSync(workdir === undefined ? sessionDirectory : resolve(sessionDirectory, workdir as string)) === root }
+    catch { return false }
+  }
 }
 
 /** Literal command-text oracle, checked before either host executes a light shell
@@ -98,11 +127,10 @@ export function hasLightShellExpansion(command: string): boolean {
 }
 
 /**
- * Re-append denies at the END of both action and resource maps. Reassigning an
- * existing key leaves its old position intact, letting later user allows win;
- * remove it first. Scalar permissions retain their wildcard effect when expanded
- * into a map, so a user bash/task deny closes the whole action. For closed actions
- * the authored map is rebuilt first, then only extra user denies are appended.
+ * Rebuild the default-deny action map from packaged exceptions; discard user
+ * allows, retain user denies/asks on authorized capabilities. Resource denials
+ * are appended LAST (delete first to move an existing key), so user wildcard
+ * denials close the whole action without disturbing the authored exceptions.
  * Read raw overrides before the general merge: otherwise the authored wildcard
  * deny is indistinguishable from a user wildcard denial. On config-hook replay,
  * a map carrying every authored key already has that fallback; it is not an extra
@@ -119,32 +147,43 @@ export function enforceFixedDenies(corpus: Corpus, merged: PlainObject, override
   for (const [name, policy] of buildFixedDenyPolicies(corpus)) {
     const existing = result[name]
     const agent = isPlainObject(existing) ? existing : corpus[name]
-    const permission: PlainObject = isPlainObject(agent.permission) ? { ...agent.permission }
-      : typeof agent.permission === "string" ? { "*": agent.permission } : { ...corpus[name].permission }
+    const permission: PlainObject = { "*": "deny" }
+    const override = isPlainObject(overrides[name]) ? overrides[name].permission : undefined
+    const replay = isPlainObject(override) && Object.keys(policy.permission).every(key => key in override)
+      && Object.keys(override)[0] === "*" && override["*"] === "deny"
+    const global = isPlainObject(override) ? replay ? undefined : override["*"] : override
     for (const [action, denied] of Object.entries(policy.permission)) {
-      const current = permission[action]
-      delete permission[action]
+      if (action === "*") continue
+      const user = isPlainObject(override) ? override[action] : override
+      const globallyClosed = global === "deny"
+      const globallyAsked = global === "ask"
       if (denied === "deny") permission[action] = denied
+      else if (denied === "allow") {
+        const entries = isPlainObject(user) ? Object.entries(user) : []
+        const asked = globallyAsked || user === "ask" || entries.some(([, effect]) => effect === "ask")
+        const resources: PlainObject = { "*": globallyClosed || user === "deny" ? "deny" : asked ? "ask" : "allow" }
+        if (!globallyClosed && user !== "deny") for (const [pattern, effect] of entries) if (effect === "deny") resources[pattern] = "deny"
+        permission[action] = entries.length ? resources : resources["*"]
+      }
       else {
-        const closed = ["bash", "task"].includes(action)
-        const resources: PlainObject = closed ? { ...denied } : isPlainObject(current) ? { ...current }
-          : typeof current === "string" ? { "*": current } : {}
-        const override = isPlainObject(overrides[name]) ? overrides[name].permission : undefined
-        const user = isPlainObject(override) ? override[action] : override
+        const resources: PlainObject = { ...denied }
         const userEntries = isPlainObject(user) ? Object.entries(user) : user === "deny" || user === "ask" ? [["*", user]] : []
-        if (closed && userEntries.some(([, effect]) => effect === "ask"))
+        if (globallyAsked || userEntries.some(([, effect]) => effect === "ask"))
           for (const pattern of Object.keys(resources)) if (resources[pattern] === "allow") resources[pattern] = "ask"
         const hasFallback = isPlainObject(user) && Object.keys(denied).every(key => key in user)
           && Object.keys(user)[0] === "*" && user["*"] === "deny"
-        const entries = closed ? userEntries.filter(([pattern, effect]) => effect === "deny"
-          && !(pattern === "*" && hasFallback) && !(pattern !== "*" && denied[pattern] === "deny")) : Object.entries(denied)
+        const entries = userEntries.filter(([pattern, effect]) => effect === "deny"
+          && !(pattern === "*" && hasFallback) && !(pattern !== "*" && denied[pattern] === "deny"))
         for (const [pattern, effect] of entries) {
           delete resources[pattern]
           resources[pattern] = effect
         }
+        if (globallyClosed) { delete resources["*"]; resources["*"] = "deny" }
         permission[action] = resources
       }
     }
+    if (isPlainObject(override)) for (const [action, effect] of Object.entries(override))
+      if (!(action in permission) && effect === "deny") permission[action] = "deny"
     result = { ...result, [name]: { ...agent, permission } }
   }
   return result
