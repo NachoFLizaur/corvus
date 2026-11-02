@@ -57,7 +57,7 @@ describe("plugin entry point", () => {
       ["corvus_review_pr", ["metadata", "head", "files", "diff", "reviews", "checks", "identity", "config", "repo", "find", "local"], ["op"]],
       ["corvus_review_verdict", ["compute"], ["op", "reviewRoot", "priorReviews", "config"]],
       ["corvus_review_sync", ["resolve", "pull", "push"], ["op"]],
-      ["corvus_review_worktree", ["create", "remove"], ["op", "pr", "code_head", "runId"]],
+      ["corvus_review_worktree", ["locate", "create", "remove"], ["op", "owner", "name", "pr"]],
     ] as const) {
       const tool = result.tool![name]
       expect(z.toJSONSchema(z.object(tool.args))).toMatchObject({ properties: { op: { enum: ops } }, required })

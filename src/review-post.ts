@@ -5,6 +5,7 @@ import { isAbsolute, resolve, sep } from "node:path"
 import { verify, type CandidateRequest, type ReviewPayloadFs } from "./review-payload"
 import { isReviewCallerAllowed } from "./review-callers"
 import { hostRelativePath, isLightClassPath, LIGHT_REVIEW_DIRECTORY, reviewNamespaceOf } from "./review-storage-class"
+import { lightReviewDirectory } from "./review-worktree"
 
 export type PostInput = {
   artifactPath: string
@@ -306,8 +307,11 @@ export async function post(input: PostInput, opts: PostOptions): Promise<Transpo
 
 /**
  * Capture the host-supplied absolute review-state root and optional session
- * directory, never tool arguments. Relative paths use that directory when supplied;
- * otherwise they retain verify's path semantics. Absolute paths are unchanged.
+ * directory, never tool arguments. Relative/full paths retain that context. For
+ * the standard <session>/.corvus root only, the shared locate-receipt helper may
+ * select a canonical located repo's .corvus for an absolute light artifact before
+ * post verifies it. Unlocated paths retain session containment and reject before
+ * any API call; custom library roots keep their existing verification semantics.
  * Both hosts receive JSON transport results; invalid context rejects before I/O.
  * No input overrides the root or directory.
  *
@@ -320,8 +324,12 @@ export function createPostExecutor(reviewStateRoot: string, directory?: string):
   const root = typeof reviewStateRoot === "string" && isAbsolute(reviewStateRoot) ? reviewStateRoot : undefined
   return async (input, caller) => {
     if (!isReviewCallerAllowed("corvus_review_post", caller)) return JSON.stringify(rejected("caller-not-allowed"))
-    return JSON.stringify(root
-      ? await post(input as PostInput, { reviewStateRoot: root, directory })
-      : rejected("invalid-review-state-root"))
+    if (!root) return JSON.stringify(rejected("invalid-review-state-root"))
+    const invalid = invalidInput(input)
+    if (invalid) return JSON.stringify(rejected(`invalid-input:${invalid}`))
+    const cwd = directory && root === resolve(directory, ".corvus")
+      ? lightReviewDirectory(directory, input, caller) : directory
+    const selectedRoot = cwd && cwd !== directory ? resolve(cwd, ".corvus") : root
+    return JSON.stringify(await post(input as PostInput, { reviewStateRoot: selectedRoot, directory: cwd }))
   }
 }

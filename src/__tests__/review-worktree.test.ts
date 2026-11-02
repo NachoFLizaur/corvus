@@ -7,12 +7,30 @@ import { basename, dirname, join } from "node:path"
 import plugin from "../index"
 import { evaluateRules } from "../evaluate-rules"
 import { toV2Permissions } from "../to-v2-permissions"
-import { createWorktreeExecutor, type WorktreeExec, type WorktreeInput } from "../review-worktree"
+import { createWorktreeExecutor as actualExecutor, type WorktreeExec, type WorktreeInput, type WorktreeOptions } from "../review-worktree"
 import { registerAgents } from "../v2/register-agents"
 import { registerTools } from "../v2/register-tools"
 import { createFakeContext } from "./fake-context"
 
 const light = "corvus-review-light"
+const realExec: WorktreeExec = async (argv, options) => {
+  const result = spawnSync(argv[0], argv.slice(1), { cwd: options.cwd, env: options.env, input: options.input })
+  return { code: result.status ?? 1, stdout: result.stdout, stderr: result.stderr.toString() }
+}
+// Existing lifecycle cases stub ONLY the network fetch, retaining real Git for
+// discovery, object/registration checks, population and preservation snapshots.
+function createWorktreeExecutor(options: WorktreeOptions = {}) {
+  const exec: WorktreeExec = async (argv, opts) => argv.includes("fetch")
+    ? { code: 0, stdout: Buffer.alloc(0), stderr: "" } : (options.exec ?? realExec)(argv, opts)
+  const tool = actualExecutor({ ...options, exec })
+  return async (input: unknown, caller?: string) => {
+    if (caller === light && input && typeof input === "object" && Object.getOwnPropertyDescriptor(input, "repo_root")?.value) {
+      const args = input as WorktreeInput
+      await tool({ op: "locate", owner: args.owner, name: args.name, pr: args.pr }, caller)
+    }
+    return tool(input, caller)
+  }
+}
 function git(cwd: string, ...args: string[]): Buffer {
   const result = spawnSync("git", ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "-c", "filter.tripwire.required=false", "-c", "filter.tripwire.process=", "-c", "filter.tripwire.clean=", "-c", "filter.tripwire.smudge=", ...args], { cwd, env: { ...process.env, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null" } })
   if (result.status !== 0) throw new Error(`Fixture git ${args.join(" ")}: ${result.stderr}`)
@@ -23,6 +41,7 @@ function fixture() {
   const repo = join(parent, "project"), alias = join(parent, "alias")
   mkdirSync(repo)
   git(repo, "init", "-b", "main")
+  git(repo, "remote", "add", "origin", "https://github.com/example/project.git")
   git(repo, "config", "user.name", "Test")
   git(repo, "config", "user.email", "test@example.invalid")
   mkdirSync(join(repo, "src"))
@@ -65,7 +84,7 @@ function fixture() {
   writeFileSync(join(repo, "src/example.ts"), "unstaged user work\n")
   writeFileSync(join(repo, "untracked"), "untracked user work\n")
   symlinkSync(repo, alias)
-  const input: WorktreeInput = { op: "create", pr: 42, code_head: head, runId: "run identity / full UTF-8 ✓" }
+  const input: WorktreeInput = { op: "create", repo_root: repo, owner: "example", name: "project", pr: 42, code_head: head, runId: "run identity / full UTF-8 ✓" }
   const path = join(parent, `project.corvus-review-pr42-${head.slice(0, 7)}-${createHash("sha256").update(input.runId).digest("hex").slice(0, 6)}`)
   const snapshot = () => ({
     branch: git(repo, "symbolic-ref", "HEAD").toString(), head: git(repo, "rev-parse", "HEAD").toString(),
@@ -87,12 +106,12 @@ const run = async (exec: ReturnType<typeof createWorktreeExecutor>, input: unkno
  * tests never execute PR fixture code: hook/filter/monitor sentinels must remain
  * absent. Any main-checkout or unrelated-worktree drift fails, with no bypass. */
 describe("tool-owned review worktree", () => {
-  test.each(["default", "relative", "absolute", "symlink"] as const)("raw population/removal with %s root spelling preserves user bytes", async spelling => {
+  test.each(["default", "nested-session", "absolute", "symlink"] as const)("raw population/removal with %s root spelling preserves user bytes", async spelling => {
     const f = fixture()
     try {
       const before = f.snapshot()
-      const exec = createWorktreeExecutor({ cwd: spelling === "relative" ? f.parent : f.repo })
-      const input = { ...f.input, ...(spelling === "default" ? {} : { cwd: spelling === "relative" ? "project" : spelling === "symlink" ? f.alias : f.repo }) }
+      const exec = createWorktreeExecutor({ cwd: spelling === "nested-session" ? join(f.repo, "src") : f.repo })
+      const input = { ...f.input, repo_root: spelling === "symlink" ? f.alias : f.repo }
       const created = await run(exec, input)
       expect(created).toEqual({ ok: true, path: f.path, head: f.head, populated_files: 7,
         skipped: [{ path: "submodule", reason: "submodule" }], symlinks_as_files: ["directory-link", "escape-link"],
@@ -193,8 +212,8 @@ describe("tool-owned review worktree", () => {
 
   test("closed inputs and caller admission reject before an injected exec/accessor can run", async () => {
     let calls = 0, reads = 0
-    const tool = createWorktreeExecutor({ exec: async () => { calls++; throw new Error("unexpected") } })
-    const input = { op: "create", pr: 1, code_head: "a".repeat(40), runId: "run" }
+    const tool = actualExecutor({ exec: async () => { calls++; throw new Error("unexpected") } })
+    const input = { op: "create", owner: "example", name: "project", repo_root: "/missing", pr: 1, code_head: "a".repeat(40), runId: "run" }
     for (const caller of ["corvus-review", "corvus-review-auto", "pr-light-reviewer", "pr-comment-writer", "pr-context-gatherer", "unknown", undefined])
       expect(JSON.parse(await tool({ get op() { reads++; return "create" } }, caller))).toEqual({ ok: false, reason: "caller-not-allowed" })
     for (const invalid of [null, [], { ...input, pr: 0 }, { ...input, pr: 1.5 }, { ...input, pr: Number.MAX_SAFE_INTEGER + 1 },
@@ -250,7 +269,7 @@ describe("tool-owned review worktree", () => {
 
   test("a host executor that never resolves is bounded by the operation deadline", async () => {
     const tool = createWorktreeExecutor({ timeoutMs: 10, exec: async () => new Promise(() => {}) })
-    expect(await run(tool, { op: "create", pr: 1, code_head: "a".repeat(40), runId: "run" })).toMatchObject({ ok: false, reason: "timeout" })
+    expect(await run(tool, { op: "locate", owner: "example", name: "project", pr: 1 })).toMatchObject({ ok: false, reason: "timeout" })
   })
 
   test.each(["../outside", "/absolute", ".git/config", "nested/.GIT/config", "nested/.gi\u200ct/config", "a\\b", "a:b", "a\nline"])("unsafe tree path %j refuses before worktree creation", async path => {
@@ -300,7 +319,9 @@ describe("worktree both-host boundary", () => {
       }
       for (const caller of ["corvus-review", "corvus-review-auto", "pr-light-reviewer", "pr-comment-writer", "unknown", undefined])
         expect(JSON.parse(await call(f.input, caller))).toEqual({ ok: false, reason: "caller-not-allowed" })
-      const created = JSON.parse(await call(f.input, light))
+      const located = JSON.parse(await call({ op: "locate", owner: "example", name: "project", pr: 42 }, light))
+      expect(located).toMatchObject({ ok: true, repo_root: f.repo, remote: "origin" })
+      const created = await run(createWorktreeExecutor({ cwd: f.repo }), f.input)
       expect(created.ok).toBe(true)
       for (const action of ["external_directory", "read", "glob", "grep"])
         expect(evaluateRules(permissions, action, `${f.path}/src/example.ts`)).toBe("allow")

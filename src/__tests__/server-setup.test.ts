@@ -203,7 +203,7 @@ describe("plugin.setup", () => {
       ["corvus_review_pr", ["metadata", "head", "files", "diff", "reviews", "checks", "identity", "config", "repo", "find", "local"], ["op"]],
       ["corvus_review_verdict", ["compute"], ["op", "reviewRoot", "priorReviews", "config"]],
       ["corvus_review_sync", ["resolve", "pull", "push"], ["op"]],
-      ["corvus_review_worktree", ["create", "remove"], ["op", "pr", "code_head", "runId"]],
+      ["corvus_review_worktree", ["locate", "create", "remove"], ["op", "owner", "name", "pr"]],
     ] as const) {
       expect(fake.tools.get(name)!.input).toMatchObject({ properties: { op: { type: "string", enum: ops } }, required })
     }

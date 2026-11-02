@@ -37,7 +37,7 @@ const CONTRACTS = {
   corvus_review_pr: { ops: ["metadata", "head", "files", "diff", "reviews", "checks", "identity", "config", "repo", "find", "local"], required: ["op"], caller: "corvus-review-auto" },
   corvus_review_sync: { ops: ["resolve", "pull", "push"], required: ["op"], caller: "corvus-review-auto" },
   corvus_review_verdict: { ops: ["compute"], required: ["op", "reviewRoot", "priorReviews", "config"], caller: "corvus-review-auto" },
-  corvus_review_worktree: { ops: ["create", "remove"], required: ["op", "pr", "code_head", "runId"], caller: "corvus-review-light" },
+  corvus_review_worktree: { ops: ["locate", "create", "remove"], required: ["op", "owner", "name", "pr"], caller: "corvus-review-light" },
 } as const
 const LIMIT_BODY = 24000
 const LIMIT_TOTAL = 48000

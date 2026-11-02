@@ -1,19 +1,10 @@
 /** Test-owned contract, independent of packaged permissions and prompt prose. */
-export const LIGHT_TOOLS = ["skill", "read", "corvus_review_pr", "corvus_review_lock", "corvus_review_persist", "corvus_review_payload",
+export const LIGHT_TOOLS = ["skill", "read", "grep", "glob", "corvus_review_pr", "corvus_review_lock", "corvus_review_persist", "corvus_review_payload",
   "corvus_review_verdict", "corvus_review_sync", "corvus_review_worktree"]
-export const LIGHT_DENIED_TOOLS = ["execute", "webfetch", "websearch", "edit", "write", "patch", "question", "grep", "glob", "todowrite", "corvus_review_post"]
-export const LIGHT_BASH_ALLOWS = ["git fetch --no-tags * pull/*/head", "git fetch --no-tags * 'pull/*/head'",
-  'git fetch --no-tags * "pull/*/head"', "git cat-file -e ????????????????????????????????????????^{commit}",
-  "git cat-file -e '????????????????????????????????????????^{commit}'", 'git cat-file -e "????????????????????????????????????????^{commit}"',
-  "git ls-files -- *", "git remote", "git remote get-url *", "date -u +%Y-%m-%dT%H:%M:%SZ"]
+export const LIGHT_DENIED_TOOLS = ["execute", "webfetch", "websearch", "edit", "write", "patch", "question", "todowrite", "corvus_review_post"]
+export const LIGHT_BASH_ALLOWS = ["git log*", "git show*", "git diff*", "git rev-parse*", "git ls-files*", "git remote", "git remote -v", "git remote --verbose", "git remote get-url *", "git merge-base*", "git cat-file -e *", "git cat-file -t *", "git cat-file -p *", "git status --porcelain", "ls*", "cat*", "head*", "tail*", "wc*", "rg*", "grep*", "find*", "date*"]
 export const LIGHT_BASH_DENIES = ["*", "*;*", "*&*", "*|*", "*>*", "*<*", "*`*", "*$*", "*\n*", "*\r*", "*\t*",
-  "*(*", "*)*", "*[*", "*]*", "*!*", "* =*", "git fetch *{*", "git fetch *}*", "git remote*{*", "git remote*}*", "git ls-files*{*", "git ls-files*}*",
-  "git fetch --no-tags -*", "git fetch --no-tags '-*", 'git fetch --no-tags "-*',
-  "git fetch --no-tags * * ?*", "git fetch --no-tags * --*",
-  "git fetch --no-tags * pull/*:*", "git fetch --no-tags * 'pull/*:*", 'git fetch --no-tags * "pull/*:*',
-  "git fetch --no-tags *''*", 'git fetch --no-tags *""*', "git fetch --no-tags *:* ?*", "git fetch --no-tags */* ?*", "git fetch --no-tags *@* ?*",
-  "git fetch --no-tags .*", "git fetch --no-tags '.*", 'git fetch --no-tags ".*',
-  "git fetch --no-tags ~*", "git fetch --no-tags '~*", 'git fetch --no-tags "~*']
+  "*(*", "*)*", "*[*", "*]*", "*!*", "* =*", "git *--output*", "git *--ext-diff*", "git *--textconv*", "git *--open-files-in-pager*", "find *-exec*", "find *-delete*", "find *-ok*", "find *-fprint*", "find *-fls*", "rg *--pre*", "rg *--search-zip*", "rg *--hostname-bin*"]
 export const LIGHT_BASH_MAP = { "*": "deny", ...Object.fromEntries(LIGHT_BASH_ALLOWS.map(pattern => [pattern, "allow"])),
   ...Object.fromEntries(LIGHT_BASH_DENIES.slice(1).map(pattern => [pattern, "deny"])) }
 export const LIGHT_CHILDREN = ["pr-light-reviewer", "pr-comment-writer"]
@@ -32,8 +23,7 @@ export const LIGHT_MUTATIONS = ["git add .", "git commit -m probe", "git push or
   "gh repo delete example/project", "gh workflow disable ci", "gh run cancel 1", "gh label create probe", "gh secret set TOKEN",
   "gh variable set NAME --body probe", "gh gist create file", "cp src.json .corvus/reviews/pr15/post-request.json",
   "python3 -c 'print(1)'", "node -e 'console.log(1)'", "sh -c 'cp a b'", "git fetch --no-tags origin pull/15/head; cp a b",
-  "git cat-file -e x && cp a b", "date > f", "git show HEAD:src/index.ts", "git diff HEAD", "git log -1",
-  "git rev-parse HEAD", "git remote -v", "gh auth status", "shasum -a 256 .corvus/reviews/pr15/.light/post-request.json",
+  "git cat-file -e x && cp a b", "date > f", "git fetch --no-tags origin pull/15/head", "gh auth status", "shasum -a 256 .corvus/reviews/pr15/.light/post-request.json",
   "git fetch --no-tags --upload-pack=evil pull/15/head", "git fetch --no-tags origin --upload-pack=evil pull/15/head",
   "git fetch --no-tags 'origin --upload-pack=evil' 'pull/15/head'", 'git fetch --no-tags "-x" "pull/15/head"',
   "git fetch --no-tags origin pull/15/head && cp a b", "git fetch --no-tags origin pull/15/head || cp a b",
@@ -51,8 +41,7 @@ export const LIGHT_MUTATIONS = ["git add .", "git commit -m probe", "git push or
     "https://github.com/example/project.git", "file://repo", "ext::evil", "other::evil", "ssh://github.com/example/project",
     "host:path", "git@github.com:example/project.git", "user@host:path", "git+ssh://github.com/example/project", "ssh+git://github.com/example/project"].flatMap(remote =>
     [remote, `'${remote}'`, `"${remote}"`].map(literal => `git fetch --no-tags ${literal} pull/1/head`))]
-export const LIGHT_READS = ["git fetch --no-tags origin pull/42/head", "git fetch --no-tags 'origin' pull/42/head", 'git fetch --no-tags "origin" pull/42/head',
-  "git fetch --no-tags 'github' 'pull/42/head'", 'git fetch --no-tags "custom.remote-2" "pull/42/head"',
+export const LIGHT_READS = ["git show HEAD:src/index.ts", "git diff --no-ext-diff --no-textconv HEAD", "git log -1", "git rev-parse HEAD", "git remote -v", "git merge-base HEAD main", "git cat-file -p HEAD", "ls", "cat README.md", "head -n 5 README.md", "tail README.md", "wc -l README.md", "rg literal src", "grep literal README.md", "find . -name file",
   "git remote get-url origin", "git remote get-url 'custom.remote-2'", 'git remote get-url "github"',
   "git ls-files -- .corvus/reviews/pr42/lock.yaml", "git ls-files -- '.corvus/tasks/task/reviews/pr42/lock.yaml'",
   'git ls-files -- ".corvus/reviews/pr42/lock.yaml"', "git cat-file -e 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa^{commit}'",

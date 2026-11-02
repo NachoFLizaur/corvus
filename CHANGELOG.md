@@ -5,6 +5,14 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.11.0-beta.9 — 2026-11-02
+
+### Fixed
+
+- PR reviews locate matching nested repositories tool-side instead of assuming OpenCode started in the target clone. The worktree tool owns restricted PR fetching and commit verification; review state is routed to the located repository's `.corvus`.
+- Both hosts permit non-destructive Git/utility shell commands at verified roots, while mutations, shell fetch, command expansion and executable/output-writing options remain denied. Owned worktrees allow utilities and only the Git HEAD check.
+- Posted headings use `Review of #N — title`, matching full reviews without mode branding. Rendering checks, permission probes and repository/worktree regression coverage follow the new contract.
+
 ## 0.11.0-beta.8 — 2026-11-02
 
 ### Changed

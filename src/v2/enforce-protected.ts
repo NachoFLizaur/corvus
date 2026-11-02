@@ -194,7 +194,7 @@ export const enforceProtected: Registrar = async (ctx) => {
     const fixed = fixedDenies.get(e.agent)
     if (!fixed || !["shell", "bash"].includes(e.tool)) return
     const args = e.input !== null && typeof e.input === "object" ? e.input as Record<string, unknown> : {}
-    if (typeof args.command !== "string" || isFixedDenied(fixed, "shell", [args.command]) || !allowedShellWorkdir(args.workdir))
+    if (typeof args.command !== "string" || isFixedDenied(fixed, "shell", [args.command]) || !allowedShellWorkdir(args.workdir, args.command))
       throw new Error(`corvus: ${e.agent}; shell is denied by the plugin's fixed-deny boundary.`)
   }).catch(async error => {
     await release(context, "context")

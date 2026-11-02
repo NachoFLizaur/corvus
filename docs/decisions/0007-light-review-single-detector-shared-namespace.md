@@ -160,9 +160,11 @@ context/treeEntries/populate/worktree).
   skill/reference reads, restricted shell and the two children, because direct Code Mode,
   web or mutation tools otherwise bypass the orchestration boundary. Both hosts keep the
   packaged capability ceiling tighten-only, preserving user restrictions/model choices.
-  Shell workdir must realpath to the session repository top-level, discovered once and
-  cached from that trusted directory before execution, because a sibling or PR-selected
-  nested/fake repository must never become the shell oracle. v2 `tool.execute.before`
+  Shell workdir must realpath to the session, its Git top-level, a tool-located repo
+  or run-owned worktree, because a workspace can contain the reviewed clone. The
+  shared grammar permits read-only Git/utilities, not shell fetch or mutations;
+  status requires a located repo and owned trees permit only the Git HEAD check.
+  v2 `tool.execute.before`
   exposes host identity and input; permission evaluation lacks workdir, and shell.create
   lacks identity (`src/v2/enforce-protected.ts`). Unknown paths/discovery fail closed;
   external concurrent directory replacement remains a realpath TOCTOU residual.
@@ -208,16 +210,18 @@ context/treeEntries/populate/worktree).
   independent briefs can inspect the same files (`agent/pr-light-reviewer.md`, steps 3–5/Report
   Format; `skill/corvus-review-light/SKILL.md`, step 5).
 - PR mode creates one disposable detached sibling worktree after successful lock acquisition
-  and head-object preparation, because navigable exact-head files answer the user's request
-  without changing their checkout. Fetch uses only a validated named remote whose get-url
-  matches the PR owner/repository, because dropping the HTTPS fallback lets both hosts deny
-  every remote token containing colon, slash/backslash or @, or starting with dot, hyphen or
-  tilde, including bare scp-style host:path. SSH-configured named remotes remain usable.
-  No matching named remote skips fetch/worktree creation with a disclosed GitHub API /
+  and tool-side repository location, because navigable exact-head files answer the user's request
+  without changing their checkout. Locate searches the session/top-level and descendants
+  at depth ≤3 with a 200-directory/deadline bound, skipping hidden/vendor/symlink dirs.
+  The tool verifies GitHub HTTPS/SSH fetch remotes, then create revalidates and fetches
+  the PR head using argv, scrubbed Git environment, disabled hooks and HTTPS/SSH-only
+  protocols before checking the exact commit. This replaces model-shell preparation,
+  because remote matching and mutation belong to the tool's ownership boundary.
+  No matching repo/remote skips creation with a disclosed GitHub API /
   available-object fallback (`agent/corvus-review-light.md`; light skill, step 4).
   Only `corvus_review_worktree`, callable by the light identity
-  on both hosts, owns create/remove. It derives the canonical sibling path from trusted session
-  cwd, validated PR/code_head/runId (`runid6` = SHA-256(runId) prefix); the skill uses the returned
+  on both hosts, owns locate/fetch/create/remove. It derives the canonical sibling path from the
+  tool-located repo_root, validated PR/code_head/runId (`runid6` = SHA-256(runId) prefix); the skill uses the returned
   path verbatim, never a PR-selected cwd. Raw-blob population avoids hooks/filter execution,
   disables fsmonitor, selects only the new worktree index, validates tree paths, stores symlinks
   as regular files and reports skipped submodules. Detectors verify HEAD before read/grep/glob;
@@ -270,6 +274,9 @@ context/treeEntries/populate/worktree).
   steps 6/9/10). Every retained minor is fully detailed inline or body-only, because count-only
   overflow hides actionable findings; light ignores max_minors and nitpicks remain excluded.
 - Review state stays local: light candidates, staging and frozen artifacts live in a
+  located repo's `.corvus` via absolute-path adapter routing (full-review routing unchanged), because
+  a containing workspace's own Git repository is not the reviewed repository. Without a
+  located repo, session-storage fallback is an explicit limitation. Artifacts use a
   tool-owned storage class inside the shared root, chosen by the tools from caller identity,
   which `corvus_review_sync` excludes from status, snapshot, add/commit and post-commit checks
   exactly as it excludes `.staging`; it also excludes namespace `lock.yaml`/`.lock` when

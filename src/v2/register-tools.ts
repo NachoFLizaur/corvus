@@ -6,7 +6,7 @@ import { createLockExecutor } from "../review-lock"
 import { createPrExecutor, isPrCallerAllowed } from "../review-pr"
 import { createVerdictExecutor } from "../review-verdict"
 import { createSyncExecutor } from "../review-sync"
-import { createWorktreeExecutor } from "../review-worktree"
+import { createWorktreeExecutor, lightPrDirectory, lightReviewDirectory } from "../review-worktree"
 import { isReviewCallerAllowed } from "../review-callers"
 import type { Registrar, SetupContext } from "./types"
 
@@ -49,7 +49,8 @@ export const registerTools: Registrar = async (ctx) => {
       /** Host ctx.agent is read before payload I/O; the shared review-callers roster admits orchestrators and fails closed for missing/unknown callers, without an argument bypass. */
       execute: async (args: unknown, ctx) => {
         if (!isReviewCallerAllowed("corvus_review_payload", ctx?.agent, args)) return { content: JSON.stringify({ ok: false, reason: "caller-not-allowed" }) }
-        return { content: review.payload(args, ctx?.agent) }
+        const cwd = lightReviewDirectory(directory, args, ctx?.agent)
+        return { content: (cwd === directory ? review : createReviewToolExecutors(cwd)).payload(args, ctx?.agent) }
       },
     })
     draft.add({
@@ -77,7 +78,9 @@ export const registerTools: Registrar = async (ctx) => {
         additionalProperties: false,
       },
       options: { codemode: false },
-      execute: async (args: unknown, ctx) => ({ content: await post(args, ctx?.agent) }),
+      execute: async (args: unknown, ctx) => {
+        return { content: await post(args, ctx?.agent) }
+      },
     })
     draft.add({
       name: "corvus_review_persist",
@@ -122,7 +125,8 @@ export const registerTools: Registrar = async (ctx) => {
       /** Host ctx.agent and op/target/ID are checked against review-callers before state I/O; light is candidate-only. Missing/unknown callers fail closed, without a bypass. */
       execute: async (args: unknown, ctx) => {
         if (!isReviewCallerAllowed("corvus_review_persist", ctx?.agent, args)) return { content: JSON.stringify({ ok: false, reason: "caller-not-allowed" }) }
-        return { content: persist(args, ctx?.agent) }
+        const cwd = lightReviewDirectory(directory, args, ctx?.agent)
+        return { content: (cwd === directory ? persist : createPersistExecutor(resolve(cwd, ".corvus")))(args, ctx?.agent) }
       },
     })
     draft.add({
@@ -144,7 +148,8 @@ export const registerTools: Registrar = async (ctx) => {
       /** Host ctx.agent is read before lock I/O; the shared review-callers roster admits orchestrators and fails closed for missing/unknown callers, without an argument bypass. */
       execute: async (args: unknown, ctx) => {
         if (!isReviewCallerAllowed("corvus_review_lock", ctx?.agent, args)) return { content: JSON.stringify({ ok: false, reason: "caller-not-allowed" }) }
-        return { content: lock(args, ctx?.agent) }
+        const cwd = lightReviewDirectory(directory, args, ctx?.agent)
+        return { content: (cwd === directory ? lock : createLockExecutor(resolve(cwd, ".corvus")))(args, ctx?.agent) }
       },
     })
     draft.add({
@@ -183,7 +188,8 @@ export const registerTools: Registrar = async (ctx) => {
         const op = args !== null && typeof args === "object" ? Object.getOwnPropertyDescriptor(args, "op")?.value : undefined
         const allowed = isPrCallerAllowed(ctx?.agent, op)
         if (!allowed) return { content: JSON.stringify({ ok: false, reason: "caller-not-allowed", api_calls: 0 }) }
-        return { content: await pr(args) }
+        const cwd = lightPrDirectory(directory, args, ctx?.agent)
+        return { content: await (cwd === directory ? pr : createPrExecutor({ cwd }))(args) }
       },
     })
     draft.add({
@@ -212,7 +218,8 @@ export const registerTools: Registrar = async (ctx) => {
       /** Host ctx.agent is read against review-callers before state I/O; unknown/non-review callers reject, with no argument bypass. */
       execute: async (args: unknown, ctx) => {
         if (!isReviewCallerAllowed("corvus_review_verdict", ctx?.agent, args)) return { content: JSON.stringify({ ok: false, reason: "caller-not-allowed" }) }
-        return { content: verdict(args) }
+        const cwd = lightReviewDirectory(directory, args, ctx?.agent)
+        return { content: (cwd === directory ? verdict : createVerdictExecutor(resolve(cwd, ".corvus")))(args) }
       },
     })
     draft.add({
@@ -242,17 +249,19 @@ export const registerTools: Registrar = async (ctx) => {
     })
     draft.add({
       name: "corvus_review_worktree",
-      description: "Light-only create/remove of an exact-head sibling worktree. Supply op/pr/code_head/runId; cwd defaults to the session directory. Raw blob population avoids hooks, filters and live symlinks. Removal verifies the derived path and detached registration/HEAD; never prunes others.",
+      description: "Light-only repo discovery and owned worktree lifecycle. locate(owner,name,pr) scans the session/top-level and descendants ≤3 deep (≤200 dirs, no hidden/vendor/symlink descent), matching GitHub fetch remotes. create/remove require repo_root,owner,name,pr,code_head,runId; root must be located. create safely fetches pull/N/head and verifies the commit, then populates raw blobs without hooks/filters/live symlinks. remove verifies owned detached HEAD; never prunes others.",
       input: {
         type: "object",
         properties: {
-          op: { type: "string", enum: ["create", "remove"] },
-          cwd: { type: "string" },
+          op: { type: "string", enum: ["locate", "create", "remove"] },
+          repo_root: { type: "string" },
+          owner: { type: "string" },
+          name: { type: "string" },
           pr: { type: "integer", minimum: 1, maximum: Number.MAX_SAFE_INTEGER },
           code_head: { type: "string", pattern: "^[a-f0-9]{40}$" },
           runId: { type: "string", minLength: 1 },
         },
-        required: ["op", "pr", "code_head", "runId"],
+        required: ["op", "owner", "name", "pr"],
         additionalProperties: false,
       },
       options: { codemode: false },

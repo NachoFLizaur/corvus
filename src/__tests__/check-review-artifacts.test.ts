@@ -572,9 +572,9 @@ function rerunFeedback(head: string) {
   const history = { ok: true, complete_pagination: true, complete_threads: true,
     reviews: [
       { id: 122, user: "reviewer", commit_id: head, submitted_at: "2026-11-01T00:00:00Z", html_url: "https://github.com/owner/repo/pull/8#pullrequestreview-122",
-        body: `<!-- corvus-review v2 path=.corvus/reviews/pr8 head=${head} round=1 -->\n## Corvus Light Review — #8 Fixture` },
+        body: `<!-- corvus-review v2 path=.corvus/reviews/pr8 head=${head} round=1 -->\n## Review of #8 — Fixture` },
       { id: 123, user: "reviewer", commit_id: head, submitted_at: "2026-11-02T00:00:00Z", html_url: "https://github.com/owner/repo/pull/8#pullrequestreview-123",
-        body: `<!-- corvus-review v2 path=.corvus/reviews/pr8 head=${head} round=2 -->\n## Corvus Light Review — #8 Fixture` }],
+        body: `<!-- corvus-review v2 path=.corvus/reviews/pr8 head=${head} round=2 -->\n## Review of #8 — Fixture` }],
     prior_threads: [
       { root: { id: 455, pull_request_review_id: 122, html_url: item.source_urls[0], path: "x", line: 1 }, replies: [], is_corvus_review: true, is_resolved: null, is_outdated: null },
       { root: { id: 456, pull_request_review_id: 123, html_url: url, path: "x", line: 1 }, replies: [], is_corvus_review: true, is_resolved: null, is_outdated: null }] }
@@ -641,7 +641,7 @@ test("light trusted control parser ignores nested feedback fields in legacy and 
 
 test("Earlier feedback has one review-wide section and only pinned linked summary lines", () => {
   const head = lightHead(1)
-  const base = `<!-- corvus-review v1 head:${head} -->\n## Corvus Light Review — #8 Fixture\n**COMMENT · \`1111111\` · 1 files, +1/−0 · Standards 0 · Spec 0 · inline 0**\n\n## Standards\n**No actionable findings in reviewed scope.** · 0 findings\n\n## Spec\n**No actionable findings in reviewed scope.** · 0 findings`
+  const base = `<!-- corvus-review v1 head:${head} -->\n## Review of #8 — Fixture\n**COMMENT · \`1111111\` · 1 files, +1/−0 · Standards 0 · Spec 0 · inline 0**\n\n## Standards\n**No actionable findings in reviewed scope.** · 0 findings\n\n## Spec\n**No actionable findings in reviewed scope.** · 0 findings`
   const earlier = "## Earlier feedback\n- Still open: [x:1](https://github.com/owner/repo/pull/8#discussion_r456) — Keep the validated identity (by @reviewer)\n- Fixed since last review: [y:2](https://github.com/owner/repo/pull/8#discussion_r457) — Validate the input\n- Agrees with @human: [z:3](https://github.com/owner/repo/pull/8#discussion_r458) — Bound the retry loop"
   expect(lightRenderErrors(`${base}\n\n${earlier}`, false, [])).toEqual([])
   expect(lightRenderErrors(`${base}\n\n${earlier}\n\n## Review limits\n- Unknown intent.`)).toEqual([])
@@ -682,7 +682,7 @@ function buildLightRestartTrace(data: ReviewFixture, count: number, options: Lig
   const events: (ReturnType<typeof toolEvent> | ReturnType<typeof lightNote>)[] = []
   const children: { id: string; agent?: string; tools: ReturnType<typeof toolEvent>[]; report?: string }[] = []
   const heads: { attempt: number; code_head: string; base_sha: string; worktree: string | null; cleanup: string }[] = []
-  const treeTuple = (h: string) => ({ cwd: input.fixture, pr: 8, code_head: h, runId: "run-1" })
+  const treeTuple = (h: string) => ({ repo_root: input.fixture, owner: "owner", name: "repo", pr: 8, code_head: h, runId: "run-1" })
   const treePath = (h: string) => resolve(realpathSync(input.fixture), "..", `fixture.corvus-review-pr8-${h.slice(0, 7)}-${createHash("sha256").update("run-1").digest("hex").slice(0, 6)}`)
   const remove = (h: string, failed = false) => toolEvent("corvus_review_worktree", { op: "remove", ...treeTuple(h) }, failed
     ? { ok: false, path: treePath(h), reason: "fixture-cleanup-failed" } : { ok: true, path: treePath(h), state: "removed" })
@@ -704,7 +704,7 @@ function buildLightRestartTrace(data: ReviewFixture, count: number, options: Lig
     if (!options.local) events.push(pr("reviews", options.noNew ? prior.history : { ok: true, reviews: [], complete_pagination: true, api_calls: 1 }))
     if (!options.local && (i === 1 || !options.codeOnly)) events.push(toolEvent("corvus_review_pr", { op: "config", owner: "owner", name: "repo", ref: b }, { ok: true, present: false, api_calls: 1 }))
     events.push(toolEvent("corvus_review_verdict", { op: "compute", reviewRoot: relative, owner: "owner", name: "repo", pr: 8, priorReviews: {}, config: {} }, { ok: true, round: i }))
-    if (!options.local) events.push(toolEvent("bash", { command: "git fetch --no-tags github pull/8/head" }, {}), toolEvent("bash", { command: `git cat-file -e '${h}^{commit}'` }, {}),
+    if (!options.local) events.push(toolEvent("corvus_review_worktree", { op: "locate", owner: "owner", name: "repo", pr: 8 }, { ok: true, repo_root: input.fixture, remote: "github", candidates_considered: 1 }),
       toolEvent("corvus_review_worktree", { op: "create", ...treeTuple(h) }, options.createFailure ? { ok: false, reason: "fixture-create-failed" }
         : { ok: true, path: treePath(h), head: h, populated_files: 1, skipped: [], symlinks_as_files: [], preexisting_corvus_worktrees: [] }))
     for (const axis of ["standards", "spec_security"]) for (let shard = 1; shard <= (options.shards ? 2 : 1); shard++) {
@@ -723,7 +723,7 @@ function buildLightRestartTrace(data: ReviewFixture, count: number, options: Lig
     if (options.exhaustion || i < count && !options.previews) { events.push(meta(nextH, nextB)); continue }
     if (!options.local) events.push(meta(h, b, "OPEN", options.rawOnly ? lightHead(4) : h))
     if (options.noNew) break
-    const candidate: CandidateRequest = { commit_id: h, event: "COMMENT", body: `<!-- corvus-review v2 path=${relative} head=${h} round=${i} -->\n## Corvus Light Review — ${options.local ? "repo / smoke/light-unrelated" : "#8 Fixture"}\n**COMMENT · \`${h.slice(0, 7)}\` · 1 files, +1/−0 · Standards 0 · Spec 0 · inline 0**\n\n## Standards\n**No actionable findings in reviewed scope.** · 0 findings\n\n## Spec\n**No actionable findings in reviewed scope.** · 0 findings`, comments: [] }
+    const candidate: CandidateRequest = { commit_id: h, event: "COMMENT", body: `<!-- corvus-review v2 path=${relative} head=${h} round=${i} -->\n## Review of ${options.local ? "repo / smoke/review" : "#8 — Fixture"}\n**COMMENT · \`${h.slice(0, 7)}\` · 1 files, +1/−0 · Standards 0 · Spec 0 · inline 0**\n\n## Standards\n**No actionable findings in reviewed scope.** · 0 findings\n\n## Spec\n**No actionable findings in reviewed scope.** · 0 findings`, comments: [] }
     if (options.shards) candidate.body = candidate.body.replace("1 files, +1/−0", "2 files, +2/−0")
     if (options.inline) {
       const diff_anchor = `diff-${createHash("sha256").update("x").digest("hex")}`
@@ -886,7 +886,7 @@ test.each([
     expect(result.rows.find(row => row.check === check)?.ok).toBe(true)
   }
   const trees = traceTools(data.events).filter(tool => tool.part.tool === "corvus_review_worktree")
-  expect(trees.map(tool => (tool.part.state.input as { op: string }).op)).toEqual(name === "LOCAL" ? [] : ["create", "remove"])
+  expect(trees.map(tool => (tool.part.state.input as { op: string }).op)).toEqual(name === "LOCAL" ? [] : ["locate", "create", "remove"])
   if (name === "LOCAL") expect(rowOutcome(result.rows.find(row => row.check === "light worktree route")!)).toBe("N/A-PASS:")
 })
 
@@ -1043,7 +1043,7 @@ test("T5 render predicate accepts the skill's extracted literal template, not a 
   expect(inlineOnly).not.toContain("**major** (standards/")
   expect(lightRenderErrors(inlineOnly)).toEqual([])
   for (const broken of [example.replace("## Spec", "## Missing"), example.replace("**COMMENT ·", "COMMENT ·"), `${example}\n- Fourth limit.`,
-    `${example}\nReviewed paths: x, y`, example.replace("## Corvus Light Review", "## Other Review")]) expect(lightRenderErrors(broken).length).toBeGreaterThan(0)
+    `${example}\nReviewed paths: x, y`, example.replace("## Review of", "## Other Review"), example.replace("## Review of", "## Corvus Light Review")]) expect(lightRenderErrors(broken).length).toBeGreaterThan(0)
 })
 
 test.each(["missing", "wrong hash", "wrong line", "wrong axis", "duplicate", "wrong repo"])("inline index rejects %s", async kind => {
@@ -1129,21 +1129,21 @@ test("sharded roster accepts unquoted YAML-flow focus paths in dispatches", asyn
 })
 
 test.each([
-  ["origin fetch", "git fetch --no-tags origin pull/8/head", true],
-  ["quoted fetch", "git fetch --no-tags 'github' 'pull/8/head'", true],
+  ["origin fetch", "git fetch --no-tags origin pull/8/head", false],
+  ["quoted fetch", "git fetch --no-tags 'github' 'pull/8/head'", false],
   ["URL fetch removed", "git fetch --no-tags 'https://github.com/owner/repo.git' pull/8/head", false],
   ["head object", `git cat-file -e '${lightHead(1)}^{commit}'`, true],
   ["tracked lock", "git ls-files -- '.corvus/reviews/pr8/lock.yaml'", true],
   ["remote URL", "git remote get-url 'origin'", true],
   ["timing literal", "date -u +%Y-%m-%dT%H:%M:%SZ", true],
   ["remote list", "git remote", true],
-  ["auth removed", "gh auth status", false], ["rev-parse removed", "git rev-parse HEAD", false],
+  ["auth removed", "gh auth status", false], ["rev-parse readonly", "git rev-parse HEAD", true],
   ["shasum removed", "shasum -a 256 .corvus/reviews/pr8/.light/post-request.json", false],
   ["write bypass", "cp src.json .corvus/reviews/pr8/post-request.json", false],
   ["python bypass", "python3 -c 'print(1)'", false], ["node bypass", "node -e 'console.log(1)'", false],
   ["wrapper bypass", "sh -c 'cp a b'", false], ["fetch chaining", "git fetch --no-tags origin pull/8/head; cp a b", false],
   ["cat-file chaining", "git cat-file -e x && cp a b", false], ["redirect", "date > f", false],
-  ["nonliteral timing", "date +%s", false], ["worktree shell", "git worktree add --detach sibling HEAD", false],
+  ["readonly timing", "date +%s", true], ["worktree shell", "git worktree add --detach sibling HEAD", false],
   ["read-tree shell", "git read-tree --reset -u HEAD", false], ["composed shell", "git remote; date -u +%Y-%m-%dT%H:%M:%SZ", false],
   ["fetch upload-pack exploit", "git fetch --no-tags . pull/1/head --upload-pack='touch /tmp/x #'/head", false],
   ["fetch option after refspec", "git fetch --no-tags origin pull/8/head --upload-pack=evil/head", false],

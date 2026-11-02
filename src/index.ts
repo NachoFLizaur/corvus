@@ -14,7 +14,7 @@ import { createLockExecutor } from "./review-lock"
 import { createPrExecutor, isPrCallerAllowed } from "./review-pr"
 import { createVerdictExecutor } from "./review-verdict"
 import { createSyncExecutor } from "./review-sync"
-import { createWorktreeExecutor } from "./review-worktree"
+import { createWorktreeExecutor, lightPrDirectory, lightReviewDirectory } from "./review-worktree"
 import { isReviewCallerAllowed } from "./review-callers"
 
 /**
@@ -130,7 +130,7 @@ const plugin: Plugin = async (input) => {
       if (!policy) return
       const shell = ["bash", "shell"].includes(request.tool)
       if (shell ? typeof output.args?.command !== "string" || isFixedDenied(policy, "shell", [output.args.command])
-        || !allowedShellWorkdir(output.args?.workdir) : isFixedDenied(policy, request.tool,
+        || !allowedShellWorkdir(output.args?.workdir, output.args?.command) : isFixedDenied(policy, request.tool,
           request.tool === "task" ? [String(output.args?.subagent_type ?? "")] : ["*"]))
         throw new Error(`corvus: ${agent}; ${request.tool} is denied by the plugin's fixed-deny boundary.`)
     },
@@ -160,7 +160,8 @@ const plugin: Plugin = async (input) => {
         /** Host ctx.agent is read before payload I/O; the shared review-callers roster admits orchestrators and fails closed for missing/unknown callers, without an argument bypass. */
         execute: async (args, ctx) => {
           if (!isReviewCallerAllowed("corvus_review_payload", ctx?.agent, args)) return JSON.stringify({ ok: false, reason: "caller-not-allowed" })
-          return review.payload(args, ctx?.agent)
+          const cwd = lightReviewDirectory(directory, args, ctx?.agent)
+          return (cwd === directory ? review : createReviewToolExecutors(cwd)).payload(args, ctx?.agent)
         },
       },
       corvus_review_post: {
@@ -176,7 +177,9 @@ const plugin: Plugin = async (input) => {
           headSha: z.string().regex(/^[a-f0-9]{40}$/),
           event: z.enum(["APPROVE", "REQUEST_CHANGES", "COMMENT"]),
         },
-        execute: async (args, ctx) => post(args, ctx?.agent),
+        execute: async (args, ctx) => {
+          return post(args, ctx?.agent)
+        },
       },
       corvus_review_persist: {
         description: "Write or read review state under the host's .corvus/reviews or .corvus/tasks/<task>/reviews roots. Supply op and reviewRoot plus only that op's fields: write_document(headSha, sections, optional frontmatterYaml), write_input(input), write_meta(headSha, meta, optional name: meta.yaml/decision.yaml/completion.yaml/authorization.yaml/review-action.yaml), write_candidate(candidate), read_document(headSha), write_facts(facts), read_facts(), begin(target: document|input|candidate), append(staging_id; document: index/heading/body; input: key/value; candidate: field/text, optional comment/anchor; part/parts), finalize(staging_id; document: expected_sections; input: ordered expected_keys; candidate: expected_comments), abort(staging_id), status(staging_id). The module validates operation-specific arguments.",
@@ -215,7 +218,8 @@ const plugin: Plugin = async (input) => {
         /** Host ctx.agent and op/target/ID are checked against review-callers before state I/O; light is candidate-only. Missing/unknown callers fail closed, without a bypass. */
         execute: async (args, ctx) => {
           if (!isReviewCallerAllowed("corvus_review_persist", ctx?.agent, args)) return JSON.stringify({ ok: false, reason: "caller-not-allowed" })
-          return persist(args, ctx?.agent)
+          const cwd = lightReviewDirectory(directory, args, ctx?.agent)
+          return (cwd === directory ? persist : createPersistExecutor(resolve(cwd, ".corvus")))(args, ctx?.agent)
         },
       },
       corvus_review_lock: {
@@ -230,7 +234,8 @@ const plugin: Plugin = async (input) => {
         /** Host ctx.agent is read before lock I/O; the shared review-callers roster admits orchestrators and fails closed for missing/unknown callers, without an argument bypass. */
         execute: async (args, ctx) => {
           if (!isReviewCallerAllowed("corvus_review_lock", ctx?.agent, args)) return JSON.stringify({ ok: false, reason: "caller-not-allowed" })
-          return lock(args, ctx?.agent)
+          const cwd = lightReviewDirectory(directory, args, ctx?.agent)
+          return (cwd === directory ? lock : createLockExecutor(resolve(cwd, ".corvus")))(args, ctx?.agent)
         },
       },
       corvus_review_pr: {
@@ -259,7 +264,8 @@ const plugin: Plugin = async (input) => {
         execute: async (args, ctx) => {
           const allowed = isPrCallerAllowed(ctx?.agent, args.op)
           if (!allowed) return JSON.stringify({ ok: false, reason: "caller-not-allowed", api_calls: 0 })
-          return pr(args)
+          const cwd = lightPrDirectory(directory, args, ctx?.agent)
+          return (cwd === directory ? pr : createPrExecutor({ cwd }))(args)
         },
       },
       corvus_review_verdict: {
@@ -281,7 +287,8 @@ const plugin: Plugin = async (input) => {
         /** Host ctx.agent is read against review-callers before state I/O; unknown/non-review callers reject, with no argument bypass. */
         execute: async (args, ctx) => {
           if (!isReviewCallerAllowed("corvus_review_verdict", ctx?.agent, args)) return JSON.stringify({ ok: false, reason: "caller-not-allowed" })
-          return verdict(args)
+          const cwd = lightReviewDirectory(directory, args, ctx?.agent)
+          return (cwd === directory ? verdict : createVerdictExecutor(resolve(cwd, ".corvus")))(args)
         },
       },
       corvus_review_sync: {
@@ -303,13 +310,15 @@ const plugin: Plugin = async (input) => {
         },
       },
       corvus_review_worktree: {
-        description: "Light-only create/remove of an exact-head sibling worktree. Supply op/pr/code_head/runId; cwd defaults to the session directory. Raw blob population avoids hooks, filters and live symlinks. Removal verifies the derived path and detached registration/HEAD; never prunes others.",
+        description: "Light-only repo discovery and owned worktree lifecycle. locate(owner,name,pr) scans the session/top-level and descendants ≤3 deep (≤200 dirs, no hidden/vendor/symlink descent), matching GitHub fetch remotes. create/remove require repo_root,owner,name,pr,code_head,runId; root must be located. create safely fetches pull/N/head and verifies the commit, then populates raw blobs without hooks/filters/live symlinks. remove verifies owned detached HEAD; never prunes others.",
         args: {
-          op: z.enum(["create", "remove"]),
-          cwd: z.string().optional(),
+          op: z.enum(["locate", "create", "remove"]),
+          repo_root: z.string().optional(),
+          owner: z.string(),
+          name: z.string(),
           pr: z.number().int().positive(),
-          code_head: z.string().regex(/^[a-f0-9]{40}$/),
-          runId: z.string().min(1),
+          code_head: z.string().regex(/^[a-f0-9]{40}$/).optional(),
+          runId: z.string().min(1).optional(),
         },
         /** Host ctx.agent is checked before I/O by the shared executor; no input bypasses light-only admission. */
         execute: async (args, ctx) => worktree(args, ctx?.agent),

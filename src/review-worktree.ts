@@ -3,22 +3,82 @@ import { createHash } from "node:crypto"
 import * as fs from "node:fs"
 import { basename, dirname, isAbsolute, resolve } from "node:path"
 import { isReviewCallerAllowed } from "./review-callers"
+import { isLightClassPath } from "./review-storage-class"
 
-export type WorktreeInput = { op: "create" | "remove"; cwd?: string; pr: number; code_head: string; runId: string }
+export type WorktreeInput = { op: "create" | "remove"; repo_root: string; owner: string; name: string; pr: number; code_head: string; runId: string }
+type LocateInput = { op: "locate"; owner: string; name: string; pr: number; code_head?: string; runId?: string }
 export type WorktreeExecResult = { code: number; stdout: Buffer; stderr: string }
 export type WorktreeExec = (argv: string[], options: { cwd: string; env: NodeJS.ProcessEnv; input?: Buffer; timeoutMs: number; maxBytes: number }) => Promise<WorktreeExecResult>
 export type WorktreeOptions = { cwd?: string; exec?: WorktreeExec; timeoutMs?: number }
-type Failure = { ok: false; reason: string; path?: string; command?: string[]; message?: string; cleanup?: Failure }
+type Failure = { ok: false; reason: string; path?: string; command?: string[]; message?: string; cleanup?: Failure; candidates_considered?: number }
 type Registration = { path: string; head?: string; detached: boolean }
 type Entry = { path: string; mode: string; type: string; sha: string; size: number }
 export type WorktreeResult = Failure | {
   ok: true; path: string; head: string; populated_files: number;
   skipped: { path: string; reason: "submodule" }[]; symlinks_as_files: string[]; preexisting_corvus_worktrees: string[];
-} | { ok: true; path: string; state: "removed" | "absent" }
+} | { ok: true; path: string; state: "removed" | "absent" } | { ok: true; repo_root: string; remote: string; candidates_considered: number }
 const SHA = /^[a-f0-9]{40}$/
 const TIMEOUT_MS = 60_000
 const MAX_OUTPUT = 64 * 1024 * 1024
 const MAX_TREE_BYTES = 256 * 1024 * 1024
+const MAX_SCAN_DIRECTORIES = 200
+type Located = { owner: string; name: string; remote: string }
+const locations = new Map<string, Map<string, Located>>()
+const ownedTrees = new Map<string, Set<string>>()
+
+/** Tool receipts, keyed by canonical host directory, are the shell/state routing
+ * oracle. Only locate/create success adds authority, before any consumer executes;
+ * removal revokes tree authority. Unknown paths fail closed in the consumers.
+ * Process exit clears receipts; plugin teardown removes their consumers. There
+ * is no model/config bypass. */
+export function lightReviewRoots(session: string): { repos: string[]; worktrees: string[] } {
+  try {
+    const key = fs.realpathSync(session)
+    return { repos: [...(locations.get(key)?.keys() ?? [])], worktrees: [...(ownedTrees.get(key) ?? [])] }
+  } catch { return { repos: [], worktrees: [] } }
+}
+
+/** Shared allowed-review-state-roots oracle for payload, persist, lock and post:
+ * locate receipts admit canonical repo roots for this host session, read before
+ * state I/O. Only light and its writer may select a located .corvus; the writer's
+ * extension is light-class only. Unlocated/traversing/redirected roots retain the
+ * session executor's closed containment and reject outside paths. Missing .corvus
+ * permits lock creation; no input/config adds receipts or disables the guard.
+ * Consumers still own namespace/class, realpath and digest checks; concurrent
+ * directory replacement after this check remains a filesystem TOCTOU limit. */
+export function lightReviewDirectory(session: string, input: unknown, caller: unknown): string {
+  if (!["corvus-review-light", "pr-comment-writer"].includes(String(caller))) return session
+  for (const field of caller === "pr-comment-writer" ? ["artifactPath"] : ["reviewRoot", "candidatePath", "artifactPath"]) {
+    const value = input && typeof input === "object" ? Object.getOwnPropertyDescriptor(input, field)?.value : undefined
+    if (typeof value !== "string" || !isAbsolute(value) || value.split(/[\\/]/).includes("..")) continue
+    for (const repo of lightReviewRoots(session).repos) {
+      const root = resolve(repo, ".corvus")
+      if (!value.startsWith(root + "/") || caller === "pr-comment-writer" && !isLightClassPath(value.slice(root.length + 1))) continue
+      try {
+        if (fs.realpathSync(repo) !== repo || exists(root) && fs.realpathSync(root) !== root) continue
+      } catch { continue }
+      return repo
+    }
+  }
+  return session
+}
+
+/** PR identity, not an evidence-supplied cwd, selects local object-diff fallback
+ * for light's readers. Read locate receipts before PR tool I/O; unmatched/full/
+ * LOCAL calls keep the original session context. Existing PR guards still own
+ * API data, revisions and path validation. Process lifetime bounds receipts. */
+export function lightPrDirectory(session: string, input: unknown, caller: unknown): string {
+  if (!["corvus-review-light", "pr-light-reviewer", "pr-comment-writer"].includes(String(caller))) return session
+  if (!input || typeof input !== "object") return session
+  const owner = Object.getOwnPropertyDescriptor(input, "owner")?.value
+  const name = Object.getOwnPropertyDescriptor(input, "name")?.value
+  if (typeof owner !== "string" || typeof name !== "string") return session
+  try {
+    for (const [repo, located] of locations.get(fs.realpathSync(session)) ?? [])
+      if (owner.toLowerCase() === located.owner.toLowerCase() && name.toLowerCase() === located.name.toLowerCase()) return repo
+  } catch { /* Original executor will diagnose an invalid host directory. */ }
+  return session
+}
 class WorktreeFailure extends Error {
   constructor(readonly result: Failure) { super(result.reason) }
 }
@@ -32,20 +92,23 @@ function exists(path: string): boolean {
  * lock's nonempty-string grammar; hashing the full UTF-8 value makes its path
  * fragment safe without trimming or conflating whitespace. No argument bypasses
  * validation or supplies host dependencies. Invalid controls fail closed. */
-function argumentsObject(value: unknown): WorktreeInput {
+function argumentsObject(value: unknown): WorktreeInput | LocateInput {
   if (!value || typeof value !== "object" || ![Object.prototype, null].includes(Object.getPrototypeOf(value)) || Object.getOwnPropertySymbols(value).length) fail("invalid-arguments")
   const args: Record<string, unknown> = {}
   for (const key of Object.getOwnPropertyNames(value)) {
     const descriptor = Object.getOwnPropertyDescriptor(value, key)!
-    if (!("value" in descriptor) || !["op", "cwd", "pr", "code_head", "runId"].includes(key)) fail("invalid-arguments")
+    if (!("value" in descriptor) || !["op", "repo_root", "owner", "name", "pr", "code_head", "runId"].includes(key)) fail("invalid-arguments")
     args[key] = descriptor.value
   }
-  if (args.op !== "create" && args.op !== "remove") fail("invalid-op")
+  if (!["locate", "create", "remove"].includes(String(args.op))) fail("invalid-op")
   if (typeof args.pr !== "number" || !Number.isSafeInteger(args.pr) || args.pr <= 0
-    || typeof args.code_head !== "string" || SHA.exec(args.code_head)?.[0] !== args.code_head
-    || typeof args.runId !== "string" || !args.runId.trim()
-    || (args.cwd !== undefined && (typeof args.cwd !== "string" || !args.cwd.trim() || /[\0\r\n]/.test(args.cwd)))) fail("invalid-arguments")
-  return args as WorktreeInput
+    || typeof args.owner !== "string" || !/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/.test(args.owner)
+    || typeof args.name !== "string" || !/^(?!\.{1,2}$)[A-Za-z0-9._-]{1,100}$/.test(args.name)
+    || (args.code_head !== undefined && (typeof args.code_head !== "string" || SHA.exec(args.code_head)?.[0] !== args.code_head))
+    || (args.runId !== undefined && (typeof args.runId !== "string" || !args.runId.trim()))) fail("invalid-arguments")
+  if (args.op === "locate" ? args.repo_root !== undefined : typeof args.code_head !== "string" || typeof args.runId !== "string"
+    || typeof args.repo_root !== "string" || !isAbsolute(args.repo_root) || /[\0\r\n]/.test(args.repo_root)) fail("invalid-arguments")
+  return args as WorktreeInput | LocateInput
 }
 
 /** The process has an operation deadline and bounded binary output before spawn;
@@ -103,6 +166,68 @@ function context(opts: WorktreeOptions) {
   return { run, read, checkTime }
 }
 type Context = ReturnType<typeof context>
+
+function matchesRemote(url: string, owner: string, name: string): boolean {
+  const match = /^(?:https:\/\/github\.com\/|ssh:\/\/(?:git@)?github\.com\/|(?:git@)?github\.com:)([A-Za-z0-9-]+)\/([A-Za-z0-9._-]+?)(?:\.git)?\/?$/i.exec(url)
+  return !!match && match[1].toLowerCase() === owner.toLowerCase() && match[2].toLowerCase() === name.toLowerCase()
+}
+
+async function matchingRemote(root: string, args: LocateInput | WorktreeInput, ctx: Context): Promise<string | undefined> {
+  const result = await ctx.run(root, ["remote"])
+  if (result.code !== 0) return undefined
+  for (const remote of result.stdout.toString("utf8").trim().split(/\r?\n/).sort()) {
+    if (!/^(?![-.])[A-Za-z0-9._-]+$/.test(remote)) continue
+    const urls = await ctx.run(root, ["remote", "get-url", "--all", remote])
+    // Fetch may use multiple URLs; every effective fetch URL must name this PR.
+    const values = urls.stdout.toString("utf8").trim().split(/\r?\n/)
+    if (urls.code === 0 && values.length && values.every(url => matchesRemote(url, args.owner, args.name))) return remote
+  }
+}
+
+/** Bounded breadth-first scan is rooted only in the trusted session and its Git
+ * top-level. lstat/Dirent checks precede descent; hidden/vendor/symlink directories
+ * are never followed. Only actual top-levels with matching effective fetch URLs
+ * are admitted. Exhaustion/ambiguity fail closed, rather than claiming absence or
+ * choosing an arbitrary clone. Deadline/count cannot be disabled by tool input. */
+async function locate(session: string, args: LocateInput, ctx: Context): Promise<WorktreeResult> {
+  const top = await ctx.run(session, ["rev-parse", "--show-toplevel"])
+  const queue: { path: string; depth: number }[] = [{ path: session, depth: 0 }]
+  if (top.code === 0 && top.stdout.length) {
+    const root = fs.realpathSync(top.stdout.toString("utf8").trim())
+    if (root !== session) queue.push({ path: root, depth: 0 })
+  }
+  const seen = new Set<string>(), matches = new Map<string, string>()
+  let considered = 0
+  while (queue.length) {
+    ctx.checkTime()
+    const { path, depth } = queue.shift()!
+    if (seen.has(path)) continue
+    if (considered >= MAX_SCAN_DIRECTORIES) fail("scan-limit", { candidates_considered: considered })
+    seen.add(path); considered++
+    if (exists(resolve(path, ".git"))) {
+      const result = await ctx.run(path, ["rev-parse", "--show-toplevel"])
+      if (result.code === 0 && fs.realpathSync(result.stdout.toString("utf8").trim()) === path) {
+        const remote = await matchingRemote(path, args, ctx)
+        if (remote) matches.set(path, remote)
+      }
+    }
+    if (depth < 3) {
+      const children = fs.readdirSync(path, { withFileTypes: true }).filter(entry => entry.isDirectory() && !entry.name.startsWith(".") && entry.name !== "node_modules").sort((a, b) => a.name.localeCompare(b.name))
+      for (const child of children) {
+        const candidate = resolve(path, child.name)
+        if (fs.lstatSync(candidate).isDirectory() && fs.realpathSync(candidate) === candidate) queue.push({ path: candidate, depth: depth + 1 })
+        // Bound queued directories as well as processed candidates.
+        if (queue.length + considered > MAX_SCAN_DIRECTORIES) fail("scan-limit", { candidates_considered: considered })
+      }
+    }
+  }
+  if (!matches.size) fail("repository-not-found", { candidates_considered: considered })
+  if (matches.size > 1) fail("ambiguous-repositories", { candidates_considered: considered, message: [...matches.keys()].join("; ") })
+  const [repo_root, remote] = [...matches][0]
+  const registry = locations.get(session) ?? new Map<string, Located>()
+  registry.set(repo_root, { owner: args.owner, name: args.name, remote }); locations.set(session, registry)
+  return { ok: true, repo_root, remote, candidates_considered: considered }
+}
 function registrations(bytes: Buffer): Registration[] {
   const fields = bytes.toString("utf8").split("\0")
   const found: Registration[] = []
@@ -213,23 +338,37 @@ async function removeOwned(root: string, path: string, head: string, ctx: Contex
   return { ok: true, path, state: "removed" }
 }
 
-async function worktree(args: WorktreeInput, opts: WorktreeOptions): Promise<WorktreeResult> {
+async function worktree(args: WorktreeInput | LocateInput, opts: WorktreeOptions): Promise<WorktreeResult> {
   const ctx = context(opts)
   const base = opts.cwd ?? process.cwd()
   if (typeof base !== "string" || !isAbsolute(base) || /[\0\r\n]/.test(base)) fail("invalid-workspace-directory")
-  const cwd = fs.realpathSync(resolve(base, args.cwd ?? "."))
+  const session = fs.realpathSync(base)
+  if (args.op === "locate") return locate(session, args, ctx)
+  const cwd = fs.realpathSync(args.repo_root)
   const top = await ctx.run(cwd, ["rev-parse", "--show-toplevel"])
   if (top.code !== 0 || !top.stdout.length) fail("not-a-repository", { command: top.command, message: top.stderr })
   const root = fs.realpathSync(top.stdout.toString("utf8").replace(/\r?\n$/, ""))
+  const located = locations.get(session)?.get(root)
+  if (root !== cwd || !located || located.owner.toLowerCase() !== args.owner.toLowerCase() || located.name.toLowerCase() !== args.name.toLowerCase()) fail("repo-not-located")
   const prefix = `${basename(root)}.corvus-review-pr`
   const suffix = createHash("sha256").update(args.runId).digest("hex").slice(0, 6)
   const path = resolve(dirname(root), `${prefix}${args.pr}-${args.code_head.slice(0, 7)}-${suffix}`)
-  if (args.op === "remove") return removeOwned(root, path, args.code_head, ctx)
+  if (args.op === "remove") {
+    const result = await removeOwned(root, path, args.code_head, ctx)
+    ownedTrees.get(session)?.delete(path)
+    return result
+  }
   if (exists(path)) fail("existing-path", { path })
   const before = await list(root, ctx)
   if (before.some(item => item.path === path)) fail("path-already-registered", { path })
   const preexisting = [...new Set([...before.map(item => item.path), ...fs.readdirSync(dirname(root)).map(name => resolve(dirname(root), name))])]
     .filter(item => dirname(item) === dirname(root) && basename(item).startsWith(prefix)).sort()
+  const remote = await matchingRemote(root, args, ctx) ?? fail("remote-mismatch")
+  // Fetch is tool-owned argv, after fresh URL validation and before object reads.
+  // Protocol denies block file/ext helpers and submodules; SSH/upload-pack/pager
+  // overrides neutralize repository-config command execution. No model options.
+  const fetched = await ctx.run(root, ["-c", "protocol.allow=never", "-c", "protocol.https.allow=always", "-c", "protocol.ssh.allow=always", "-c", "protocol.file.allow=never", "-c", "core.sshCommand=ssh", "-c", `remote.${remote}.uploadpack=git-upload-pack`, "-c", "fetch.recurseSubmodules=false", "-c", "maintenance.auto=false", "-c", "gc.auto=0", "fetch", "--no-tags", "--refmap=", remote, `pull/${args.pr}/head`])
+  if (fetched.code !== 0) fail("fetch-failed", { command: fetched.command, message: fetched.stderr })
   const object = await ctx.run(root, ["cat-file", "-e", `${args.code_head}^{commit}`])
   if (object.code !== 0) fail("missing-object", { path, command: object.command, message: object.stderr })
   const entries = treeEntries(await ctx.read(root, ["ls-tree", "-r", "-l", "-z", args.code_head]))
@@ -249,6 +388,8 @@ async function worktree(args: WorktreeInput, opts: WorktreeOptions): Promise<Wor
     const populated = await populate(root, path, batches, ctx)
     const head = (await ctx.read(path, ["rev-parse", "HEAD"])).toString("utf8").trim()
     if (head !== args.code_head) fail("head-mismatch", { path })
+    const trees = ownedTrees.get(session) ?? new Set<string>()
+    trees.add(path); ownedTrees.set(session, trees)
     return { ok: true, path, head, populated_files: populated, skipped: entries.filter(entry => entry.type === "commit").map(entry => ({ path: entry.path, reason: "submodule" })),
       symlinks_as_files: entries.filter(entry => entry.mode === "120000").map(entry => entry.path), preexisting_corvus_worktrees: preexisting }
   } catch (error) {

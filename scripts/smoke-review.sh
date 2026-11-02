@@ -504,6 +504,17 @@ bun -e '
     : ["corvus_review_payload", "corvus_review_post"]
   const exposed = required.every(name => v2 ? evaluateRules(rules ?? [], name, "*") === "allow" : agent?.tools?.[name] === true)
   if (!exposed) { console.error("Orchestrator requires " + required.join(", ")); process.exit(1) }
+  if (process.env.SMOKE_AGENT === "light") {
+    const { buildFixedDenyPolicies, isFixedDenied } = await import(process.env.SMOKE_ROOT + "/src/fixed-denies.ts")
+    const policy = buildFixedDenyPolicies().get("corvus-review-light")
+    for (const command of ["git log -1", "git show HEAD", "git diff HEAD", "git rev-parse HEAD", "rg literal .", "cat README.md", "find . -name file"]) {
+      if (isFixedDenied(policy, "shell", [command])) throw new Error("Read-only shell denied: " + command)
+    }
+    for (const command of ["git fetch --no-tags origin pull/1/head", "git add .", "find . -delete", "find . -exec sh x", "cat x > y"]) {
+      if (!isFixedDenied(policy, "shell", [command])) throw new Error("Mutation allowed: " + command)
+    }
+    console.info("PASS: shared light read-only shell policy; fetch tool-owned")
+  }
   if (process.env.SMOKE_AGENT === "light" && (v2 ? evaluateRules(rules ?? [], "corvus_review_post", "*") !== "deny" : agent?.tools?.corvus_review_post === true)) { console.error("Light direct post must remain denied"); process.exit(1) }
   const writer = rules?.findLast(r => v2 ? r.action === "subagent" && r.resource === "pr-comment-writer" : r.permission === "task" && r.pattern === "pr-comment-writer")
     ?? rules?.findLast(r => v2 ? r.action === "subagent" && r.resource === "*" : r.permission === "task" && r.pattern === "*")

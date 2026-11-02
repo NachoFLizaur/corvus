@@ -5,6 +5,7 @@ import { evaluateRules } from "./evaluate-rules"
 import { loadAgents } from "./load-agents"
 import { agentDir } from "./paths"
 import { renameAction, toV2Permissions } from "./to-v2-permissions"
+import { lightReviewRoots } from "./review-worktree"
 import type { Rule } from "./v2/types"
 
 type PlainObject = Record<string, unknown>
@@ -80,7 +81,7 @@ export function isFixedDenied(policy: FixedDenyPolicy, action: string, resources
     const rules = policy.rules.filter(rule => rule.action === normalized)
     // The wildcard is the fallback, not an unconditional deny of the exceptions.
     const explicitDenies = rules.filter(rule => rule.effect === "deny" && rule.resource !== "*")
-    return resources.some(resource => normalized === "shell" && hasLightShellExpansion(resource)
+    return resources.some(resource => normalized === "shell" && !isLightReadOnlyShell(resource)
       || evaluateRules(rules.filter(rule => rule.effect === "allow"), normalized, resource) !== "allow"
       || evaluateRules(explicitDenies, normalized, resource) === "deny")
   }
@@ -89,27 +90,35 @@ export function isFixedDenied(policy: FixedDenyPolicy, action: string, resources
     .some((resource) => evaluateRules(policy.rules, normalized, resource) !== "allow")
 }
 
-/** Workdir oracle: realpath of git's top-level from the trusted session directory,
- * computed once on the first light shell request (including failure), before
- * execution. Each request re-realpaths its workdir, relative to that session;
- * omission means the session directory, not process.cwd(). Missing/invalid paths
- * or repository discovery deny closed. Nested/fake repositories and sibling trees
- * never supply the oracle. No config disables this guard; plugin unload does.
- * The realpath check does not eliminate external concurrent directory replacement. */
-export function createLightShellWorkdirGuard(sessionDirectory: unknown): (workdir: unknown) => boolean {
-  let initialized = false, root: string | undefined
-  return workdir => {
+/** Session/top-level discovery and live tool receipts are the workdir oracle,
+ * read before each shell execution. Missing Git discovery still permits the
+ * session directory; unknown roots deny. Owned trees permit utilities and ONLY
+ * git rev-parse HEAD, avoiding clean filters on their unstatted index. Status
+ * requires a located repo. No config bypass; unload removes the hook. Canonical
+ * checks do not prevent external concurrent directory replacement. */
+export function createLightShellWorkdirGuard(sessionDirectory: unknown): (workdir: unknown, command?: string) => boolean {
+  let initialized = false, root: string | undefined, session: string | undefined
+  return (workdir, command) => {
     if (!initialized) {
       initialized = true
       try {
         if (typeof sessionDirectory !== "string" || !sessionDirectory) return false
-        root = realpathSync(execFileSync("git", ["rev-parse", "--show-toplevel"], {
-          cwd: sessionDirectory, encoding: "utf8", timeout: 10_000, stdio: ["ignore", "pipe", "ignore"],
+        session = realpathSync(sessionDirectory)
+        const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_")))
+        root = realpathSync(execFileSync("git", ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "rev-parse", "--show-toplevel"], {
+          cwd: session, env, encoding: "utf8", timeout: 10_000, stdio: ["ignore", "pipe", "ignore"],
         }).trim())
-      } catch { return false }
+      } catch { /* Non-repository sessions remain valid read-only workdirs. */ }
     }
-    if (!root || typeof sessionDirectory !== "string" || workdir !== undefined && (typeof workdir !== "string" || !workdir)) return false
-    try { return realpathSync(workdir === undefined ? sessionDirectory : resolve(sessionDirectory, workdir as string)) === root }
+    if (!session || workdir !== undefined && (typeof workdir !== "string" || !workdir)) return false
+    try {
+      const path = realpathSync(workdir === undefined ? session : resolve(session, workdir as string))
+      const receipts = lightReviewRoots(session)
+      if (receipts.worktrees.includes(path)) return typeof command === "string" && isLightReadOnlyShell(command)
+        && (!command.startsWith("git ") || command === "git rev-parse HEAD")
+      if (/^git status\b/.test(command ?? "") && !receipts.repos.includes(path)) return false
+      return path === session || path === root || receipts.repos.includes(path)
+    }
     catch { return false }
   }
 }
@@ -123,7 +132,38 @@ export function createLightShellWorkdirGuard(sessionDirectory: unknown): (workdi
 export function hasLightShellExpansion(command: string): boolean {
   const exactCommit = /^git cat-file -e (?:[a-f0-9]{40}\^\{commit\}|'[a-f0-9]{40}\^\{commit\}'|"[a-f0-9]{40}\^\{commit\}")$/.test(command)
   const remaining = exactCommit ? command.replace("^{commit}", "") : command
-  return /[{}()*?\[\]!^\\]/.test(remaining) || /(?:^|\s)["']?=/.test(remaining)
+  return /[{}()*?\[\]!^\\~;&|<>`$\n\r\t]/.test(remaining) || /(?:^|\s)["']?=/.test(remaining)
+}
+
+/** Closed command grammar, read by both hosts/checker before execution. Tokens
+ * are literal (balanced whole-token quotes only); command writers, helper/pager
+ * options and find's output/actions reject even under an authored wildcard allow.
+ * Unknown verbs/options with execution/output semantics fail toward deny. This
+ * supplements host scanners, not a shell interpreter; no model/config bypass. */
+export function isLightReadOnlyShell(command: string): boolean {
+  if (!command || hasLightShellExpansion(command)) return false
+  const tokens: string[] = []
+  let rest = command
+  while (rest) {
+    const match = /^(?:"([^"\n]*)"|'([^'\n]*)'|([^\s"']+))(?: +|$)/.exec(rest)
+    if (!match) return false
+    tokens.push(match[1] ?? match[2] ?? match[3]); rest = rest.slice(match[0].length)
+  }
+  const [verb, sub, ...args] = tokens
+  if (verb === "git") {
+    if (!["log", "show", "diff", "rev-parse", "ls-files", "remote", "merge-base", "cat-file", "status"].includes(sub)) return false
+    if (tokens.some(token => /^(?:--(?:output|ext-diff|textconv|exec-path|git-dir|work-tree|paginate|open-files-in-pager)(?:=|$)|-C|-c|-o)/.test(token))) return false
+    if (sub === "remote") return args.length === 0 || args.length === 1 && ["-v", "--verbose"].includes(args[0])
+      || args[0] === "get-url" && args.length === 2 && /^(?![-.])[A-Za-z0-9._-]+$/.test(args[1])
+    if (sub === "cat-file") return args.length === 2 && ["-e", "-t", "-p"].includes(args[0]) && !args[1].startsWith("-")
+    if (sub === "status") return args.length === 1 && args[0] === "--porcelain"
+    return true
+  }
+  if (verb === "date") return tokens.slice(1).every(token => token === "-u" || /^\+[^\s]+$/.test(token))
+  if (!["ls", "cat", "head", "tail", "wc", "rg", "grep", "find"].includes(verb)) return false
+  if (verb === "find" && tokens.some(token => /^-(?:exec(?:dir)?|delete|ok(?:dir)?|fprint.*|fls)$/.test(token))) return false
+  if (verb === "rg" && tokens.some(token => /^--(?:pre(?:-glob)?|search-zip|hostname-bin)(?:=|$)/.test(token) || token === "-z")) return false
+  return true
 }
 
 /**

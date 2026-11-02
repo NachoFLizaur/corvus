@@ -440,6 +440,15 @@ describe("prompt structure", () => {
     }
     expect(corpus[writer]).toContain("not an idempotency guarantee")
   })
+  test("writer descriptor permits an absolute located-root prefix only for the light PR artifact", () => {
+    const controls = requiredSection(readCorpus()[writer], "1. Validate Descriptor and Controls")
+    const absoluteLight = /light-class PR post request: the same PR root followed by `\/\.light\/post-request\.json`, optionally prefixed by an absolute repository root/
+    expect(controls).toMatch(absoluteLight)
+    expect(controls.replace("optionally prefixed by an absolute repository root", "relative paths only")).not.toMatch(absoluteLight)
+    expect(controls).toContain("session root or a repository root recorded by its in-process locate registry")
+    for (const token of ["pr<pr_number>", "excluding `.` and `..`", "Reject traversal", "backslashes", "digest"])
+      expect(controls).toContain(token)
+  })
   /** Oracle: every entry and sibling reference on disk, read before in-memory seeding.
    * Retired workflow tokens or a changed tool set fail independently of rollout flags;
    * no mode disables these corpus-wide checks and no probe writes prompt files. */
@@ -743,8 +752,8 @@ describe("prompt structure", () => {
         expect(evaluateRules(rules, "read", target)).toBe("allow")
         expect(evaluateRules(rules, "edit", target)).toBe(path === lightOrchestrator ? "deny" : "allow")
       }
-      expect(evaluateRules(rules, "shell", "git rev-parse HEAD")).toBe(path === lightOrchestrator ? "deny" : "allow")
-      expect(evaluateRules(rules, "shell", "git rev-parse --show-toplevel")).toBe(path === lightOrchestrator ? "deny" : "allow")
+      expect(evaluateRules(rules, "shell", "git rev-parse HEAD")).toBe("allow")
+      expect(evaluateRules(rules, "shell", "git rev-parse --show-toplevel")).toBe("allow")
       for (const target of ["/etc/passwd", "/home/user/.ssh/id_ed25519", "/home/user/.config/opencode/opencode.json",
         "/cache/opencode/packages-other/secret", "/cache/opencode2-other/secret", "/custom/config/opencode/agents/reviewer.md"]) {
         expect(evaluateRules(rules, "external_directory", target)).toBe(path === lightOrchestrator ? "deny" : "allow")

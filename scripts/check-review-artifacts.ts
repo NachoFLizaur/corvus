@@ -1092,28 +1092,13 @@ export function checkOrchestratorShell(tools: Tool[], input: Pick<Inputs, "fixtu
   const allowed = new Set(["gh auth status", `gh pr checkout ${input.pr} --repo ${input.owner}/${input.repo} --detach`,
     "git rev-parse HEAD", "date -u +%Y-%m-%dT%H:%M:%SZ", `shasum -a 256 ${reviewRoot(input)}/post-request.json`])
   if (input.agent === "light") {
-    // Packaged frontmatter is the capability oracle; this concrete inventory also
-    // binds PR/head/path/remote arguments to this run's evidence, not arbitrary text.
+    // The same closed read-only grammar as both hosts owns shell inventory.
     allowed.clear()
-    allowed.add("date -u +%Y-%m-%dT%H:%M:%SZ")
-    const root = reviewRoot(input)
-     for (const command of [`git ls-files -- ${root}/lock.yaml`, `git ls-files -- '${root}/lock.yaml'`, `git ls-files -- "${root}/lock.yaml"`, "git remote"]) allowed.add(command)
-    for (const head of validatedHeads.filter(head => /^[a-f0-9]{40}$/.test(head))) {
-      for (const expression of [`'${head}^{commit}'`, `"${head}^{commit}"`, `${head}^{commit}`]) allowed.add(`git cat-file -e ${expression}`)
-    }
-    for (const remote of ["origin", "github"]) for (const literal of [remote, `'${remote}'`, `"${remote}"`]) allowed.add(`git remote get-url ${literal}`)
-     const remotes = new Set(["origin", "github"])
-     for (const tool of tools.filter(tool => shell(tool) && tool.state.status === "completed" && text(tool.input.command) === "git remote")) {
-        for (const remote of lines(text(tool.state.output)).filter(remote => /^(?![-.])[A-Za-z0-9._-]+$/.test(remote))) remotes.add(remote)
-     }
-     for (const remote of remotes) for (const literal of [remote, `'${remote}'`, `"${remote}"`]) {
-       allowed.add(`git remote get-url ${literal}`)
-       for (const ref of [`pull/${input.pr}/head`, `'pull/${input.pr}/head'`, `"pull/${input.pr}/head"`]) {
-         allowed.add(`git fetch --no-tags ${literal} ${ref}`)
-       }
-    }
     const policy = buildFixedDenyPolicies().get("corvus-review-light")!
-    for (const command of allowed) if (isFixedDenied(policy, "shell", [command])) allowed.delete(command)
+    for (const tool of tools.filter(shell)) {
+      const command = text(tool.input.command)
+      if (!isFixedDenied(policy, "shell", [command])) allowed.add(command)
+    }
   }
   const forbidden = tools.filter(tool => shell(tool) && !allowed.has(text(tool.input.command)))
   return { check: "orchestrator GitHub reads", ok: !evidenceError && forbidden.length === 0, code: 5,
@@ -1456,8 +1441,9 @@ export function lightLocalOnlyRows(rows: Row[]): Row[] {
 export function lightRenderErrors(body: string, local = false, comments?: CandidateRequest["comments"], locator?: { owner: string; repo: string; pr: string }): string[] {
   const errors: string[] = []
   const content = body.split(/\r?\n/).slice(1).join("\n")
-  const title = local ? /^## Corvus Light Review — .+$/m : /^## Corvus Light Review — #\d+ .+$/m
-  if (!title.test(content) || !content.startsWith("## Corvus Light Review — ")) errors.push("missing literal opening heading")
+  const title = local ? /^## Review of .+$/m : /^## Review of #\d+ — .+$/m
+  if (!title.test(content) || !content.startsWith("## Review of ")) errors.push("missing literal opening heading")
+  if (/\blight\b/i.test(content)) errors.push("mode branding in posted body")
   if (!/^\*\*(COMMENT|REQUEST_CHANGES) · `[a-f0-9]{7}` · (\d+|null) files, \+(\d+|null)\/−(\d+|null) · Standards \d+ · Spec \d+ · inline \d+\*\*$/m.test(content)) errors.push("missing literal action/count line")
   const axes = [...content.matchAll(/^## (Standards|Spec)\n\*\*[^\n]+\*\* · [^\n]+$/gm)]
   if (axes.length !== 2 || axes[0]?.[1] !== "Standards" || axes[1]?.[1] !== "Spec"
@@ -1582,7 +1568,7 @@ export function lightNoNewFindings(history: RecordValue, head: string,
   const genuine = (review: RecordValue) => text(review.user).toLowerCase() === authenticatedLogin.toLowerCase()
     && !!parseReviewMarker(review.body)
   const latest = history.reviews.map(record).filter(review => genuine(review)
-    && /^## Corvus Light Review — /m.test(text(review.body))).sort((a, b) =>
+    && /^## Review of /m.test(text(review.body))).sort((a, b) =>
       text(a.submitted_at).localeCompare(text(b.submitted_at)) || Number(a.id) - Number(b.id)).at(-1)
   if (!latest || parseReviewMarker(latest.body)?.head !== head) return false
   const known = new Map<string, string>()
@@ -1805,10 +1791,12 @@ export async function checkLightAttempts(input: Inputs, events: RecordValue[], t
         || !previous && acquired && resolution.index > acquired.index) errors.push(`attempt ${index + 1}: namespace/inventory/history refresh invalid`)
       if ((!previous || base !== previous.base) && !tools.some(tool => tool.name === "corvus_review_pr" && tool.input.op === "config"
         && tool.input.owner === input.owner && tool.input.name === input.repo && tool.input.ref === base && tool.index > start && tool.index < dispatch.index)) errors.push(`attempt ${index + 1}: base config was not reloaded`)
-      const preparation = tools.filter(tool => shell(tool) && tool.index > start && tool.index < dispatch.index)
-      const fetch = preparation.findLast(tool => /^git fetch --no-tags /.test(text(tool.input.command)))
-      const verifyHead = preparation.findLast(tool => text(tool.input.command).startsWith("git cat-file -e ") && text(tool.input.command).includes(`${head}^{commit}`))
-      if (!fetch || !verifyHead || fetch.index > verifyHead.index || verifyHead.index < source.index) errors.push(`attempt ${index + 1}: missing per-head preparation evidence`)
+      const preparation = tools.findLast(tool => tool.name === "corvus_review_worktree" && tool.input.op === "create"
+        && tool.input.code_head === head && tool.index > source.index && tool.index < dispatch.index)
+      const located = tools.findLast(tool => tool.name === "corvus_review_worktree" && tool.input.op === "locate" && ok(tool) && tool.index < dispatch.index)
+      if (preparation && (!located || preparation.input.repo_root !== located.output.repo_root || preparation.input.owner !== input.owner
+        || preparation.input.name !== input.repo)) errors.push(`attempt ${index + 1}: create lacks located root/identity`)
+      if (!preparation && !disclosure(summary, "worktree")) errors.push(`attempt ${index + 1}: missing tool-owned preparation or disclosed gap`)
     }
     const history = tools.findLast(tool => tool.name === "corvus_review_verdict" && tool.index > start && tool.index < dispatch.index
       && !Object.hasOwn(tool.input, "code_head") && !Object.hasOwn(tool.input, "headSha"))
@@ -1842,23 +1830,24 @@ export async function checkLightAttempts(input: Inputs, events: RecordValue[], t
   const treeErrors: string[] = [], treeRows: Row[] = []
   const creates = treeCalls.filter(tool => tool.input.op === "create")
   const removals = treeCalls.filter(tool => tool.input.op === "remove")
-  const sameTuple = (a: Tool, b: Tool) => ["cwd", "pr", "code_head", "runId"].every(key => a.input[key] === b.input[key])
+  const sameTuple = (a: Tool, b: Tool) => ["repo_root", "owner", "name", "pr", "code_head", "runId"].every(key => a.input[key] === b.input[key])
   const worktreeLedgerMatches = (attempt: LightAttempt | undefined, path: string, cleanup: string) => !!attempt && summary.split(/\r?\n/).some(line =>
     new RegExp(`\\battempt[\\s\"_:=-]+${attempt.number}\\b`, "i").test(line)
       && isDeepStrictEqual(lightFieldValues(line, "worktree"), [path]) && isDeepStrictEqual(lightFieldValues(line, "cleanup"), [cleanup]))
   for (const call of treeCalls) {
-    if (!correlated(call) || !["create", "remove"].includes(text(call.input.op))) treeErrors.push("uncorrelated/unknown worktree call")
+    if (!correlated(call) || !["locate", "create", "remove"].includes(text(call.input.op))) treeErrors.push("uncorrelated/unknown worktree call")
   }
-  if ((local || !acquired) && treeCalls.length) treeErrors.push("worktree activity on LOCAL/pre-admission route")
+  if ((local || !acquired) && (creates.length || removals.length)) treeErrors.push("worktree activity on LOCAL/pre-admission route")
   for (const [index, create] of creates.entries()) {
     const attempt = attempts.find(attempt => create.index > attempt.metadata.index && create.index < attempt.firstDispatch.index
       && create.input.code_head === attempt.head)
-    const prepared = tools.findLast(tool => shell(tool) && tool.index < create.index
-      && text(tool.input.command).startsWith("git cat-file -e ") && text(tool.input.command).includes(`${text(create.input.code_head)}^{commit}`))
+    const located = tools.findLast(tool => tool.name === "corvus_review_worktree" && tool.input.op === "locate" && ok(tool)
+      && tool.index < create.index && tool.output.repo_root === create.input.repo_root
+      && tool.input.owner === create.input.owner && tool.input.name === create.input.name && tool.input.pr === create.input.pr)
     const previous = creates[index - 1]
     const previousRemoval = previous && removals.find(tool => tool.index > previous.index && tool.index < create.index && sameTuple(previous, tool) && ok(tool))
-    if (!acquired || !released || create.index <= acquired.index || create.index >= released.index || !prepared || prepared.index <= acquired.index
-      || !samePath(create.input.cwd, input.fixture) || create.input.pr !== Number(input.pr) || create.input.runId !== acquired.input.runId
+    if (!acquired || !released || create.index <= acquired.index || create.index >= released.index || !located
+      || !samePath(create.input.repo_root, input.fixture) || create.input.pr !== Number(input.pr) || create.input.runId !== acquired.input.runId
       || !attempt || creates.filter(tool => tool.index > attempt.metadata.index && tool.index < attempt.firstDispatch.index).length !== 1
       || previous && ok(previous) && !previousRemoval) treeErrors.push("create lacks acquired/prepared attempt or previous cleanup")
     if (index > 0 && (!fresh(statusBefore(create.index, previous?.index), 5400)
