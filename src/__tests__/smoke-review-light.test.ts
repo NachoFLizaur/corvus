@@ -34,6 +34,8 @@ test("light fixture keeps dirty sentinels and ignores unchanged until the model-
     INTAKE: "url", AGENT: "light", SMOKE_INTAKE: "url", SMOKE_OWNER: "owner", SMOKE_REPO: "repo", GIT_TRACE2_EVENT: "" }
   const setup = Bun.spawnSync(["bash", "-c", `set -euo pipefail\n${helpers}\nprepare_light_fixture\nprepare_sync_remotes\nlight_snapshot before\nlight_compare\nlight_push_probe`], { env, cwd: fixture })
   expect(setup.exitCode, setup.stderr.toString()).toBe(0)
+  expect(git("remote", "get-url", "github")).toBe("https://github.com/owner/repo")
+  expect(git("remote", "get-url", "origin")).toBe(join(work, "bare.git"))
   const before = JSON.parse(readFileSync(join(work, "light-before.json"), "utf8"))
   const after = JSON.parse(readFileSync(join(work, "light-after.json"), "utf8"))
   expect(before.head).not.toBe(head)

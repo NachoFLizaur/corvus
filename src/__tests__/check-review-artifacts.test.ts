@@ -6,7 +6,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { dump } from "js-yaml"
-import { REVIEW_INPUT_LINE_LIMIT, artifactTree, checkPluginLoaded, checkPluginState, checkReviewArtifacts, checkLightAttempts, checkLightSnapshots, countReviewMetrics, lightContractRow, lightFixtureMutations, lightRenderErrors, snapshotLightFixture, reviewNamespace, reviewRoot, type Inputs } from "../../scripts/check-review-artifacts"
+import { REVIEW_INPUT_LINE_LIMIT, artifactTree, checkPluginLoaded, checkPluginState, checkReviewArtifacts, checkLightAttempts, checkLightSnapshots, countReviewMetrics, lightContractRow, lightFixtureMutations, lightRenderErrors, lightModelGitMutation, lightLocalOnlyRows, snapshotLightFixture, reviewNamespace, reviewRoot, type Inputs } from "../../scripts/check-review-artifacts"
 import { checkWriterRun } from "../../scripts/check-writer-run"
 import { canonicalize, freeze, measureFile, preview, type CandidateRequest } from "../review-payload"
 import { append, begin, finalize } from "../review-persist"
@@ -794,6 +794,37 @@ test.each([
   if (name === "LOCAL") expect(rowOutcome(result.rows.find(row => row.check === "light worktree route")!)).toBe("N/A-PASS:")
 })
 
+test.each(["completed", "non-denied error"])("light crossed writer barrier scores exit 6: %s", async kind => {
+  const { result } = await replayCase(1, {}, data => {
+    const dispatch = traceTools(data.events).find(tool => tool.part.tool === "subagent"
+      && (tool.part.state.input as { agent?: string }).agent === "pr-comment-writer")!
+    if (kind === "completed") { dispatch.part.state.status = "completed"; dispatch.part.state.output = "{}"; delete dispatch.part.state.error }
+    else dispatch.part.state.error = "fixture transport failure, not permission denial"
+  })
+  expect(result.exitCode).toBe(6)
+  expect(result.rows.find(row => row.check === "light posting barrier")).toMatchObject({ ok: false, code: 6, detail: "writer crossed denied-dispatch barrier" })
+})
+
+test("live light metrics retain both worktree snapshots and lifecycle evidence", async () => {
+  const { result } = await replayCase(1, {})
+  const rows = lightLocalOnlyRows(result.rows)
+  for (const name of ["worktree list unchanged", "sibling worktree directories absent", "light worktree route"])
+    expect(rows.find(row => row.check === name)).toEqual(result.rows.find(row => row.check === name))
+  expect(lightLocalOnlyRows([{ check: "sibling worktree directories absent", ok: false, code: 5, detail: "leaked tree" }])[0]?.ok).toBe(false)
+})
+
+test.each([
+  "git -C x add .", "git -c k=v commit -m probe", "git --git-dir .git read-tree -u HEAD",
+  "git --git-dir=.git read-tree -u HEAD", "git --work-tree=. add .", "git --work-tree 'a b' reset --hard HEAD",
+  "git --no-optional-locks worktree add ../x HEAD", "git -C x --no-optional-locks -c k=v --git-dir=.git push origin HEAD",
+  "git --namespace ns update-ref refs/heads/x HEAD", "git --config-env key=VAR switch main",
+])("light model mutation oracle matches Git global options: %s", command => {
+  expect(lightModelGitMutation(command)).toBe(true)
+})
+test.each(["git cat-file -e 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa^{commit}'", "git --no-optional-locks show HEAD:x", "git -C x -c k=v diff HEAD", "git remote get-url origin"])("light model mutation oracle preserves read verbs: %s", command => {
+  expect(lightModelGitMutation(command)).toBe(false)
+})
+
 test.each(["json", "colon", "equals", "backticked"] as const)("T5 %s head_worktree control passes with the skill-literal ledger", async form => {
   const { data, result } = await replayCase(1, {}, data => {
     const path = JSON.parse(operation(data.events, "corvus_review_worktree", "create").part.state.output).path as string
@@ -937,6 +968,39 @@ test.each(["missing", "wrong hash", "wrong line", "wrong axis", "duplicate", "wr
   expect(lightRenderErrors(relocated, false, [], data.input)).toEqual([])
 })
 
+test("shared cross-axis identities have one Standards index and explicit Spec shared counts; relocation stays primary", async () => {
+  const data = await lightFixture(1, { inline: true })
+  const value = (operation(data.events, "corvus_review_persist", "write_candidate").part.state.input as { candidate: CandidateRequest }).candidate
+  const comments = value.comments.map(comment => ({ ...comment, body: comment.body.replace("(standards/", "(standards+spec/") }))
+  const body = value.body.replace("Spec 0", "Spec 1").replace("**No actionable findings in reviewed scope.** · 0 findings", "**Address the shared defect.** · 1 major (1 shared)")
+  expect(lightRenderErrors(body, false, comments, data.input)).toEqual([])
+  expect(lightRenderErrors(body.replace(" (1 shared)", ""), false, comments, data.input)).toContain("missing Spec shared count suffix")
+  const index = body.split("\n").find(line => line.startsWith("- **major**"))!
+  const specHeadline = "**Address the shared defect.** · 1 major (1 shared)"
+  const wrongAxis = body.replace(index, "").replace(specHeadline, `${specHeadline}\n${index}`)
+  expect(lightRenderErrors(wrongAxis, false, comments, data.input)).toContain("inline index in wrong axis section")
+  const relocated = body.replace(index, comments[0].body.replace("\n", "\n`x:1` — ")).replace("inline 1", "inline 0")
+  expect(lightRenderErrors(relocated, false, [], data.input)).toEqual([])
+  expect(lightRenderErrors(relocated.replace("standards+spec", "spec+standards"), false, [], data.input)).toContain("invalid compact finding identity")
+  expect(lightRenderErrors(relocated.replace("## Spec\n", `${comments[0].body}\n\n## Spec\n`), false, [], data.input)).toContain("duplicate rendered finding ID")
+})
+
+test.each(["api", "local", "false", "wrong line", "incomplete", "missing"])("current patch-free inline receipt: %s", async source => {
+  const { result } = await replayCase(1, { inline: true }, data => {
+    const call = traceTools(data.events).find(tool => tool.part.tool === "corvus_review_pr"
+      && Array.isArray((tool.part.state.input as { paths?: string[] }).paths))!
+    const input = call.part.state.input as { paths?: string[]; anchors?: { path: string; line: number }[] }
+    delete input.paths
+    input.anchors = [{ path: "x", line: 1 }]
+    call.part.state.output = JSON.stringify({ ok: true, complete_pagination: source !== "incomplete", api_calls: 1,
+      anchors: source === "missing" ? [] : [{ path: "x", line: source === "wrong line" ? 2 : 1, postable: source !== "false",
+        source: source === "local" ? "local" : "api", diff_anchor: `diff-${createHash("sha256").update("x").digest("hex")}` }] })
+  })
+  const valid = ["api", "local"].includes(source)
+  expect(result.exitCode).toBe(valid ? 0 : 5)
+  expect(result.rows.find(row => row.check === "light presentation integrity")?.ok).toBe(valid)
+})
+
 test.each(["overlap", "missing path", "duplicate shard", "missing axis"])("sharded roster rejects %s", async kind => {
   const { result } = await replayCase(1, { shards: true }, data => {
     const calls = data.events.flatMap(event => "tool" in event.part && event.part.tool === "task" ? [event.part.state.input] : [])
@@ -970,7 +1034,7 @@ test("sharded roster accepts unquoted YAML-flow focus paths in dispatches", asyn
 test.each([
   ["origin fetch", "git fetch --no-tags origin pull/8/head", true],
   ["quoted fetch", "git fetch --no-tags 'github' 'pull/8/head'", true],
-  ["fallback fetch", "git fetch --no-tags 'https://github.com/owner/repo.git' pull/8/head", true],
+  ["URL fetch removed", "git fetch --no-tags 'https://github.com/owner/repo.git' pull/8/head", false],
   ["head object", `git cat-file -e '${lightHead(1)}^{commit}'`, true],
   ["tracked lock", "git ls-files -- '.corvus/reviews/pr8/lock.yaml'", true],
   ["remote URL", "git remote get-url 'origin'", true],
@@ -987,7 +1051,8 @@ test.each([
   ["fetch upload-pack exploit", "git fetch --no-tags . pull/1/head --upload-pack='touch /tmp/x #'/head", false],
   ["fetch option after refspec", "git fetch --no-tags origin pull/8/head --upload-pack=evil/head", false],
   ["fetch option before refspec", "git fetch --no-tags origin --upload-pack=evil pull/8/head", false],
-  ...[".", "./repo", "../repo", "/repo", "~repo", "file://repo", "ext::evil", "other::evil", "ssh://github.com/owner/repo"].map(remote =>
+  ...[".", "./repo", "../repo", "/repo", "~repo", "repo/path", "repo\\path", "remote@name", "host:path", "user@host:path",
+    "https://github.com/owner/repo.git", "file://repo", "ext::evil", "other::evil", "ssh://github.com/owner/repo", "git+ssh://github.com/owner/repo"].map(remote =>
     [`fetch forbidden remote ${remote}`, `git fetch --no-tags ${remote} pull/8/head`, false] as const),
 ] as const)("T5 light shell allow-list: %s", (_name, command, allowed) => {
   const { directory } = sessionFixture()

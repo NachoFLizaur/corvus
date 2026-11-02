@@ -5,6 +5,20 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.11.0-beta.6 — 2026-11-02
+
+### Changed
+
+- Light synthesis merges cross-axis findings only for the same defect, retaining the first ID, highest severity/confidence and both axis attributions. Shared findings appear once under Standards and are counted once in each axis with Spec shared counts; full-review axis separation is unchanged.
+- PR title/body/description findings stay body-only with intent-source attribution, never attached to an unrelated code line. The structural read-through now includes the mandatory skill load: 21 turns, not a live measurement.
+
+### Fixed
+
+- The writer accepts tool-verified API and local-diff anchors equally. Patchless renamed files remain body-only instead of receiving misleading new-path-only local anchors.
+- Worktree raw-blob batches use object sizes and framing bytes against the 64 MiB output budget. An oversized single blob returns an explicit fallback diagnostic before worktree creation.
+- Light checker scoring treats crossed writer denies as posting-barrier exit 6, recognizes Git global options in model mutation attempts and retains worktree snapshot evidence in live metrics.
+- Light fetch accepts only validated named remotes matching the PR owner/repository; the HTTPS-URL fallback is removed. Both hosts deny colon, slash/backslash and `@` remote tokens (including bare `host:path`), leading dot/hyphen/tilde, options and trailing arguments. With no matching named remote, light discloses the gap and uses GitHub API reads / available objects without fetch or worktree creation. SSH-configured named remotes remain usable, correcting beta.5's broad transport claim.
+
 ## 0.11.0-beta.5 — 2026-11-02
 
 ### Changed

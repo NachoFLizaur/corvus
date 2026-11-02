@@ -382,7 +382,8 @@ describe("review PR tool-verified RIGHT anchors", () => {
       if (argv[0] === "gh") {
         if (argv.includes(`${endpoint}/files`)) {
           listings++
-          return success(JSON.stringify(mode === "listing-moved" && listings === 2 ? [] : [{ ...binary, filename: ":(glob)*.ts", status }]))
+           return success(JSON.stringify(mode === "listing-moved" && listings === 2 ? [] : [{ ...binary, filename: ":(glob)*.ts", status,
+             ...(mode === "previous-filename" ? { previous_filename: "old.ts" } : {}) }]))
         }
         snapshots++
         return success(JSON.stringify(mode === "head-moved" && snapshots === 2 ? { ...prIdentity, head: { sha: "d".repeat(40) } }
@@ -421,6 +422,13 @@ describe("review PR tool-verified RIGHT anchors", () => {
     const result = await files({ ...locator, paginate: true, anchors: [{ path: ":(glob)*.ts", line: 2 }] }, { exec })
     expect(result).toMatchObject({ ok: true, anchors: [{ postable: false, reason: "no-patch", source: "api" }] })
     if (["missing", "sha-mismatch", "wrong-pr"].includes(mode)) expect(calls.some(call => call.argv.includes("diff"))).toBe(false)
+  })
+
+  test.each([["success", "renamed"], ["previous-filename", "modified"]])("patchless rename provenance (%s/%s) never verifies new-path-only hunks", async (mode, status) => {
+    const { exec, calls } = localExec(mode, status)
+    const result = await files({ ...locator, paginate: true, anchors: [{ path: ":(glob)*.ts", line: 2 }] }, { exec })
+    expect(result).toMatchObject({ ok: true, anchors: [{ postable: false, reason: "no-patch", source: "api" }], api_calls: 1 })
+    expect(calls.some(call => call.argv[0] === "git")).toBe(false)
   })
 
   test("patchless unfiltered/paths output is byte-identical and performs no fallback I/O", async () => {

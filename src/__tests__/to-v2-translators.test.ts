@@ -4,6 +4,7 @@ import { agentDir, root } from "../paths"
 import { toV2Agent } from "../to-v2-agent"
 import { renameAction, toV2Permissions } from "../to-v2-permissions"
 import { evaluateRules } from "../evaluate-rules"
+import { LIGHT_BASH_MAP, LIGHT_BASH_DENIES, LIGHT_TASK_MAP } from "./fixtures/review-light"
 
 /**
  * Translator contract tests (task 06).
@@ -152,15 +153,15 @@ describe("toV2Permissions", () => {
       const leaf = ["pr-context-gatherer", "pr-comment-writer", "pr-code-reviewer", "security-reviewer", "pr-light-reviewer"].includes(name)
       const autonomous = ["corvus-auto", "corvus-review-auto", "corvus-review-light"].includes(name)
       expect(rules[0]).toEqual({ action: "*", resource: "*", effect: "allow" })
-      expect(rules).toHaveLength(1 + (orchestrator ? 11 : light ? 53 : 0) + (leaf ? 2 : 0) + (autonomous ? 1 : 0))
-      expect(rules.filter(rule => rule.effect === "deny")).toHaveLength((orchestrator ? 10 : light ? 41 : 0) + (leaf ? 2 : 0) + (autonomous ? 1 : 0))
+      expect(rules).toHaveLength(1 + (orchestrator ? 11 : light ? Object.keys(LIGHT_BASH_MAP).length + 3 + Object.keys(LIGHT_TASK_MAP).length : 0) + (leaf ? 2 : 0) + (autonomous ? 1 : 0))
+      expect(rules.filter(rule => rule.effect === "deny")).toHaveLength((orchestrator ? 10 : light ? LIGHT_BASH_DENIES.length + 4 : 0) + (leaf ? 2 : 0) + (autonomous ? 1 : 0))
       if (!orchestrator && !light) {
         expect(shell).toEqual([])
         continue
       }
       expect(shell[0]).toEqual({ action: "shell", resource: "*", effect: light ? "deny" : "allow" })
       expect(shell).toEqual(Object.entries(corpus[name].permission!.bash as ShellPolicy).map(([resource, effect]) => ({ action: "shell", resource, effect })))
-      expect(shell).toHaveLength(light ? 47 : 11)
+      expect(shell).toHaveLength(light ? Object.keys(LIGHT_BASH_MAP).length : 11)
     }
   })
 

@@ -157,11 +157,12 @@ context/treeEntries/populate/worktree).
   shard reviews every eligible assigned hunk; only generated/vendor/lock/binary/snapshot/minified
   content is omitted with reasons, and risk focus/sampling require unavailable evidence. Union
   findings per axis and deduplicate same-path, overlapping-line, same-dimension/title-intent copies,
-  keeping higher severity/confidence without disclosure. Each inline gets one linked axis-index
+  then light-only cross-axis copies with the same root cause/fix (exception to ADR-0001; full review unchanged),
+  keeping first ID, highest severity/confidence and both axes, indexed once under Standards with Spec shared counts. Each inline gets one linked axis-index
   line from tool-verified `anchors` results' `diff_anchor` (`diff-` + sha256(path)) and exact RIGHT coordinates;
   relocation replaces its index with the unchanged compact body finding, because the body must
   expose every finding without duplicating inline detail. LOCAL has no links. Light acquisition
-  rejects `force: true` on both hosts and fixed denies add 29 Git/gh mutation patterns, because
+  rejects `force: true` on both hosts and uses default-deny shell and child-dispatch allowlists, because
   held-lock ownership and the no-delivery authority boundary must survive config overrides
   (`src/review-lock.ts`, `agent/corvus-review-light.md`, `src/__tests__/fixtures/review-light.ts`).
 - Each shard has no fixed file/changed-line/shard maxima, review time limit or supplementary-read
@@ -176,7 +177,13 @@ context/treeEntries/populate/worktree).
   Format; `skill/corvus-review-light/SKILL.md`, step 5).
 - PR mode creates one disposable detached sibling worktree after successful lock acquisition
   and head-object preparation, because navigable exact-head files answer the user's request
-  without changing their checkout. Only `corvus_review_worktree`, callable by the light identity
+  without changing their checkout. Fetch uses only a validated named remote whose get-url
+  matches the PR owner/repository, because dropping the HTTPS fallback lets both hosts deny
+  every remote token containing colon, slash/backslash or @, or starting with dot, hyphen or
+  tilde, including bare scp-style host:path. SSH-configured named remotes remain usable.
+  No matching named remote skips fetch/worktree creation with a disclosed GitHub API /
+  available-object fallback (`agent/corvus-review-light.md`; light skill, step 4).
+  Only `corvus_review_worktree`, callable by the light identity
   on both hosts, owns create/remove. It derives the canonical sibling path from trusted session
   cwd, validated PR/code_head/runId (`runid6` = SHA-256(runId) prefix); the skill uses the returned
   path verbatim, never a PR-selected cwd. Raw-blob population avoids hooks/filter execution,
@@ -316,7 +323,7 @@ coverage accounts do not prove that every consequential defect was found or esta
 the light class and its namespace locks; compact tool-verified anchors and the shared writer's
 primary verification path preserve unfiltered/paths-only output. Both axis instances
 use the same identity/model override. Advisory light size settings do not change full-pipeline
-large-PR semantics. The 20-turn read-through target is structural, not a live measurement.
+large-PR semantics. The 21-turn read-through target includes the mandatory skill load and is structural, not a live measurement.
 
 ## Verification
 

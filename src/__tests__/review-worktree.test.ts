@@ -207,6 +207,47 @@ describe("tool-owned review worktree", () => {
     expect(reads).toBe(0)
   })
 
+  test.each(["split", "oversized", "tree-budget"] as const)("raw blob byte budget: %s", async mode => {
+    const f = fixture()
+    try {
+      const cap = 64 * 1024 * 1024
+      const sizes = mode === "split" ? [cap / 2, cap / 2] : mode === "oversized" ? [cap] : Array.from({ length: 9 }, () => cap / 2)
+      const objects = sizes.map((size, index) => ({ sha: String(index + 1).repeat(40), size, path: `blob-${index}` }))
+      const batches: number[] = []
+      let additions = 0
+      const exec: WorktreeExec = async (argv, options) => {
+        if (argv.includes("ls-tree")) return { code: 0, stdout: Buffer.from(objects.map(entry =>
+          `100644 blob ${entry.sha}${argv.includes("-l") ? ` ${entry.size}` : ""}\t${entry.path}\0`).join("")), stderr: "" }
+        if (argv.includes("--batch")) {
+          const selected = options.input!.toString().trim().split("\n").map(sha => objects.find(entry => entry.sha === sha)!)
+          const bytes = selected.reduce((sum, entry) => sum + entry.size + Buffer.byteLength(`${entry.sha} blob ${entry.size}\n`) + 1, 0)
+          if (bytes > options.maxBytes) throw new Error("fixture output-limit")
+          batches.push(bytes)
+          return { code: 0, stdout: Buffer.concat(selected.flatMap(entry => [Buffer.from(`${entry.sha} blob ${entry.size}\n`), Buffer.alloc(entry.size, 1), Buffer.from("\n")])), stderr: "" }
+        }
+        if (argv.includes("add")) additions++
+        const result = spawnSync(argv[0], argv.slice(1), { cwd: options.cwd, env: options.env, input: options.input })
+        return { code: result.status ?? 1, stdout: result.stdout, stderr: result.stderr.toString() }
+      }
+      const before = f.snapshot(), tool = createWorktreeExecutor({ cwd: f.repo, exec })
+      const result = await run(tool, f.input)
+      if (mode === "split") {
+        expect(result).toMatchObject({ ok: true, populated_files: 2 })
+        expect(batches).toHaveLength(2) // Payload sum is exactly 64 MiB; framing requires two calls.
+        expect(batches.every(bytes => bytes <= cap)).toBe(true)
+        expect(lstatSync(join(f.path, "blob-0")).size).toBe(cap / 2)
+        expect((await run(tool, { ...f.input, op: "remove" })).ok).toBe(true)
+      } else {
+        expect(result).toMatchObject({ ok: false, reason: mode === "oversized" ? "blob-too-large" : "tree-too-large" })
+        if (mode === "oversized") expect(result.message).toContain(`blob-0: ${cap} blob bytes`)
+        expect(additions).toBe(0)
+        expect(batches).toEqual([])
+        expect(existsSync(f.path)).toBe(false)
+      }
+      expect(f.snapshot()).toEqual(before)
+    } finally { f.dispose() }
+  })
+
   test("a host executor that never resolves is bounded by the operation deadline", async () => {
     const tool = createWorktreeExecutor({ timeoutMs: 10, exec: async () => new Promise(() => {}) })
     expect(await run(tool, { op: "create", pr: 1, code_head: "a".repeat(40), runId: "run" })).toMatchObject({ ok: false, reason: "timeout" })
@@ -218,7 +259,7 @@ describe("tool-owned review worktree", () => {
       let additions = 0
       const exec: WorktreeExec = async (argv, options) => {
         if (argv.includes("add")) additions++
-        if (argv.includes("ls-tree")) return { code: 0, stdout: Buffer.from(`100644 blob ${"a".repeat(40)}\t${path}\0`), stderr: "" }
+        if (argv.includes("ls-tree")) return { code: 0, stdout: Buffer.from(`100644 blob ${"a".repeat(40)} 0\t${path}\0`), stderr: "" }
         const result = spawnSync(argv[0], argv.slice(1), { cwd: options.cwd, env: options.env, input: options.input })
         return { code: result.status ?? 1, stdout: result.stdout, stderr: result.stderr.toString() }
       }

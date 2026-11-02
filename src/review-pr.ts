@@ -400,15 +400,20 @@ async function listing<T>(endpoint: string, context: Context, project: (value: u
   }
 }
 
+// Keep rename provenance internal: public files output is unchanged, but a
+// new-path-only diff cannot verify GitHub's rename hunks.
+const renamedFiles = new WeakSet<PrFile>()
 function file(value: unknown): PrFile {
   const item = record(value)
   if (item.patch !== undefined && typeof item.patch !== "string") return fail("invalid-response")
-  return {
+  const projected: PrFile = {
     filename: string(item.filename), status: string(item.status),
     additions: count(item.additions), deletions: count(item.deletions),
     has_patch: typeof item.patch === "string",
     ...(typeof item.patch === "string" ? { patch: item.patch } : {}),
   }
+  if (Object.hasOwn(item, "previous_filename")) renamedFiles.add(projected)
+  return projected
 }
 
 const diffAnchor = (path: string): string => `diff-${createHash("sha256").update(path).digest("hex")}`
@@ -484,13 +489,16 @@ function verifyAnchors(anchors: PrAnchor[], items: PrFile[], complete: boolean, 
  * before anchor decisions. Exact commit resolution and stable SHAs are required;
  * missing objects, movement, malformed/truncated output or Git failure leaves
  * no-patch, never a guessed anchor. Only complete listings with requested patchless
- * files enable this route; paths-only/unfiltered reads never invoke it. Git controls
+ * non-renamed files enable this route; renamed/previous_filename records retain
+ * no-patch because a new-path-only diff loses rename pairing. Paths-only/unfiltered
+ * reads never invoke it. Git controls
  * are scrubbed before exec, replacement/lazy-fetch disabled and literal pathspecs
  * plus no external diff/textconv keep PR paths/config out of execution. No bypass. */
 async function localAnchorPatches(target: Target, context: Context, items: PrFile[], complete: boolean): Promise<Map<string, string>> {
   const patches = new Map<string, string>()
   const requested = new Set(target.anchors?.map(anchor => anchor.path))
-  const missing = items.filter(item => requested.has(item.filename) && needsLocalPatch(item))
+  const missing = items.filter(item => requested.has(item.filename) && needsLocalPatch(item)
+    && item.status !== "renamed" && !renamedFiles.has(item))
   if (!complete || !missing.length) return patches
   try {
     const identity = async () => {
@@ -505,7 +513,7 @@ async function localAnchorPatches(target: Target, context: Context, items: PrFil
     const fresh = await listing(`${target.endpoint}/files`, context, file)
     if (!fresh.complete || missing.some(item => !fresh.items.some(current => current.filename === item.filename
       && current.status === item.status && current.additions === item.additions && current.deletions === item.deletions
-      && needsLocalPatch(current)))) return patches
+      && needsLocalPatch(current) && current.status !== "renamed" && !renamedFiles.has(current)))) return patches
     const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_")))
     Object.assign(env, { GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", GIT_NO_REPLACE_OBJECTS: "1",
       GIT_NO_LAZY_FETCH: "1", GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0", GIT_LITERAL_PATHSPECS: "1" })

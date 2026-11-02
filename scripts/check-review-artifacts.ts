@@ -1102,7 +1102,7 @@ export function checkOrchestratorShell(tools: Tool[], input: Pick<Inputs, "fixtu
       for (const expression of [`'${head}^{commit}'`, `"${head}^{commit}"`, `${head}^{commit}`]) allowed.add(`git cat-file -e ${expression}`)
     }
     for (const remote of ["origin", "github"]) for (const literal of [remote, `'${remote}'`, `"${remote}"`]) allowed.add(`git remote get-url ${literal}`)
-     const remotes = new Set(["origin", "github", `https://github.com/${input.owner}/${input.repo}.git`])
+     const remotes = new Set(["origin", "github"])
      for (const tool of tools.filter(tool => shell(tool) && tool.state.status === "completed" && text(tool.input.command) === "git remote")) {
         for (const remote of lines(text(tool.state.output)).filter(remote => /^(?![-.])[A-Za-z0-9._-]+$/.test(remote))) remotes.add(remote)
      }
@@ -1427,6 +1427,26 @@ export function checkPluginLoaded(input: Pick<Inputs, "host" | "hostlog" | "agen
 type LightAttempt = { number: number; head: string; base: string; firstDispatch: Tool; dispatch: Tool; dispatches: Tool[]; metadata: Tool; end: number }
 type LightPresentation = { attempt: LightAttempt; producer: Tool; value: RecordValue; frozen?: Tool; preview?: Tool; digest?: string }
 
+/** Stopped-host shell text, including denied attempts, is the oracle before
+ * scoring. Skip Git global flags and their literal values, not arbitrary words;
+ * read verbs such as cat-file never count as mutations. No disclosure exempts an
+ * attempt; missing host evidence fails at the row consumer. Light-only. */
+export function lightModelGitMutation(command: string): boolean {
+  const value = `(?:'[^']*'|"[^"]*"|[^\\s]+)`
+  const options = `(?:(?:-C|-c|--git-dir|--work-tree|--namespace|--config-env)\\s+${value}\\s+|-[^\\s]+\\s+)*`
+  return new RegExp(`\\bgit\\s+${options}(?:add|commit|push|checkout|switch|branch|update-ref|update-index|reset|restore|stash|rm|worktree|read-tree)\\b`, "i").test(command)
+}
+
+/** Keep live metrics' local-isolation evidence, including both saved worktree
+ * snapshot rows and lifecycle routing. Read scored rows before serialization;
+ * missing/failed rows stay visible to metrics consumers, never become passes. */
+export function lightLocalOnlyRows(rows: Row[]): Row[] {
+  return rows.filter(row => ["sentinel bytes/index unchanged", "branch/HEAD unchanged", "ignore files unchanged", "zero local state commits",
+    "remote refs unchanged", "mixed full push excludes light", "state commit scope", "state commit count", "Git push isolation", "light class isolation",
+    "model shell pushes", "light model Git mutations", "light worktree route", "worktree list unchanged", "sibling worktree directories absent",
+    "lock released", "LOCAL no writer", "LOCAL no posting tools", "LOCAL terminal summary"].includes(row.check))
+}
+
 /** The frozen/posted body is read before scoring, never reconstructed to bless it.
  * These expressions mirror the skill's sole literal template; its extracted,
  * instantiated template is a regression oracle. Missing structure fails closed.
@@ -1448,14 +1468,14 @@ export function lightRenderErrors(body: string, local = false, comments?: Candid
   if (/minor[^\n]*(?:counted (?:but|not)|not detailed|overflow|details? (?:cap|omitted))|(?:counted (?:but|not)|not detailed|overflow)[^\n]*minor/i.test(limits[1] ?? "")) errors.push("count-only minor presentation retained")
   if (/reviewed from (?:local )?git objects/i.test(limits[1] ?? "")) errors.push("unsupported object-only review wording")
   if (limits.length > 2 || limits.length === 2 && (lines(limits[1]).length > 3 || lines(limits[1]).some(line => !/^- \S/.test(line)))) errors.push("Review limits exceeds three factual bullets")
-  const findingLines = [...content.matchAll(/^\*\*.*\*\* \((?:standards|spec)\/[^\n]*$/gm)]
+  const findingLines = [...content.matchAll(/^\*\*.*\*\* \((?:standards|spec)(?:\+(?:standards|spec))?\/[^\n]*$/gm)]
   for (const [index, finding] of findingLines.entries()) {
     const line = finding[0]
-    if (!/^\*\*(?:blocker|critical|major|minor|praise|thought|note)\*\* \((standards|spec)\/(architecture|correctness|conventions|security), (?:ls|lsp)[1-9]\d*-(?:arch|logic|conv|sec)-(?:standards|spec)-\d{3}\): \S.{0,79}$/.test(line)) errors.push("invalid compact finding identity")
-    const axis = /\((standards|spec)\//.exec(line)?.[1]
+    if (!/^\*\*(?:blocker|critical|major|minor|praise|thought|note)\*\* \((standards(?:\+spec)?|spec)\/(architecture|correctness|conventions|security), (?:ls|lsp)[1-9]\d*-(?:arch|logic|conv|sec)-(?:standards|spec)-\d{3}\): \S.{0,79}$/.test(line)) errors.push("invalid compact finding identity")
+    const axis = /\((standards|spec)(?:\+spec)?\//.exec(line)?.[1]
     const position = finding.index, standards = axes[0]?.index ?? Infinity, spec = axes[1]?.index ?? Infinity
     if (axis === "standards" ? position < standards || position > spec : position < spec) errors.push("finding in wrong axis section")
-    if (index > 0 && findingLines[index - 1][0].includes(`(${axis}/`) && !/\n[\t ]*\n$/.test(content.slice(0, position))) errors.push("consecutive body findings lack blank-line separation")
+    if (index > 0 && findingLines[index - 1][0].includes(`(${axis}`) && !/\n[\t ]*\n$/.test(content.slice(0, position))) errors.push("consecutive body findings lack blank-line separation")
   }
   const indexes = [...content.matchAll(/^- \*\*([^\n]+?)\*\* · \[`([^`\n]+)`\]\(([^\n]+?)\) — ([^\n]+)$/gm)]
   if (local && indexes.length) errors.push("LOCAL has inline index links")
@@ -1466,7 +1486,7 @@ export function lightRenderErrors(body: string, local = false, comments?: Candid
   if (comments) {
     const matched = new Set<number>()
     for (const comment of comments) {
-      const identity = /^\*\*(blocker|critical|major|minor|praise|thought|note)\*\* \((standards|spec)\/(?:architecture|correctness|conventions|security), ((?:ls|lsp)[1-9]\d*-(?:arch|logic|conv|sec)-(?:standards|spec)-\d{3})\): (\S.{0,79})$/m.exec(comment.body)
+      const identity = /^\*\*(blocker|critical|major|minor|praise|thought|note)\*\* \((standards(?:\+spec)?|spec)\/(?:architecture|correctness|conventions|security), ((?:ls|lsp)[1-9]\d*-(?:arch|logic|conv|sec)-(?:standards|spec)-\d{3})\): (\S.{0,79})$/m.exec(comment.body)
       if (!identity || comment.side !== "RIGHT") { errors.push("invalid inline finding identity/side"); continue }
       const start = comment.start_line ?? comment.line
       const location = `${comment.path}:${start === comment.line ? start : `${start}–${comment.line}`}`
@@ -1477,11 +1497,20 @@ export function lightRenderErrors(body: string, local = false, comments?: Candid
       if (matches.length !== 1 || matched.has(matches[0])) { errors.push("inline finding lacks unique exact index link"); continue }
       matched.add(matches[0])
       const position = indexes[matches[0]].index
-      if (identity[2] === "standards" ? position < (axes[0]?.index ?? Infinity) || position > (axes[1]?.index ?? Infinity) : position < (axes[1]?.index ?? Infinity)) errors.push("inline index in wrong axis section")
+      if (identity[2].startsWith("standards") ? position < (axes[0]?.index ?? Infinity) || position > (axes[1]?.index ?? Infinity) : position < (axes[1]?.index ?? Infinity)) errors.push("inline index in wrong axis section")
       if (findingLines.some(finding => finding[0].includes(`, ${identity[3]}):`))) errors.push("inline finding detail duplicated in body")
     }
     if (matched.size !== indexes.length) errors.push("unmatched inline index link")
   }
+  // Light alone has shared findings: one Standards-primary detail/index, counted
+  // once in each axis with Spec's explicit shared suffix. Raw detector rosters
+  // remain axis-local; full-review rendering never calls this predicate.
+  const shared = findingLines.filter(finding => finding[0].includes("(standards+spec/")).length
+    + (comments?.filter(comment => /^\*\*[^\n]+\*\* \(standards\+spec\//m.test(comment.body)).length ?? 0)
+  if (shared && !new RegExp(`\\(${shared} shared\\)$`).test(axes[1]?.[0] ?? "")) errors.push("missing Spec shared count suffix")
+  const ids = [...findingLines.map(finding => finding[0]), ...(comments?.map(comment => comment.body.split(/\r?\n/)[0]) ?? [])]
+    .flatMap(line => /, ((?:ls|lsp)[1-9]\d*-(?:arch|logic|conv|sec)-(?:standards|spec)-\d{3})\):/.exec(line)?.[1] ?? [])
+  if (new Set(ids).size !== ids.length) errors.push("duplicate rendered finding ID")
   return errors
 }
 
@@ -1777,12 +1806,24 @@ export async function checkLightAttempts(input: Inputs, events: RecordValue[], t
       if (!marker || marker.head !== attempt.head || (marker.path ? marker.path !== relativeRoot || !ok(history) || marker.round !== history?.output.round : ok(history) || !disclosure(summary, "round", diagnostic(history)))) throw new Error("attempt marker/history mismatch")
        const renderErrors = lightRenderErrors(text(value.body), local, value.comments as CandidateRequest["comments"], input)
         if (renderErrors.length) throw new Error(renderErrors.join("; "))
-      for (const path of new Set((value.comments as CandidateRequest["comments"]).map(comment => comment.path))) {
+      for (const comment of value.comments as CandidateRequest["comments"]) {
+        const path = comment.path
         const anchor = `diff-${createHash("sha256").update(path).digest("hex")}`
+        // Current light uses patch-free anchors; legacy paths receipts remain
+        // readable for recorded fixtures. Exact requested controls, complete
+        // pagination and tool postability precede acceptance of API/local links.
+        const sameAnchor = (item: unknown) => {
+          const value = record(item)
+          return value.path === path && value.line === comment.line && value.start_line === comment.start_line
+        }
         const receipt = tools.findLast(tool => prCall(tool, "files") && correlated(tool) && ok(tool)
           && tool.index > attempt.dispatch.index && tool.index < producer.index && tool.input.paginate === true
-          && Array.isArray(tool.input.paths) && tool.input.paths.includes(path) && tool.output.complete_pagination === true
-          && Array.isArray(tool.output.files) && tool.output.files.some(item => record(item).filename === path && record(item).diff_anchor === anchor))
+          && tool.output.complete_pagination === true
+          && (Array.isArray(tool.input.anchors) && tool.input.anchors.some(sameAnchor)
+            && Array.isArray(tool.output.anchors) && tool.output.anchors.some(item => sameAnchor(item)
+              && record(item).postable === true && ["api", "local"].includes(text(record(item).source)) && record(item).diff_anchor === anchor)
+            || Array.isArray(tool.input.paths) && tool.input.paths.includes(path)
+              && Array.isArray(tool.output.files) && tool.output.files.some(item => record(item).filename === path && record(item).diff_anchor === anchor)))
         if (!receipt) throw new Error(`inline index lacks tool-produced diff_anchor: ${path}`)
       }
       presentations.push({ attempt, producer, value })
@@ -1924,7 +1965,10 @@ export async function checkLightAttempts(input: Inputs, events: RecordValue[], t
       || !Array.isArray(authorization.value.edits) || authorization.value.edits.length || !Array.isArray(authorization.value.rerun_scope) || authorization.value.rerun_scope.length
       || !revalidated || revalidated.index < authorization.index || !validOpen(revalidated) || revalidated.output.code_head !== presentation.attempt.head || revalidated.output.baseRefOid !== presentation.attempt.base
       || !fresh(statusBefore(dispatch.index, authorization.index)) || !underLock(dispatch)) errors.push("writer uses stale/missing authorization, metadata or ownership")
-    if (!input.writer && (dispatch.state.status !== "error" || !denied(diagnostic(dispatch) ?? ""))) errors.push("writer crossed denied-dispatch barrier")
+    if (!input.writer && (dispatch.state.status !== "error" || !denied(diagnostic(dispatch) ?? ""))) {
+      errors.push("writer crossed denied-dispatch barrier")
+      add("light posting barrier", false, "writer crossed denied-dispatch barrier", 6)
+    }
     if (input.writer) {
       const child = descendants.find(child => child.agent === "pr-comment-writer" && child.id === childResult(dispatch).sessionID)
       const result = extractPostResult([text(dispatch.state.output), ...(child?.texts ?? [])])
@@ -2151,7 +2195,7 @@ export async function checkReviewArtifacts(input: Inputs) {
      * tree before scoring, independently of executed Git trace. Match command verbs,
      * not the commit object expression in permitted cat-file reads. Missing evidence
      * fails closed; no terminal disclosure permits staging/commit/worktree mutation. */
-    const mutations = allTools.filter(tool => shell(tool) && /\bgit\s+(?:(?:-C|-c)\s+(?:'[^']*'|"[^"]*"|\S+)\s+)*(?:add|commit|push|checkout|switch|branch|update-ref|update-index|reset|restore|stash|rm|worktree|read-tree)\b/i.test(text(tool.input.command)))
+    const mutations = allTools.filter(tool => shell(tool) && lightModelGitMutation(text(tool.input.command)))
     add("light model Git mutations", !auditError && mutations.length === 0, 6,
       auditError || `${mutations.length} model staging/commit/push/worktree mutation attempts`)
     const writes = allTools.filter(tool => ["write", "edit", "patch", "apply_patch"].includes(tool.name))
@@ -2687,9 +2731,7 @@ if (import.meta.main) {
       const metrics = { agent: "corvus-review-light", agentControlledWallClockSeconds: wall.seconds,
         ...(result.metrics ?? { childSessions: null, orchestratorTurns: null, toolCallsByTool: null }),
         measurementStatus: result.metrics ? "stopped-host tree measured" : "unavailable: see light metrics evidence row",
-        localOnlyRows: result.rows.filter(row => ["sentinel bytes/index unchanged", "branch/HEAD unchanged", "ignore files unchanged", "zero local state commits",
-          "remote refs unchanged", "mixed full push excludes light", "state commit scope", "state commit count", "Git push isolation", "light class isolation",
-          "model shell pushes", "light model Git mutations", "lock released", "LOCAL no writer", "LOCAL no posting tools", "LOCAL terminal summary"].includes(row.check)),
+        localOnlyRows: lightLocalOnlyRows(result.rows),
         usageDisclosure: "Token/cost usage above is parent-only; session/tool counts cover the complete stopped-host tree." }
       writeFileSync(join(work, "light-metrics.json"), JSON.stringify(metrics, null, 2) + "\n")
       console.log(`Light metrics (${work}/light-metrics.json): ${JSON.stringify(metrics)}`)

@@ -10,7 +10,7 @@ export type WorktreeExec = (argv: string[], options: { cwd: string; env: NodeJS.
 export type WorktreeOptions = { cwd?: string; exec?: WorktreeExec; timeoutMs?: number }
 type Failure = { ok: false; reason: string; path?: string; command?: string[]; message?: string; cleanup?: Failure }
 type Registration = { path: string; head?: string; detached: boolean }
-type Entry = { path: string; mode: string; type: string; sha: string }
+type Entry = { path: string; mode: string; type: string; sha: string; size: number }
 export type WorktreeResult = Failure | {
   ok: true; path: string; head: string; populated_files: number;
   skipped: { path: string; reason: "submodule" }[]; symlinks_as_files: string[]; preexisting_corvus_worktrees: string[];
@@ -127,9 +127,9 @@ function treeEntries(bytes: Buffer): Entry[] {
   while (start < bytes.length) {
     const end = bytes.indexOf(0, start), tab = bytes.indexOf(9, start)
     if (end < 0 || tab < start || tab > end) fail("invalid-tree")
-    const header = bytes.subarray(start, tab).toString("ascii").split(" ")
+    const header = bytes.subarray(start, tab).toString("ascii").trim().split(/\s+/)
     const rawPath = bytes.subarray(tab + 1, end), path = rawPath.toString("utf8")
-    if (header.length !== 3 || !SHA.test(header[2])) fail("invalid-tree")
+    if (header.length !== 4 || !SHA.test(header[2])) fail("invalid-tree")
     if (!Buffer.from(path).equals(rawPath) || isAbsolute(path) || /[\x00-\x1f\x7f\\:]/.test(path)
       || path.split("/").some(part => {
         const normalized = part.normalize("NFD").replace(/[\u200c-\u200f\u202a-\u202e\u206a-\u206f\ufeff]/g, "").replace(/[ .]+$/, "").toLowerCase()
@@ -137,20 +137,39 @@ function treeEntries(bytes: Buffer): Entry[] {
       })) fail("unsafe-tree-path", { message: path })
     if (!(header[0] === "160000" && header[1] === "commit")
       && !(header[1] === "blob" && ["100644", "100755", "120000"].includes(header[0]))) fail("invalid-tree")
-    entries.push({ path, mode: header[0], type: header[1], sha: header[2] })
+    const size = header[1] === "commit" && header[3] === "-" ? 0 : Number(header[3])
+    if (!Number.isSafeInteger(size) || size < 0 || header[1] === "blob" && !/^\d+$/.test(header[3])) fail("invalid-tree")
+    entries.push({ path, mode: header[0], type: header[1], sha: header[2], size })
     if (entries.length > 100_000) fail("tree-too-large")
     start = end + 1
   }
   return entries
 }
 
-async function populate(root: string, path: string, entries: Entry[], ctx: Context): Promise<number> {
-  const blobs = entries.filter(entry => entry.type === "blob")
-  let written = 0, total = 0
+/** ls-tree object sizes are read before create/population and bound each raw
+ * batch including its SHA/type/size header and trailing newline. Oversized blobs
+ * fail explicitly for disclosed object-read fallback; tree size remains bounded.
+ * Actual batch headers must match these sizes before writes. No bypass exists. */
+function blobBatches(entries: Entry[]): Entry[][] {
+  const batches: Entry[][] = []
+  let batch: Entry[] = [], bytes = 0, total = 0
+  for (const entry of entries.filter(entry => entry.type === "blob")) {
+    const outputBytes = entry.size + Buffer.byteLength(`${entry.sha} blob ${entry.size}\n`) + 1
+    if (outputBytes > MAX_OUTPUT) fail("blob-too-large", { message: `${entry.path}: ${entry.size} blob bytes (${outputBytes} framed bytes) exceeds the ${MAX_OUTPUT}-byte output budget` })
+    total += entry.size
+    if (total > MAX_TREE_BYTES) fail("tree-too-large")
+    if (bytes + outputBytes > MAX_OUTPUT) { batches.push(batch); batch = []; bytes = 0 }
+    batch.push(entry); bytes += outputBytes
+  }
+  if (batch.length) batches.push(batch)
+  return batches
+}
+
+async function populate(root: string, path: string, batches: Entry[][], ctx: Context): Promise<number> {
+  let written = 0
   // Raw --batch (not --filters) amortizes process startup without trusting paths
   // as revision expressions; only validated object IDs go to its stdin.
-  for (let offset = 0; offset < blobs.length; offset += 64) {
-    const batch = blobs.slice(offset, offset + 64)
+  for (const batch of batches) {
     const bytes = await ctx.read(root, ["cat-file", "--batch"], Buffer.from(batch.map(entry => entry.sha + "\n").join("")))
     let cursor = 0
     for (const entry of batch) {
@@ -159,10 +178,8 @@ async function populate(root: string, path: string, entries: Entry[], ctx: Conte
       if (newline < 0) fail("invalid-blob")
       const header = bytes.subarray(cursor, newline).toString("ascii").split(" ")
       const size = Number(header[2])
-      if (header.length !== 3 || header[0] !== entry.sha || header[1] !== "blob" || !Number.isSafeInteger(size) || size < 0
+      if (header.length !== 3 || header[0] !== entry.sha || header[1] !== "blob" || size !== entry.size
         || newline + 1 + size >= bytes.length || bytes[newline + 1 + size] !== 10) fail("invalid-blob")
-      total += size
-      if (total > MAX_TREE_BYTES) fail("tree-too-large")
       const target = resolve(path, entry.path)
       let parent = path
       for (const part of entry.path.split("/").slice(0, -1)) {
@@ -215,7 +232,8 @@ async function worktree(args: WorktreeInput, opts: WorktreeOptions): Promise<Wor
     .filter(item => dirname(item) === dirname(root) && basename(item).startsWith(prefix)).sort()
   const object = await ctx.run(root, ["cat-file", "-e", `${args.code_head}^{commit}`])
   if (object.code !== 0) fail("missing-object", { path, command: object.command, message: object.stderr })
-  const entries = treeEntries(await ctx.read(root, ["ls-tree", "-r", "-z", args.code_head]))
+  const entries = treeEntries(await ctx.read(root, ["ls-tree", "-r", "-l", "-z", args.code_head]))
+  const batches = blobBatches(entries)
   const common = fs.realpathSync(resolve(root, (await ctx.read(root, ["rev-parse", "--git-common-dir"])).toString("utf8").trim()))
   let created = false
   try {
@@ -228,7 +246,7 @@ async function worktree(args: WorktreeInput, opts: WorktreeOptions): Promise<Wor
     if (dirname(indexPath) !== resolve(common, "worktrees") || fs.realpathSync(indexPath) !== indexPath
       || resolve(indexPath, readFileBacklink(indexPath)) !== resolve(path, ".git")) fail("not-owned", { path })
     await ctx.read(root, ["read-tree", args.code_head], undefined, resolve(indexPath, "index"))
-    const populated = await populate(root, path, entries, ctx)
+    const populated = await populate(root, path, batches, ctx)
     const head = (await ctx.read(path, ["rev-parse", "HEAD"])).toString("utf8").trim()
     if (head !== args.code_head) fail("head-mismatch", { path })
     return { ok: true, path, head, populated_files: populated, skipped: entries.filter(entry => entry.type === "commit").map(entry => ({ path: entry.path, reason: "submodule" })),

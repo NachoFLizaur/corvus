@@ -287,7 +287,7 @@ function validate(corpus: Corpus, c: Contract, final = false): string[] {
             && bash["*"] === "allow" && Object.keys(bash)[0] === "*" && commands.every(command => evaluateRules(rules, "shell", command) === "deny"), `safety:${path}:${pattern}`)
         }
         if (path === lightOrchestrator) {
-          check(record(permission.bash) && Object.keys(permission.bash).length === 47
+          check(record(permission.bash) && Object.keys(permission.bash).length === Object.keys(LIGHT_BASH_MAP).length
             && LIGHT_MUTATIONS.every(command => evaluateRules(rules, "shell", command) === "deny"), `safety:${path}:fixed-denies`)
           check(LIGHT_READS.every(command => evaluateRules(rules, "shell", command) === "allow"), `safety:${path}:shell-reads`)
         }
@@ -840,8 +840,10 @@ describe("prompt structure", () => {
           "postable:true", "postable:false"],
         [writer, "3. Validate Inline Locations", /tool checks path membership, complete hunk counts and every added\/context RIGHT-side line in one hunk, independent of patch output size/,
           "added/context RIGHT-side line", "estimated local lines"],
-        [writer, "3. Validate Inline Locations", /Any false\/missing result, absent patch, truncated hunk or incomplete pagination makes that anchor unverifiable.*If ALL anchors verify, proceed; otherwise finish available anchor diagnostics and hand off to R5's relocation with status not_posted\s*, reason anchors-unverifiable\s*, and unverifiable_anchors: \[\{path,line_start,line_end\}\].*only unresolved anchors.*no POST attempted/,
+        [writer, "3. Validate Inline Locations", /Any false\/missing result, truncated hunk or incomplete pagination makes that anchor unverifiable.*If ALL anchors verify, proceed; otherwise finish available anchor diagnostics and hand off to R5's relocation with status not_posted\s*, reason anchors-unverifiable\s*, and unverifiable_anchors: \[\{path,line_start,line_end\}\].*only unresolved anchors.*no POST attempted/,
           "only unresolved anchors", "all anchors"],
+        [writer, "3. Validate Inline Locations", /Accept either source: api or source: local as verified; local means the tool's stable Git object diff, not a writer shell diagnostic/,
+          "source: local", "source: guessed"],
         [writer, "3. Validate Inline Locations", /If ALL anchors verify, proceed; otherwise finish available anchor diagnostics and hand off to R5's relocation/,
           "If ALL anchors verify, proceed", "Proceed even with unverifiable anchors"],
         [writer, "Closed Field Sets", /Status not_posted requires remote_state not_posted, null URL, zero inline_comments_posted and a reason: anchors-unverifiable, verify: <diagnostic>, head-moved or not-exposed: <inventory>.*Only anchors-unverifiable includes a non-empty unverifiable_anchors array/,

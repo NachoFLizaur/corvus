@@ -7,11 +7,9 @@ export const LIGHT_BASH_DENIES = ["*", "*;*", "*&*", "*|*", "*>*", "*<*", "*`*",
   "git fetch --no-tags -*", "git fetch --no-tags '-*", 'git fetch --no-tags "-*',
   "git fetch --no-tags * * ?*", "git fetch --no-tags * --*",
   "git fetch --no-tags * pull/*:*", "git fetch --no-tags * 'pull/*:*", 'git fetch --no-tags * "pull/*:*',
-  "git fetch --no-tags *''*", 'git fetch --no-tags *""*', "git fetch --no-tags /*", "git fetch --no-tags '/*", 'git fetch --no-tags "/*',
+  "git fetch --no-tags *''*", 'git fetch --no-tags *""*', "git fetch --no-tags *:* ?*", "git fetch --no-tags */* ?*", "git fetch --no-tags *@* ?*",
   "git fetch --no-tags .*", "git fetch --no-tags '.*", 'git fetch --no-tags ".*',
-  "git fetch --no-tags ~*", "git fetch --no-tags '~*", 'git fetch --no-tags "~*',
-  "git fetch --no-tags file:*", "git fetch --no-tags 'file:*", 'git fetch --no-tags "file:*', "git fetch --no-tags *::*",
-  "git fetch --no-tags ssh://*", "git fetch --no-tags 'ssh://*", 'git fetch --no-tags "ssh://*']
+  "git fetch --no-tags ~*", "git fetch --no-tags '~*", 'git fetch --no-tags "~*']
 export const LIGHT_BASH_MAP = { "*": "deny", ...Object.fromEntries(LIGHT_BASH_ALLOWS.map(pattern => [pattern, "allow"])),
   ...Object.fromEntries(LIGHT_BASH_DENIES.slice(1).map(pattern => [pattern, "deny"])) }
 export const LIGHT_CHILDREN = ["pr-light-reviewer", "pr-comment-writer"]
@@ -45,11 +43,12 @@ export const LIGHT_MUTATIONS = ["git add .", "git commit -m probe", "git push or
   "git fetch --no-tags . pull/1/head --upload-pack='touch /tmp/x #'/head",
   "git fetch --no-tags origin pull/1/head --upload-pack=evil/head",
   "git fetch --no-tags origin --upload-pack=evil pull/1/head",
-  ...[".", "./repo", "../repo", "/repo", "~repo", "file://repo", "ext::evil", "other::evil", "ssh://github.com/example/project"].flatMap(remote =>
+  ...[".", "./repo", "../repo", "/repo", "~repo", "-remote", ".remote", "~remote", "repo/path", "repo\\path", "remote@name",
+    "https://github.com/example/project.git", "file://repo", "ext::evil", "other::evil", "ssh://github.com/example/project",
+    "host:path", "git@github.com:example/project.git", "user@host:path", "git+ssh://github.com/example/project", "ssh+git://github.com/example/project"].flatMap(remote =>
     [remote, `'${remote}'`, `"${remote}"`].map(literal => `git fetch --no-tags ${literal} pull/1/head`))]
-export const LIGHT_READS = ["git fetch --no-tags origin pull/42/head", "git fetch --no-tags https://github.com/example/project.git pull/42/head",
+export const LIGHT_READS = ["git fetch --no-tags origin pull/42/head", "git fetch --no-tags 'origin' pull/42/head", 'git fetch --no-tags "origin" pull/42/head',
   "git fetch --no-tags 'github' 'pull/42/head'", 'git fetch --no-tags "custom.remote-2" "pull/42/head"',
-  "git fetch --no-tags 'https://github.com/example/project.git' pull/42/head",
   "git remote get-url origin", "git remote get-url 'custom.remote-2'", 'git remote get-url "github"',
   "git ls-files -- .corvus/reviews/pr42/lock.yaml", "git ls-files -- '.corvus/tasks/task/reviews/pr42/lock.yaml'",
   'git ls-files -- ".corvus/reviews/pr42/lock.yaml"', "git cat-file -e 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa^{commit}'",

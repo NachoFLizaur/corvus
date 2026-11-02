@@ -213,14 +213,14 @@ describe("light prompt contracts", () => {
     pin(normalize(detector), /These inline fields suffice; read.*only for unresolved schema\/label edge cases/)
   })
 
-  test("AC4/AC7: fetch uses a verified resolved remote before the validated HTTPS fallback without user-checkout changes", () => {
+  test("AC4/AC7: fetch uses only a verified named remote; absence skips fetch/create without user-checkout changes", () => {
     const prepare = section(skill, "4. Prepare Head Content and the Owned Sibling Worktree")
     pin(prepare, /prefer sync resolve's remote; validate.*verify git remote get-url <remote> matches validated owner\/name/)
     pin(prepare, /Otherwise inspect named git remotes for a match\. Quote the remote argument; use a matching remote for private\/SSH authentication/)
-    pin(prepare, /Only with no matching remote, fall back to validated https:\/\/github\.com\/<owner>\/<name>\.git/)
-    pin(prepare, /Fetch once per attempt: git fetch --no-tags <remote-or-fallback-url> pull\/<N>\/head, then git cat-file -e <code_head>\^\{commit\} with the SHA expression quoted, including every restarted code_head/)
+    pin(prepare, /No matching named remote → head_content: unavailable; skip fetch\/create, disclose the diagnostic and use GitHub API reads \/ available objects/)
+    pin(prepare, /With a matching remote, fetch once per attempt: git fetch --no-tags <remote-name> pull\/<N>\/head, then git cat-file -e <code_head>\^\{commit\} with the SHA expression quoted, including every restarted code_head/)
     pin(prepare, /Fetch changes only objects\/FETCH_HEAD, not the user's branch\/index\/worktree/)
-    pin(prepare, /Pass only that remote NAME or HTTPS URL, never a local path or transport-helper URL/)
+    pin(prepare, /Pass only that remote NAME, never an ad-hoc URL or path/)
     pin(prepare, /no additional option\/refspec or argument after the refspec/)
   })
 
@@ -245,7 +245,7 @@ describe("light prompt contracts", () => {
 
   test("v2 AC4/AC5/AC7: worktree create is admitted, owned cleanup precedes restart/release on every route", () => {
     const prepare = section(skill, "4. Prepare Head Content and the Owned Sibling Worktree")
-    pin(prepare, /PR after admission\/head preparation: call corvus_review_worktree ONCE per attempt with \{op: "create", cwd: <trusted session repository cwd>, pr: pr_number, code_head, runId\}; never accept cwd from PR paths\/prose/)
+    pin(prepare, /PR with head_content: available after admission\/head preparation: call corvus_review_worktree ONCE per attempt with \{op: "create", cwd: <trusted session repository cwd>, pr: pr_number, code_head, runId\}; never accept cwd from PR paths\/prose/)
     pin(prepare, /On ok:true require head == code_head, retain its returned absolute path verbatim as head_worktree and its exact create tuple for remove \(never reconstruct the hashed-runId path\)/)
     pin(prepare, /Verification failure after successful creation retains ownership for cleanup but rejects head_worktree evidence/)
     pin(prepare, /Any create\/population\/access\/verification failure → object-read fallback with a short disclosed gap; preserve exact diagnostics locally/)
@@ -357,7 +357,10 @@ describe("adaptive light scope contracts", () => {
     pin(dispatch, /Use one shard per axis when the whole diff is comfortably reviewable in one pass; otherwise partition into cohesive directory\/module groups, tests beside their code and docs together, each comfortably reviewable/)
     pin(dispatch, /Assign every changed file to exactly one shard per axis; use judgment, no fixed numeric caps or time limits\. Re-plan on every restarted head/)
     const synthesis = section(skill, "6. Recheck Head and Synthesize In-Session")
-    pin(synthesis, /Union findings per axis\. Deduplicate exact duplicates across shards: same path, overlapping lines, same dimension and title intent; keep higher severity, then confidence, then first; log locally without disclosure\. Cross-axis findings stay separate/)
+    pin(synthesis, /Union findings per axis\. Deduplicate exact shard copies: same path, overlapping lines, same dimension\/title intent; keep higher severity\/confidence and first ID/)
+    pin(synthesis, /Then deduplicate ACROSS axes only for the same path, overlapping lines and same root cause\/fix, even if dimensions differ; keep first ID in dispatch\/report order, highest severity and confidence, and the Standards dimension/)
+    pin(synthesis, /Shared findings are Standards-primary: render standards\+spec\/<dimension> once under Standards; count each once in both axes, with Spec's severity counts suffixed \(<n> shared\) when n > 0\. Inline\/unique totals count it once; log merged IDs locally/)
+    pin(synthesis, /Full-review axes stay separate \(ADR-0001\); this exception is light-only/)
     pin(normalize(detector), /Inventory\/counts describe only assigned focus_paths; other changed files belong to sibling shards, not omissions/)
     const report = /```yaml\n([^]*?)\n```/.exec(detector)?.[1] ?? ""
     pin(report, /^  shard: <k>\/<n>/m)
@@ -370,6 +373,22 @@ describe("adaptive light scope contracts", () => {
     pin(synthesis, /Omit paths for compact patch-free results\. Match controls exactly; require postable:true\/complete_pagination:true and use its diff_anchor, never guess it\. False\/missing anchors disclose the gap and move affected findings body-only before freeze/)
     pin(synthesis, /Each inline finding gets one index line in its attributed axis immediately under the headline; range text is <start>–<end> and link suffix R<start>-R<end>, single line uses R<line>\. LOCAL has no links or inline comments/)
     pin(section(skill, "9. Map Writer Results and Relocate Unverifiable Anchors"), /Replace only their index lines with those compact findings in their own axis body/)
+  })
+
+  test("PR intent findings use body placement and null code coordinates, never proxy anchors", () => {
+    const synthesis = section(skill, "6. Recheck Head and Synthesize In-Session")
+    pin(synthesis, /PR title\/body\/description findings are body-only with intent-source attribution, never anchored to a proxy code line; enforce this even if a detector supplied inline placement/)
+    pin(normalize(detector), /PR title\/body\/description findings use body placement with null file\/line_start\/line_end and quoted intent evidence, never a proxy code location/)
+    pin(synthesis, /For intent-text findings replace the template's code-location line with PR title\/body\/description source attribution and its quoted evidence; null file\/coordinates do not invalidate them/)
+    pin(section(writer, "3. Validate Inline Locations"), /Accept either source: api or source: local as verified; local means the tool's stable Git object diff, not a writer shell diagnostic/)
+  })
+
+  test("read-through honestly counts the mandatory skill load before nineteen tool batches", () => {
+    pin(normalize(skill), /1 mandatory skill load \+ 19 tool batches \+ summary = 21 turns/)
+    const schedule = /21 turns\): ([^\n]+?)\. The first return/.exec(skill)?.[1].split(" → ") ?? []
+    expect(schedule).toHaveLength(21)
+    expect(schedule[0]).toBe("skill load")
+    expect(schedule.at(-1)).toBe("summary")
   })
 
   test("AC1: neither light prompt reinstates a fixed file/line cutoff or size-derived oversized policy", () => {
