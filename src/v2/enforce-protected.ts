@@ -1,4 +1,5 @@
 import { evaluateRules } from "../evaluate-rules"
+import { buildFixedDenyPolicies, createLightShellWorkdirGuard, isFixedDenied } from "../fixed-denies"
 import { loadAgents } from "../load-agents"
 import { agentDir } from "../paths"
 import { PROTECTED_AGENTS } from "../protected-agents"
@@ -9,7 +10,7 @@ import type { Registrar, Rule, SetupContext } from "./types"
  * The v2 protected-agent security boundary. THIS FILE IS THE OWNING LOCATION for
  * the rationale below; README and other code point here rather than restating it.
  *
- * Protected agents (`pr-code-reviewer`, `security-reviewer`, `pr-comment-writer`)
+ * Protected agents (the roster in `src/protected-agents.ts`)
  * consume untrusted PR content — diffs, comments, issue text — so their
  * "mechanically read-only" capability limit is a security guarantee, not a
  * preference. Under v1 corvus enforced it by deep-replacing `permission` and
@@ -27,8 +28,8 @@ import type { Registrar, Rule, SetupContext } from "./types"
  * consulting `ctx.agent` or trusting what `register-agents.ts` wrote.
  *
  * Read timing relative to mutations: the corpus is read before either hook is
- * registered, and both hook callbacks are pure over that snapshot — no I/O, no
- * captured mutable state — so config reloads cannot change what the boundary
+ * registered; permission/context callbacks are pure over that snapshot, so
+ * config reloads cannot change what the boundary
  * enforces. The host fires `permission.evaluate` AFTER completing its own rule
  * evaluation: at `core/src/permission.ts:170` a `deny` from the host's configured
  * rules returns early, so the hook is never reached for an already-denied request;
@@ -41,15 +42,16 @@ import type { Registrar, Rule, SetupContext } from "./types"
  * Fail direction per consumer: a PROTECTED agent fails CLOSED. Any authored `deny`
  * matching a requested resource forces `e.effect = "deny"`; otherwise an authored
  * `ask` downgrades an `allow` to `ask`. `evaluateRules` returning `undefined`
- * ("corvus has no opinion") leaves the host decision intact. A NON-PROTECTED agent
- * — and a request the host reports without an agent id — is returned untouched, so
- * this hook can never affect the other thirteen agents. At setup the same direction
+ * ("corvus has no opinion") leaves the host decision intact. The light primary's
+ * fixed shell/dispatch allowlist is owned by `src/fixed-denies.ts` and shares this evaluate hook;
+ * it has no context/prompt protection. Other NON-PROTECTED agents — and requests
+ * without an agent id — are untouched. At setup the same direction
  * applies: a protected agent missing from the corpus, or carrying no permission
  * rules, THROWS and aborts `setup()`, because an empty policy would silently
  * degrade into a hook that tightens nothing.
  *
  * What disables this control: only plugin teardown — the returned cleanup disposes
- * both hooks (plugin unload, or `server.ts` unwinding a failed `setup()`). There is
+ * all hooks (plugin unload, or `server.ts` unwinding a failed `setup()`). There is
  * no flag, environment switch, or config key that turns it off, and no code path
  * that skips it for a protected agent.
  *
@@ -83,7 +85,7 @@ interface ProtectedPolicy {
    * e.g. `# PR Code Reviewer - Read-Only Detection Agent`.
    *
    * Derived rather than injected on purpose. Each protected agent's first body
-   * line is already distinctive AND unique across all 16 corpus agents (verified),
+   * line is already distinctive AND unique across the corpus,
    * so no `agent/*.md` needs a synthetic marker line — the corpus stays untouched
    * and the marker cannot drift away from the prompt it guards, because it is
    * literally cut from it. It is a PRESENCE probe, not an integrity check: it
@@ -135,10 +137,19 @@ export const enforceProtected: Registrar = async (ctx) => {
   const policies = new Map<string, ProtectedPolicy>(
     PROTECTED_AGENTS.map((agent) => [agent, buildPolicy(agent, corpus[agent])]),
   )
+  const fixedDenies = buildFixedDenyPolicies(corpus)
+  const allowedShellWorkdir = createLightShellWorkdirGuard(ctx.location.directory)
 
   const permission = await ctx.permission.hook("evaluate", (e) => {
     const agent = e.agent
     if (agent === undefined) return
+
+    const fixed = fixedDenies.get(agent)
+    if (fixed !== undefined && isFixedDenied(fixed, e.action, e.resources)) {
+      e.effect = "deny"
+      e.message = `corvus: ${agent}; ${e.action} is denied by the plugin's fixed-deny boundary.`
+      return
+    }
 
     const policy = policies.get(agent)
     if (policy === undefined) return
@@ -173,7 +184,26 @@ export const enforceProtected: Registrar = async (ctx) => {
     c.system.push({ type: "text", text: policy.system })
   })
 
+  /** v2 permission.evaluate has command resources, not shell tool arguments.
+   * Tool.execute.before exposes input + host agent immediately before execution;
+   * use that seam, not shell.create.before (which has cwd but no identity).
+   * Read the packaged policy and cached session-root oracle before the shell can
+   * run. Recheck command and realpath workdir here; malformed input fails closed.
+   * Other identities are untouched; only teardown disables this extra guard. */
+  const tool = await ctx.tool.hook("execute.before", e => {
+    const fixed = fixedDenies.get(e.agent)
+    if (!fixed || !["shell", "bash"].includes(e.tool)) return
+    const args = e.input !== null && typeof e.input === "object" ? e.input as Record<string, unknown> : {}
+    if (typeof args.command !== "string" || isFixedDenied(fixed, "shell", [args.command]) || !allowedShellWorkdir(args.workdir))
+      throw new Error(`corvus: ${e.agent}; shell is denied by the plugin's fixed-deny boundary.`)
+  }).catch(async error => {
+    await release(context, "context")
+    await release(permission, "permission")
+    throw error
+  })
+
   return async () => {
+    await release(tool, "tool")
     await release(context, "context")
     await release(permission, "permission")
   }

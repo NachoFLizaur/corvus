@@ -48,8 +48,10 @@
     "agent/researcher.md": { "class": "research", "budget": "general", "headings": ["Complexity Router", "Output Format"] },
     "agent/pr-code-reviewer.md": { "class": "review-axes", "budget": "general", "headings": ["Review Workflow", "Report Format"] },
     "agent/security-reviewer.md": { "class": "review-axes", "budget": "general", "headings": ["Review Workflow", "Report Format"] },
+    "agent/pr-light-reviewer.md": { "class": "review-axes", "budget": "general", "headings": ["Review Workflow", "Report Format"] },
     "agent/corvus-review.md": { "class": "review-pipeline", "budget": "orchestrator", "headings": ["Workflow", "Operating Rules"] },
     "agent/corvus-review-auto.md": { "class": "review-pipeline", "budget": "orchestrator", "headings": ["Workflow", "Operating Rules"] },
+    "agent/corvus-review-light.md": { "class": "review-pipeline", "budget": "orchestrator", "headings": ["Workflow", "Operating Rules"] },
     "agent/pr-context-gatherer.md": { "class": "review-pipeline", "budget": "general", "headings": ["Context Gathering Workflow", "Output Format"] },
     "agent/pr-comment-writer.md": { "class": "review-pipeline", "budget": "general", "headings": ["Trust and Capability Boundary", "Posting Workflow"] },
     "agent/code-explorer.md": { "class": "specialists", "budget": "general", "headings": ["Three Search Modes", "Output Format"] },
@@ -77,6 +79,7 @@
     "skill/corvus-review-r3/SKILL.md": { "class": "review-pipeline", "budget": "skill", "headings": [] },
     "skill/corvus-review-r4/SKILL.md": { "class": "review-pipeline", "budget": "skill", "headings": [] },
     "skill/corvus-review-r5/SKILL.md": { "class": "review-pipeline", "budget": "skill", "headings": [] },
+    "skill/corvus-review-light/SKILL.md": { "class": "review-pipeline", "budget": "skill", "headings": [] },
     "skill/corvus-review-extras/SKILL.md": { "class": "review-pipeline", "budget": "skill", "headings": [] }
   },
   "definitions": {

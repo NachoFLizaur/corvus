@@ -7,6 +7,8 @@ umask 077
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 source "$ROOT/scripts/host.sh"
 HOST=""
+AGENT=auto
+AGENT_ID=corvus-review-auto
 OPENCODE_BIN=""
 PR="https://github.com/NachoFLizaur/corvus/pull/8"
 INTAKE=url
@@ -45,7 +47,9 @@ prepare_sync_remotes() {
   git -C "$WORK/fixture" config user.email 'corvus-smoke@example.invalid'
   # Corvus itself ignores project memory; only the disposable fixture opts in.
   # This unrelated unstaged edit stays outside the tool's root-only state commit.
-  printf '\n!/.corvus/\n!/.corvus/**\n' >>"$WORK/fixture/.gitignore"
+  if [[ "${AGENT:-auto}" == auto ]]; then
+    printf '\n!/.corvus/\n!/.corvus/**\n' >>"$WORK/fixture/.gitignore"
+  fi
   if [[ "$INTAKE" == local ]]; then
     git -C "$WORK/fixture" fetch origin "$BRANCH:refs/remotes/origin/$BRANCH"
     git -C "$WORK/fixture" branch --set-upstream-to="origin/$BRANCH" "$BRANCH"
@@ -62,6 +66,7 @@ prepare_sync_remotes() {
 # before model launch. A failed read or wrong PR aborts; URL/LOCAL have no branch
 # discovery preflight. Neither --full nor --keep disables the branch check.
 preflight_branch_pr() {
+  [[ "${AGENT:-auto}" != light ]] || return 0
   [[ "$INTAKE" == branch ]] || return 0
   cap 60 gh pr view --json number,url,headRefName,state >"$WORK/branch-preflight.json" 2>"$WORK/branch-preflight.stderr" || die 4 'argument-free gh pr view through shim failed; model was not started'
   SMOKE_PR="$NUMBER" SMOKE_BRANCH="$BRANCH" bun -e '
@@ -83,7 +88,7 @@ preflight_v2_agents() {
     bun -e '
       const agents = await Bun.file(process.env.SMOKE_WORK + "/agents.json").json()
       if (!Array.isArray(agents)) process.exit(1)
-      process.exit(agents.some(agent => agent?.id === "corvus-review-auto") ? 0 : 2)
+      process.exit(agents.some(agent => agent?.id === (process.env.SMOKE_AGENT_ID || "corvus-review-auto")) ? 0 : 2)
     ' || result=$?
     case "$result" in
       0) return 0 ;;
@@ -91,14 +96,113 @@ preflight_v2_agents() {
       *) die 3 'malformed host agent listing; model was not started' ;;
     esac
   done
-  die 3 'corvus-review-auto absent from host agent listing after 60 reads; model was not started'
+  die 3 "$AGENT_ID absent from host agent listing after 60 reads; model was not started"
+}
+
+# Light fixture oracle: setup commits only in the disposable clone, before the
+# bare clone and baseline. The agent starts on an unrelated branch/head, with both
+# tracked sentinels dirty and one staged (also modified again after staging).
+# Missing HEAD separation fails before dispatch; no light flag disables it.
+prepare_light_fixture() {
+  BRANCH="smoke/light-unrelated-$$"
+  git -C "$WORK/fixture" checkout --no-track -b "$BRANCH" >>"$WORK/checkout.log" 2>&1 || die 4 'light unrelated branch creation failed'
+  git -C "$WORK/fixture" config user.name 'Corvus smoke fixture'
+  git -C "$WORK/fixture" config user.email 'corvus-smoke@example.invalid'
+  git -C "$WORK/fixture" config commit.gpgsign false
+  printf 'committed staged sentinel\n' >"$WORK/fixture/.smoke-light-staged"
+  printf 'committed unstaged sentinel\n' >"$WORK/fixture/.smoke-light-unstaged"
+  git -C "$WORK/fixture" add -- .smoke-light-staged .smoke-light-unstaged
+  git -C "$WORK/fixture" commit --only -m 'Light harness unrelated fixture' -- .smoke-light-staged .smoke-light-unstaged >>"$WORK/checkout.log" 2>&1 || die 4 'light fixture sentinel commit failed'
+  printf 'staged sentinel index bytes\n' >"$WORK/fixture/.smoke-light-staged"
+  git -C "$WORK/fixture" add -- .smoke-light-staged
+  printf 'staged sentinel worktree bytes\n' >"$WORK/fixture/.smoke-light-staged"
+  printf 'unstaged sentinel worktree bytes\n' >"$WORK/fixture/.smoke-light-unstaged"
+}
+
+# Capture/check before harness-only ignore opt-in and full sync mutation. Exact
+# snapshot equality (including git worktree list --porcelain and sibling-tree
+# absence relative to baseline) is the oracle; failure aborts with retained evidence. Dry
+# preflights use the same snapshot/setup, not a model run or a success substitution.
+light_snapshot() {
+  SMOKE_SNAPSHOT="$1" bun -e '
+    const { snapshotLightFixture } = await import(process.env.SMOKE_ROOT + "/scripts/check-review-artifacts.ts")
+    const root = process.env.SMOKE_WORK
+    await Bun.write(root + "/light-" + process.env.SMOKE_SNAPSHOT + ".json", JSON.stringify(snapshotLightFixture(root + "/fixture", root + "/bare.git"), null, 2) + "\n")
+  ' || die 5 'light fixture snapshot failed'
+}
+light_compare() {
+  light_snapshot after
+  bun -e '
+    const { checkLightSnapshots } = await import(process.env.SMOKE_ROOT + "/scripts/check-review-artifacts.ts")
+    const root = process.env.SMOKE_WORK
+    const rows = checkLightSnapshots(await Bun.file(root + "/light-before.json").json(), await Bun.file(root + "/light-after.json").json())
+    console.log("LIGHT_LOCAL_EVIDENCE " + JSON.stringify(rows))
+    if (rows.some(row => !row.ok)) process.exit(1)
+  ' || die 5 'light agent changed fixture bytes/index/branch/HEAD/worktree list/sibling directories/ignores/commits/remote refs'
+}
+
+# Model-free full-review push over the same namespace, AFTER the agent comparison.
+# The origin push URL must be the harness bare; github remains disabled. Preserve
+# the agent trace by removing tracing only in this harness-owned subprocess. The
+# real sync implementation owns exclusions; independently inspect the bare commit.
+# Failure aborts, no paid call/retry or GitHub push fallback exists.
+light_push_probe() {
+  printf '\n!/.corvus/\n!/.corvus/**\n' >>"$WORK/fixture/.gitignore"
+  env -u GIT_TRACE2_EVENT SMOKE_BRANCH="$BRANCH" SMOKE_NUMBER="$NUMBER" bun -e '
+    const { mkdirSync, writeFileSync } = await import("node:fs")
+    const { execFileSync } = await import("node:child_process")
+    const { push, resolve: resolveSync } = await import(process.env.SMOKE_ROOT + "/src/review-sync.ts")
+    const { isLightClassPath, LIGHT_REVIEW_DIRECTORY } = await import(process.env.SMOKE_ROOT + "/src/review-storage-class.ts")
+    const work = process.env.SMOKE_WORK, cwd = work + "/fixture", branch = process.env.SMOKE_BRANCH
+    const git = (...args) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" }).trim()
+    if (git("remote", "get-url", "--push", "--all", "origin") !== work + "/bare.git"
+      || git("remote", "get-url", "--push", "--all", "github") !== "DISABLED_PUSH_SENTINEL") throw new Error("unsafe probe remotes")
+    const pr = process.env.SMOKE_INTAKE === "local" ? { name: process.env.SMOKE_REPO, number: null, branch }
+      : { owner: process.env.SMOKE_OWNER, name: process.env.SMOKE_REPO, number: Number(process.env.SMOKE_NUMBER), isCrossRepository: false }
+    const resolved = await resolveSync({ cwd, pr, changed_files: await Bun.file(work + "/changed-files.json").json() })
+    if (!resolved.ok) throw new Error(JSON.stringify(resolved))
+    const root = resolved.root
+    mkdirSync(cwd + "/" + root + "/" + LIGHT_REVIEW_DIRECTORY, { recursive: true })
+    // Also exercise exclusion in preflights, which intentionally have no model artifact.
+    writeFileSync(cwd + "/" + root + "/" + LIGHT_REVIEW_DIRECTORY + "/harness-probe.json", "local-only probe\n")
+    writeFileSync(cwd + "/" + root + "/probe-meta.yaml", "model_free_probe: true\n")
+    const result = await push({ cwd, root, head_sha: git("rev-parse", "HEAD"), pr, branch, remote: "origin" })
+    if (!result.synced || !result.state_commit) throw new Error(JSON.stringify(result))
+    const paths = execFileSync("git", ["-C", work + "/bare.git", "diff-tree", "--no-commit-id", "--name-only", "-r", "-z", result.state_commit, "--"], { encoding: "utf8" }).split("\0").filter(Boolean)
+    const ok = paths.length > 0 && paths.every(path => path.startsWith(root + "/") && !isLightClassPath(path.replace(/^\.corvus\//, "")))
+    const evidence = { ok, root, state_commit: result.state_commit, paths }
+    await Bun.write(work + "/light-push-probe.json", JSON.stringify(evidence, null, 2) + "\n")
+    console.log("LIGHT_PUSH_PROBE " + JSON.stringify(evidence))
+    if (!ok) process.exit(1)
+  ' || die 5 'model-free full push included light state or failed'
+}
+
+# No agent interval exists in a dry preflight: null metrics explicitly mean NOT
+# RUN, never fabricated zero-turn performance evidence. Local-only fixture/probe
+# rows are real and captured after the comparison, before cleanup. Live light
+# runs instead use the checker's complete stopped-host counts and measured clock.
+light_preflight_metrics() {
+  bun -e '
+    const { checkLightSnapshots } = await import(process.env.SMOKE_ROOT + "/scripts/check-review-artifacts.ts")
+    const root = process.env.SMOKE_WORK
+    const rows = checkLightSnapshots(await Bun.file(root + "/light-before.json").json(), await Bun.file(root + "/light-after.json").json())
+    const probe = await Bun.file(root + "/light-push-probe.json").json()
+    rows.push({ check: "mixed full push excludes light", ok: probe.ok, code: 5, detail: JSON.stringify(probe) })
+    const metrics = { agent: "corvus-review-light", measurementStatus: "NOT RUN (dry preflight; no model call)",
+      agentControlledWallClockSeconds: null, childSessions: null, orchestratorTurns: null, toolCallsByTool: null, localOnlyRows: rows }
+    await Bun.write(root + "/light-metrics.json", JSON.stringify(metrics, null, 2) + "\n")
+    console.log("Light metrics (" + root + "/light-metrics.json): " + JSON.stringify(metrics))
+  ' || die 5 'light preflight metrics persistence failed'
 }
 
 usage() {
-  printf '%s\n' 'Usage: bash scripts/smoke-review.sh --host v1|v2 [--pr URL] [--intake url|branch|local] [--model ID] [--keep] [--preflight-only] [--timeout-min N=40] [--writer | --full]'
-  printf '%s\n' '  --intake  url (default): explicit PR; branch: discover the fixture PR; local: dirty branch without a PR'
+  printf '%s\n' 'Usage: bash scripts/smoke-review.sh --host v1|v2 [--agent auto|light] [--pr URL] [--intake url|branch|local] [--model ID] [--keep] [--preflight-only] [--timeout-min N=40] [--writer | --full]'
+  printf '%s\n' '  --agent  auto (default): existing full path; light: denied writer, unrelated dirty fixture, local-only evidence and light-metrics.json'
+  printf '%s\n' '  --pr  light detection requires an OPEN PR URL; the default PR #8 is CLOSED and stops at intake'
+  printf '%s\n' '  --keep  retain the disposable fixture, stopped-host DB, logs and checker artifacts for offline replay'
+  printf '%s\n' '  --intake  url (default): explicit PR; branch (auto only): discover the fixture PR; local: dirty branch without a PR'
   printf '%s\n' '  --preflight-only  probe host version and print intake evidence; exit before packaging or service/model launch'
-  printf '%s\n' '  --preflight-host  v2 only: also pack/install, boot and check plugin state/agents/logs; stop before any model call'
+  printf '%s\n' '  --preflight-host  both hosts: pack/install and check agents/logs (v2: boot/scoped plugin state); stop before any model call'
   printf '%s\n' '  --negative-control  with --preflight-host: strip skill.path in the sandbox package; EXPECT plugin-state FAIL'
   printf '%s\n' '  --writer  execute the real pr-comment-writer against the shim (POST blocked) instead of denying its dispatch'
   printf '%s\n' '  --full    every optional leg (currently --writer)'
@@ -106,9 +210,9 @@ usage() {
 }
 while (($#)); do
   case "$1" in
-    --host|--opencode-bin|--pr|--model|--timeout-min|--intake)
+    --host|--opencode-bin|--pr|--model|--timeout-min|--intake|--agent)
       [[ $# -ge 2 && -n "$2" ]] || die 3 "missing value for $1"
-      case "$1" in --host) HOST="$2" ;; --opencode-bin) OPENCODE_BIN="$2" ;; --pr) PR="$2" ;; --model) MODEL="$2" ;; --timeout-min) TIMEOUT_MIN="$2" ;; --intake) INTAKE="$2" ;; esac
+      case "$1" in --host) HOST="$2" ;; --opencode-bin) OPENCODE_BIN="$2" ;; --pr) PR="$2" ;; --model) MODEL="$2" ;; --timeout-min) TIMEOUT_MIN="$2" ;; --intake) INTAKE="$2" ;; --agent) AGENT="$2" ;; esac
       shift 2 ;;
     --keep) KEEP=1; shift ;;
     --preflight-only) PREFLIGHT_ONLY=1; shift ;;
@@ -120,10 +224,17 @@ while (($#)); do
   esac
 done
 [[ "$HOST" == v1 || "$HOST" == v2 ]] || die 3 '--host v1|v2 is required'
+[[ "$AGENT" == auto || "$AGENT" == light ]] || die 3 '--agent must be auto or light'
+[[ "$AGENT" != light || "$WRITER" == 0 ]] || die 3 '--agent light requires denied writer; no --writer/--full'
+[[ "$AGENT" != light ]] || AGENT_ID=corvus-review-light
 [[ "$INTAKE" == url || "$INTAKE" == branch || "$INTAKE" == local ]] || die 3 '--intake must be url, branch or local'
+# Light must keep its unrelated branch free of PR tracking; URL names the PR
+# without pretending the current branch discovers it. Reject before fixture setup.
+[[ "$AGENT" != light || "$INTAKE" != branch ]] || die 3 '--agent light does not support --intake branch; use --intake url with --pr URL (unrelated fixture branch is preserved)'
 [[ "$INTAKE" != local || "$WRITER" == 0 ]] || die 3 '--writer/--full cannot be combined with LOCAL intake'
 [[ "$WRITER" == 0 || "$HOST" == v1 ]] || die 3 '--writer/--full is v1-only until the v2 gate lands'
-[[ "$PREFLIGHT_HOST" == 0 || ( "$HOST" == v2 && "$PREFLIGHT_ONLY" == 0 ) ]] || die 3 '--preflight-host requires v2 and cannot combine with --preflight-only'
+[[ "$PREFLIGHT_HOST" == 0 || "$PREFLIGHT_ONLY" == 0 ]] || die 3 '--preflight-host cannot combine with --preflight-only'
+[[ "$NEGATIVE_CONTROL" == 0 || "$HOST" == v2 ]] || die 3 '--negative-control requires v2'
 [[ "$NEGATIVE_CONTROL" == 0 || "$PREFLIGHT_HOST" == 1 ]] || die 3 '--negative-control requires --preflight-host (no model call)'
 [[ "$TIMEOUT_MIN" =~ ^[1-9][0-9]*$ && ${#TIMEOUT_MIN} -le 4 ]] || die 3 'timeout must be a positive integer (minutes, at most four digits)'
 [[ "$PR" =~ ^https://github.com/([a-zA-Z0-9_-]+)/([a-zA-Z0-9_.-]+)/pull/([1-9][0-9]*)/?$ ]] || die 4 'expected a canonical github.com PR URL'
@@ -183,7 +294,7 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 smoke_host_prepare "$HOST" "$OPENCODE_BIN" || die 3 'host selection/version probe failed'
-export SMOKE_WORK="$WORK" SMOKE_ROOT="$ROOT" SMOKE_HOST="$HOST" SMOKE_MODEL="$MODEL" SMOKE_WRITER="$WRITER"
+export SMOKE_WORK="$WORK" SMOKE_ROOT="$ROOT" SMOKE_HOST="$HOST" SMOKE_MODEL="$MODEL" SMOKE_WRITER="$WRITER" SMOKE_AGENT="$AGENT" SMOKE_AGENT_ID="$AGENT_ID" SMOKE_OWNER="$OWNER" SMOKE_REPO="$REPO" SMOKE_INTAKE="$INTAKE"
 mkdir -p "$WORK"/xdg/{data/opencode,config/opencode,state,cache} "$WORK"/{bin,install,pack,dist}
 printf 'Sandbox: %s\nHost: %s; fixture PR: %s; intake: %s; model: %s; review cap: %sm; writer: %s\n' "$WORK" "$HOST" "$PR" "$INTAKE" "$MODEL" "$TIMEOUT_MIN" "$([[ "$WRITER" == 1 ]] && printf executed || printf denied)"
 
@@ -196,6 +307,9 @@ unset BASH_ENV ENV
 export XDG_DATA_HOME="$WORK/xdg/data" XDG_CONFIG_HOME="$WORK/xdg/config"
 export XDG_STATE_HOME="$WORK/xdg/state" XDG_CACHE_HOME="$WORK/xdg/cache"
 export SHELL=/bin/bash
+if [[ "$AGENT" == light && ( "$PREFLIGHT_ONLY" == 1 || "$PREFLIGHT_HOST" == 1 ) ]]; then
+  printf 'Light dry preflight: no provider auth copied; no model call\n'
+else
 bun -e '
   const { existsSync, readFileSync, writeFileSync } = await import("node:fs")
   const path = process.env.HOME + "/.local/share/opencode/auth.json"
@@ -207,6 +321,7 @@ bun -e '
   console.log("~/.aws: " + (existsSync(process.env.HOME + "/.aws") ? "present" : "absent"))
   if (entry) writeFileSync(process.env.XDG_DATA_HOME + "/opencode/auth.json", JSON.stringify({ "amazon-bedrock": entry }), { mode: 0o600 })
 ' || die 3 'Bedrock auth seeding failed'
+fi
 
 cap 120 "$CORVUS_SMOKE_REAL_GH" repo clone "$OWNER/$REPO" "$WORK/fixture" >"$WORK/clone.stdout" 2>"$WORK/clone.stderr" || die 4 'GitHub fixture clone failed (see clone.stderr)'
 [[ -z "$(git -C "$WORK/fixture" status --porcelain)" ]] || die 4 'fixture clone is not clean'
@@ -219,10 +334,14 @@ if [[ "$INTAKE" != local ]]; then
   BRANCH="$(bun -e 'const value = await Bun.file(process.env.SMOKE_WORK + "/pr.json").json(); if (typeof value.headRefName !== "string") process.exit(1); console.log(value.headRefName)')" || die 4 'invalid PR branch result'
   CROSS_REPO="$(bun -e 'const value = await Bun.file(process.env.SMOKE_WORK + "/pr.json").json(); if (typeof value.isCrossRepository !== "boolean" || typeof value.headRepository?.nameWithOwner !== "string" || !value.headRepository.nameWithOwner) process.exit(1); console.log(value.isCrossRepository)')" || die 4 'invalid PR repository result'
   [[ "$BRANCH" != -* ]] && git check-ref-format --branch "$BRANCH" >/dev/null || die 4 'invalid PR head branch'
-  seed_pr_branch
-  if [[ "$INTAKE" == branch ]]; then
+  PR_BRANCH="$BRANCH"
+  if [[ "$AGENT" == light ]]; then
+    cap 120 git -C "$WORK/fixture" fetch --no-tags origin "pull/$NUMBER/head" >"$WORK/fetch.log" 2>&1 || die 4 'light PR object fetch failed'
+  elif [[ "$INTAKE" == branch ]]; then
+    seed_pr_branch
     git -C "$WORK/fixture" checkout "$BRANCH" >>"$WORK/checkout.log" 2>&1 || die 4 'PR branch checkout failed'
   else
+    seed_pr_branch
     git -C "$WORK/fixture" checkout --detach "$BRANCH" >>"$WORK/checkout.log" 2>&1 || die 4 'PR detached fixture checkout failed'
   fi
 elif [[ "$INTAKE" == local ]]; then
@@ -232,6 +351,7 @@ elif [[ "$INTAKE" == local ]]; then
   (cd "$WORK/fixture" && cap 60 "$CORVUS_SMOKE_REAL_GH" pr list --head "$BRANCH" --state all --json number --limit 5) >"$WORK/local-prs.json" 2>"$WORK/pr.stderr" || die 4 'LOCAL PR absence lookup failed'
   bun -e 'const prs = await Bun.file(process.env.SMOKE_WORK + "/local-prs.json").json(); if (!Array.isArray(prs) || prs.length !== 0) process.exit(1)' || die 4 'LOCAL branch already has a PR or its listing is invalid'
 fi
+if [[ "$AGENT" == light ]]; then prepare_light_fixture; fi
 prepare_sync_remotes
 export GH_REPO="$OWNER/$REPO"
 if [[ "$INTAKE" == local ]]; then
@@ -245,7 +365,11 @@ else
 fi
 IFS= read -r HEAD_SHA <"$WORK/head-sha"
 [[ "$HEAD_SHA" =~ ^[a-f0-9]{40}$ ]] || die 4 'review head is not a lowercase 40-hex SHA'
-[[ "$INTAKE" != branch || "$(git -C "$WORK/fixture" rev-parse HEAD)" == "$HEAD_SHA" ]] || die 4 'checked-out branch differs from PR head'
+if [[ "$AGENT" == light && "$INTAKE" != local ]]; then
+  [[ "$(git -C "$WORK/fixture" rev-parse HEAD)" != "$HEAD_SHA" ]] || die 4 'light fixture must start at an unrelated HEAD'
+else
+  [[ "$INTAKE" != branch || "$(git -C "$WORK/fixture" rev-parse HEAD)" == "$HEAD_SHA" ]] || die 4 'checked-out branch differs from PR head'
+fi
 SMOKE_HEAD="$HEAD_SHA" SMOKE_INTAKE="$INTAKE" bun -e '
   const cwd = process.env.SMOKE_WORK + "/fixture"
   const args = process.env.SMOKE_INTAKE === "local" ? ["refs/remotes/github/HEAD"] : ["refs/remotes/github/HEAD..." + process.env.SMOKE_HEAD]
@@ -262,14 +386,16 @@ export PATH="$WORK/bin:$PATH"
 cd "$WORK/fixture"
 export PWD="$WORK/fixture"
 preflight_branch_pr
+if [[ "$AGENT" == light ]]; then light_snapshot before; fi
 if ((PREFLIGHT_ONLY)); then
   SMOKE_BRANCH="$BRANCH" SMOKE_HEAD="$HEAD_SHA" SMOKE_INTAKE="$INTAKE" SMOKE_CROSS_REPO="$CROSS_REPO" bun -e '
     const root = process.env.SMOKE_WORK
     const intake = process.env.SMOKE_INTAKE
-    const preflight = await Bun.file(root + (intake === "branch" ? "/branch-preflight.json" : intake === "local" ? "/local-prs.json" : "/pr.json")).json()
+    const preflight = await Bun.file(root + (intake === "branch" && process.env.SMOKE_AGENT !== "light" ? "/branch-preflight.json" : intake === "local" ? "/local-prs.json" : "/pr.json")).json()
     console.log("PREFLIGHT_RESULT " + JSON.stringify({ intake, branch: process.env.SMOKE_BRANCH, tip: process.env.SMOKE_HEAD,
       bare_tip_before: (await Bun.file(root + "/bare-tip-before").text()).trim(), cross_repo: process.env.SMOKE_CROSS_REPO === "true", preflight }))
   '
+  if [[ "$AGENT" == light ]]; then light_compare; light_push_probe; light_preflight_metrics; fi
   exit 0
 fi
 
@@ -318,7 +444,7 @@ fi
 # The package bundles this module into its host entries, not a standalone JS
 # export. Build a sandbox-only verifier from the same tree, without repacking or
 # editing the installed plugin that the host will exercise.
-if [[ "$INTAKE" != local ]]; then
+if [[ "$INTAKE" != local || "$AGENT" == light ]]; then
   cap 60 bun build "$ROOT/src/review-payload.ts" --outdir "$WORK/dist" --target bun >"$WORK/verifier-build.log" 2>&1 || die 3 'standalone verifier build failed'
 fi
 # Writer mode carries no task deny: the shim's POST admission is the only barrier and
@@ -327,10 +453,11 @@ bun -e '
   const root = process.env.SMOKE_INSTALL
   const v2 = process.env.SMOKE_HOST === "v2"
   const writer = process.env.SMOKE_WRITER === "1"
+  const agent = process.env.SMOKE_AGENT_ID
   const barrier = v2
-    ? { plugins: [root], agents: { "corvus-review-auto": { permissions: [{ action: "subagent", resource: "pr-comment-writer", effect: "deny" }] } } }
+    ? { plugins: [root], agents: { [agent]: { permissions: [{ action: "subagent", resource: "pr-comment-writer", effect: "deny" }] } } }
     : { plugin: [root + "/dist/server.js"], model: process.env.SMOKE_MODEL,
-      ...(writer ? {} : { agent: { "corvus-review-auto": { permission: { task: { "pr-comment-writer": "deny" } } } } }) }
+      ...(writer ? {} : { agent: { [agent]: { permission: { task: { "pr-comment-writer": "deny" } } } } }) }
   await Bun.write(process.env.XDG_CONFIG_HOME + "/opencode/opencode.json", JSON.stringify(barrier, null, 2) + "\n")
 ' || die 3 'host config generation failed'
 export GIT_TRACE2_EVENT="$WORK/git-trace.jsonl"
@@ -352,13 +479,14 @@ if [[ "$HOST" == v2 ]]; then
   SMOKE_EVIDENCE_KIND='real-host assertion' smoke_v2_plugin_state "$WORK/fixture" "$WORK/plugin-state.json" || die 3 'plugin-state: scoped active corvus server required; model was not started'
   preflight_v2_agents
 else
-  cap 60 "$CLI" debug agent corvus-review-auto --print-logs --log-level INFO >"$WORK/agents.json" 2>"$WORK/agents.stderr" || die 3 'host agent inspection failed'
+  cap 60 "$CLI" debug agent "$AGENT_ID" --print-logs --log-level INFO >"$WORK/agents.json" 2>"$WORK/agents.stderr" || die 3 'host agent inspection failed'
 fi
 
 # Barrier invariant: inspect the host-resolved rule before sending the model any
 # PR content. Barrier mode: an absent/non-deny final writer rule aborts both hosts.
-# Orchestrator tools: require corvus_review_payload and corvus_review_post via v1
-# resolved tools or v2 permissions (local matcher; inventory is probed separately).
+# Orchestrator tools: light requires pr/lock/persist/payload/verdict/sync/worktree
+# and denies direct post; auto requires payload/post. Inspect v1 resolved tools or
+# v2 permissions (local matcher; inventory is probed separately).
 # Writer mode (v1): the final rule must allow, and the writer must expose pr/post.
 # Missing tools/permissions abort; the shim remains the mutation barrier. This grants
 # no permissions, and neither --keep nor a timeout disables it.
@@ -368,12 +496,15 @@ bun -e '
   const data = await Bun.file(process.env.SMOKE_WORK + "/agents.json").json()
   const v2 = process.env.SMOKE_HOST === "v2"
   const expected = process.env.SMOKE_WRITER === "1" ? "allow" : "deny"
-  const agent = v2 ? data.find(a => a.id === "corvus-review-auto") : data
+  const agent = v2 ? data.find(a => a.id === (process.env.SMOKE_AGENT_ID || "corvus-review-auto")) : data
   const rules = v2 ? agent?.permissions : agent?.permission
   const { evaluateRules } = await import(process.env.SMOKE_ROOT + "/src/evaluate-rules.ts")
-  const required = ["corvus_review_payload", "corvus_review_post"]
+  const required = process.env.SMOKE_AGENT === "light"
+    ? ["corvus_review_pr", "corvus_review_lock", "corvus_review_persist", "corvus_review_payload", "corvus_review_verdict", "corvus_review_sync", "corvus_review_worktree"]
+    : ["corvus_review_payload", "corvus_review_post"]
   const exposed = required.every(name => v2 ? evaluateRules(rules ?? [], name, "*") === "allow" : agent?.tools?.[name] === true)
-  if (!exposed) { console.error("Orchestrator requires corvus_review_payload and corvus_review_post"); process.exit(1) }
+  if (!exposed) { console.error("Orchestrator requires " + required.join(", ")); process.exit(1) }
+  if (process.env.SMOKE_AGENT === "light" && (v2 ? evaluateRules(rules ?? [], "corvus_review_post", "*") !== "deny" : agent?.tools?.corvus_review_post === true)) { console.error("Light direct post must remain denied"); process.exit(1) }
   const writer = rules?.findLast(r => v2 ? r.action === "subagent" && r.resource === "pr-comment-writer" : r.permission === "task" && r.pattern === "pr-comment-writer")
     ?? rules?.findLast(r => v2 ? r.action === "subagent" && r.resource === "*" : r.permission === "task" && r.pattern === "*")
     ?? rules?.findLast(r => v2 ? r.action === "*" : r.permission === "*")
@@ -406,6 +537,7 @@ collect_logs
 bun -e '
   const { checkPluginLoaded } = await import(process.env.SMOKE_ROOT + "/scripts/check-review-artifacts.ts")
   const result = checkPluginLoaded({ host: process.env.SMOKE_HOST, hostlog: process.env.SMOKE_WORK + "/host.log",
+    agent: process.env.SMOKE_AGENT,
     fixture: process.env.SMOKE_WORK + "/fixture", pluginState: process.env.SMOKE_WORK + "/plugin-state.json",
     agents: process.env.SMOKE_WORK + "/agents.json", install: process.env.SMOKE_INSTALL, writer: process.env.SMOKE_WRITER === "1" })
   console.log("Plugin preflight: " + result.detail)
@@ -415,21 +547,36 @@ bun -e '
 ((NEGATIVE_CONTROL == 0)) || die 3 'negative-control unexpectedly passed plugin-state'
 if ((PREFLIGHT_HOST)); then
   stop_service || die 3 'sandbox service could not be stopped'
-  printf 'Host preflight: PASS; scoped plugin active, writer denied, shim sentinel rejected; no model started\n'
+  if [[ "$AGENT" == light ]]; then light_compare; light_push_probe; light_preflight_metrics; fi
+  printf 'Host preflight: PASS; plugin load verified, writer denied, shim sentinel rejected; no model started\n'
   exit 0
 fi
 
 REVIEW_START=$SECONDS
 RUN_STATUS=0
-ARGS=(run --agent corvus-review-auto --model "$MODEL" --format json)
+ARGS=(run --agent "$AGENT_ID" --model "$MODEL" --format json)
 [[ "$HOST" != v1 ]] || ARGS+=(--dir "$WORK/fixture")
 case "$INTAKE" in
   url) PROMPT="Review $PR. Run the full autonomous review." ;;
   branch) PROMPT="review this PR" ;;
   local) PROMPT="review my changes" ;;
 esac
+if [[ "$AGENT" == light ]]; then
+  case "$INTAKE" in
+    url) PROMPT="Review $PR with the autonomous light procedure." ;;
+    branch) PROMPT="Review branch $PR_BRANCH with the autonomous light procedure." ;;
+    local) PROMPT="Review my changes with the autonomous light procedure." ;;
+  esac
+  PROMPT="$PROMPT In the terminal summary disclose: Full-pipeline bookkeeping omitted by light contract. This harness denies the writer; do not bypass a denial."
+  # Replace the setup snapshot with the final pre-dispatch oracle (host boot is out
+  # of the agent-controlled interval). Also validates that preflight changed nothing.
+  light_compare
+  light_snapshot before
+  REVIEW_START=$SECONDS
+fi
 cap "$((TIMEOUT_MIN * 60))" "$CLI" "${ARGS[@]}" "$PROMPT" >"$WORK/run.jsonl" 2>"$WORK/run.stderr" || RUN_STATUS=$?
 printf 'Review host exit: %s; review duration: %ss\n' "$RUN_STATUS" "$((SECONDS - REVIEW_START))"
+if [[ "$AGENT" == light ]]; then printf '{"seconds":%s}\n' "$((SECONDS - REVIEW_START))" >"$WORK/agent-wall-clock.json"; fi
 
 SESSION_ID="$(bun -e '
   for (const line of (await Bun.file(process.env.SMOKE_WORK + "/run.jsonl").text()).split("\n")) {
@@ -460,11 +607,15 @@ if [[ "$HOST" == v2 ]]; then
 fi
 stop_service || die 3 'sandbox service could not be stopped; artifacts not checked'
 collect_logs
+if [[ "$AGENT" == light ]]; then light_compare; light_push_probe; fi
 CHECK_STATUS=0
 CHECK_ARGS=(--host "$HOST" --agents "$WORK/agents.json" --install "$SMOKE_INSTALL" --db "$XDG_DATA_HOME/opencode/opencode.db" --intake "$INTAKE" --bare "$WORK/bare.git" --cross-repo "$CROSS_REPO")
+[[ "$AGENT" != light ]] || CHECK_ARGS+=(--agent light)
 [[ "$HOST" != v2 ]] || CHECK_ARGS+=(--plugin-state "$WORK/plugin-state.json")
 [[ -z "$BRANCH" ]] || CHECK_ARGS+=(--branch "$BRANCH")
 [[ "$WRITER" == 0 ]] || CHECK_ARGS+=(--writer)
+# For light, HEAD_SHA is only the pre-run hint; DB-matched intake/attempt metadata
+# supplies the checker's independently validated heads and bases after movement.
 bun run "$ROOT/scripts/check-review-artifacts.ts" "$WORK/fixture" "$OWNER" "$REPO" "$NUMBER" "$HEAD_SHA" "$WORK/run.jsonl" "$WORK/host.log" "$WORK/gh-audit.log" "${CHECK_ARGS[@]}" | tee "$WORK/result.txt" || CHECK_STATUS=$?
 [[ "$RUN_STATUS" != 142 && "$RUN_STATUS" != 124 ]] || exit 124
 ((CHECK_STATUS == 0)) || exit "$CHECK_STATUS"

@@ -25,7 +25,7 @@ describe("loadAgents", () => {
   test("loads all agent files", () => {
     const agents = loadAgents(AGENT_DIR)
 
-    expect(Object.keys(agents)).toHaveLength(16)
+    expect(Object.keys(agents)).toHaveLength(18)
   })
 
   test("appends the canonical root only for authored skill allows, preserving all other rules", () => {
@@ -47,12 +47,15 @@ describe("loadAgents", () => {
       const { external_directory: authoredExternal, ...authoredOther } = permission
       expect(other).toEqual(authoredOther)
       expect(Object.entries(external_directory as object).slice(0, -1)).toEqual(
-        typeof authoredExternal === "string" ? [["*", authoredExternal]] : Object.entries(authoredExternal as object),
+        typeof authoredExternal === "string" ? [["*", authoredExternal]] : Object.entries(authoredExternal ?? {}),
       )
     }
-    for (const agent of Object.values(agents)) {
-      expect(agent.permission?.["*"]).toBe("allow")
-      expect(agent.permission).not.toHaveProperty("skill")
+    for (const [name, agent] of Object.entries(agents)) {
+      expect(agent.permission?.["*"]).toBe(name === "corvus-review-light" ? "deny" : "allow")
+      if (name === "corvus-review-light") {
+        expect(agent.permission?.skill).toBe("allow")
+        expect(agent.permission?.read).toBe("allow")
+      } else expect(agent.permission).not.toHaveProperty("skill")
     }
   })
 

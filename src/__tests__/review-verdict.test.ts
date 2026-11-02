@@ -125,6 +125,21 @@ function polishFindings(minors: number, nits: number): Finding[] {
 }
 
 describe("review verdict history", () => {
+  test("AC9: a posted light marker counts as a round but its local artifact cannot supply full-review resume history", () => withFixture(fixture => {
+    const lightPath = join(fixture.workspace, fixture.reviewRoot, ".light")
+    fs.mkdirSync(lightPath, { recursive: true })
+    const bodyMarker = `<!-- corvus-review v2 path=${fixture.reviewRoot} head=${headSha(1)} round=1 -->`
+    const body = `${bodyMarker}\n> Reduced-coverage light review — not a full review or approval.`
+    const artifact = JSON.stringify({ commit_id: headSha(1), event: "COMMENT", body, comments: [] })
+    fs.writeFileSync(join(lightPath, "post-request.json"), artifact)
+    const reviews = priorReviews(1)
+    if (!reviews.ok) throw new Error("Expected prior reviews")
+    reviews.reviews[0] = { ...reviews.reviews[0], body, body_marker: bodyMarker }
+    expect(verdict(fixture, { priorReviews: reviews })).toMatchObject({ ok: true, round: 2, missing_history: true, refuse_delta: true })
+    expect(fs.readdirSync(join(fixture.workspace, fixture.reviewRoot))).toEqual([".light"])
+    expect(fs.readFileSync(join(lightPath, "post-request.json"), "utf8")).toBe(artifact)
+  }))
+
   test("starts round 1 without refusing delta or claiming missing history when no prior reviews exist", () => withFixture(fixture => {
     expect(verdict(fixture, { priorReviews: priorReviews(0) })).toEqual({
       ok: true, round: 1, refuse_delta: false, missing_history: false,

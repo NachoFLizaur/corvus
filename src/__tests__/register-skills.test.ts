@@ -48,7 +48,7 @@ describe("registerSkills", () => {
 
     await registerSkills(fake.ctx)
 
-    expect(ids).toHaveLength(18)
+    expect(ids).toHaveLength(19)
     expect([...fake.skills.keys()]).toEqual(ids)
     expect(fake.registrations.map((registration) => registration.kind)).toEqual(["skill.transform"])
 
@@ -79,7 +79,7 @@ describe("registerSkills", () => {
       const record = skill as unknown as Record<string, unknown>
       expect({ id, path: record.path }).toEqual({ id, path: location })
 
-      // `name` comes from frontmatter, which equals the directory name in all 18.
+      // `name` comes from frontmatter, which equals the directory name in all 19.
       expect({ id, name: String(skill.name) }).toEqual({ id, name: id })
       expect({ id, described: typeof skill.description === "string" && skill.description !== "" }).toEqual({
         id,
@@ -96,7 +96,7 @@ describe("registerSkills", () => {
 
   test("stable Skill.Info rejects every legacy location-only record", () => {
     const skills = loadSkills(skillDir)
-    expect(skills).toHaveLength(18)
+    expect(skills).toHaveLength(19)
     for (const skill of skills) {
       // Use the schema's own validating constructor, avoiding a separately
       // resolved Effect version when v1 and v2 SDKs coexist in node_modules.
@@ -126,7 +126,7 @@ describe("registerSkills", () => {
 
     // `SkillEditor.add` is a keyed write, so re-adding overwrites each id with an
     // equal value instead of appending.
-    expect(fake.skills.size).toBe(18)
+    expect(fake.skills.size).toBe(19)
     expect(structuredClone(Object.fromEntries(fake.skills))).toEqual(afterFirst)
 
     await cleanup()

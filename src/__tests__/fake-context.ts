@@ -89,6 +89,8 @@ export type PermissionEvaluation = Parameters<Parameters<SetupContext["permissio
  */
 declare const sessionHook: SetupContext["session"]["hook"]
 export type SessionContextInput = Parameters<Parameters<typeof sessionHook<"context">>[1]>[0]
+declare const toolHook: SetupContext["tool"]["hook"]
+export type ToolBeforeInput = Parameters<Parameters<typeof toolHook<"execute.before">>[1]>[0]
 
 export type SystemPart = SessionContextInput["system"][number]
 
@@ -232,6 +234,7 @@ export interface FakeContext {
   evaluate(input: EvaluationInput): Promise<PermissionEvaluation>
   /** Drive one `session.context` through every live hook; returns the mutated context. */
   context(input: ContextInput): Promise<SessionContextInput>
+  beforeTool(input: Pick<ToolBeforeInput, "agent" | "tool" | "input">): Promise<void>
 }
 
 export function createFakeContext(directory = FAKE_DIRECTORY): FakeContext {
@@ -383,7 +386,8 @@ export function createFakeContext(directory = FAKE_DIRECTORY): FakeContext {
     },
     skill: { transform: (callback: (draft: SkillDraft) => void) => recordTransform("skill.transform", skillDraft, callback) },
     mcp: { transform: (callback: (draft: McpDraft) => void) => recordTransform("mcp.transform", mcpDraft, callback) },
-    tool: { transform: (callback: (draft: ToolDraft) => void) => recordTransform("tool.transform", toolDraft, callback) },
+    tool: { transform: (callback: (draft: ToolDraft) => void) => recordTransform("tool.transform", toolDraft, callback),
+      hook: (name: unknown, callback: unknown) => recordHook("tool.hook", name, callback) },
     permission: { hook: (name: unknown, callback: unknown) => recordHook("permission.hook", name, callback) },
     session: {
       hook: (name: unknown, callback: unknown) => recordHook("session.hook", name, callback),
@@ -441,6 +445,11 @@ export function createFakeContext(directory = FAKE_DIRECTORY): FakeContext {
       }
       await drive("session.hook", "context", value)
       return value
+    },
+    beforeTool: async input => {
+      const value: ToolBeforeInput = { ...input, sessionID: "ses_fake" as ToolBeforeInput["sessionID"],
+        messageID: "msg_fake" as ToolBeforeInput["messageID"], id: "call_fake" as ToolBeforeInput["id"] }
+      await drive("tool.hook", "execute.before", value)
     },
   }
 }

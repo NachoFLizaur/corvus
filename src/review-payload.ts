@@ -1,5 +1,7 @@
 import { Buffer } from "node:buffer"
 import { isLegacyReviewPath, isReviewPath } from "./review-persist"
+import { isLightClassPath, reviewNamespaceOf } from "./review-storage-class"
+import { REVIEW_CALLERS } from "./review-callers"
 import { createHash } from "node:crypto"
 import * as nodeFs from "node:fs"
 import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path"
@@ -57,6 +59,7 @@ export type ReviewPayloadFs = {
 export type ReviewPayloadOptions = {
   reviewStateRoot: string
   fs?: ReviewPayloadFs
+  storageClass?: "light" | "full"
 }
 
 type PathRejection = {
@@ -69,7 +72,7 @@ export type FreezeResult =
   | { ok: true; artifactPath: string; sha256: string; measurements: Measurements; fitted: boolean; omitted: ReviewOmissions }
   | CandidateRejection
   | PathRejection
-  | { ok: false; reason: "candidate-bom" | `candidate-${ParseReason}` | "candidate-read-error" | "artifact-write-error" | "artifact-read-error" }
+  | { ok: false; reason: "candidate-bom" | `candidate-${ParseReason}` | "candidate-read-error" | "artifact-write-error" | "artifact-read-error" | "artifact-event-not-allowed" }
   | { ok: false; reason: "readback-mismatch"; expectedBytes: number; actualBytes: number }
 
 export type VerifyResult = {
@@ -233,12 +236,24 @@ function checkedPath(
 ): { ok: true; path: string } | PathRejection {
   const reject = (reason: PathRejection["reason"]): PathRejection => ({ ok: false, reason, path })
   if (path.split(/[\\/]/).includes("..")) return reject("path-outside-root")
+  // Host caller selects the class before I/O; spelling and resolved targets must
+  // agree, so symlink aliases cannot move light bytes into sync-eligible state.
+  // Library verify (the writer) has no class restriction; post narrows its layout.
   try {
     const configuredRoot = resolve(opts.reviewStateRoot)
     const root = fs.realpathSync(configuredRoot)
     if (!fs.statSync(root).isDirectory()) return reject("path-resolution-error")
-     const absolute = resolve(path)
-     if (!inside(configuredRoot, absolute) && !inside(root, absolute)) return reject("path-outside-root")
+    const absolute = resolve(path)
+    if (!inside(configuredRoot, absolute) && !inside(root, absolute)) return reject("path-outside-root")
+    const requested = relative(inside(configuredRoot, absolute) ? configuredRoot : root, absolute)
+    const allowed = (target: string) => {
+      if (opts.storageClass === undefined) return true
+      const actual = relative(inside(configuredRoot, target) ? configuredRoot : root, target)
+      return opts.storageClass === "light"
+        ? isLightClassPath(requested) && isLightClassPath(actual) && reviewNamespaceOf(requested) === reviewNamespaceOf(actual)
+        : !isLightClassPath(requested) && !isLightClassPath(actual)
+    }
+    if (!allowed(absolute)) return reject("path-outside-root")
      if (basename(configuredRoot) === ".corvus" && (!isReviewPath(relative(inside(configuredRoot, absolute) ? configuredRoot : root, absolute))
        || (allowMissing && isLegacyReviewPath(absolute)))) return reject("path-outside-root")
     const parent = fs.realpathSync(dirname(absolute))
@@ -246,6 +261,7 @@ function checkedPath(
      if (basename(configuredRoot) === ".corvus" && !isReviewPath(relative(root, parent))) return reject("path-outside-root")
     if (!fs.statSync(parent).isDirectory()) return reject("path-resolution-error")
     const target = resolve(parent, basename(absolute))
+    if (!allowed(target)) return reject("path-outside-root")
     let metadata: ReturnType<ReviewPayloadFs["lstatSync"]>
     try {
       metadata = fs.lstatSync(target)
@@ -254,6 +270,7 @@ function checkedPath(
       return reject("path-resolution-error")
     }
     const realTarget = metadata.isSymbolicLink() ? fs.realpathSync(target) : target
+    if (!allowed(realTarget)) return reject("path-outside-root")
     if (!inside(root, realTarget)) return reject("path-outside-root")
     if (!fs.statSync(realTarget).isFile()) return reject("not-regular-file")
     return { ok: true, path: realTarget }
@@ -319,6 +336,17 @@ export function freeze(candidatePath: string, artifactPath: string, opts: Review
   if (!parsed.ok) return { ok: false, reason: `candidate-${parsed.reason}` }
   let measured = measure(parsed.value)
   if ("reason" in measured) return measured
+  /** Contained canonical paths and schema-checked event are read before fitting
+   * or writes. Light APPROVE fails closed, including library calls without a
+   * storageClass option; only full-class paths permit APPROVE. No bypass exists. */
+  if ((parsed.value as CandidateRequest).event === "APPROVE") {
+    let classRoot: string
+    try { classRoot = fs.realpathSync(opts.reviewStateRoot) }
+    catch { return { ok: false, reason: "path-resolution-error", path: candidatePath } }
+    if (basename(classRoot) === "reviews" && basename(dirname(classRoot)) === ".corvus") classRoot = dirname(classRoot)
+    const lightPath = (path: string) => isLightClassPath(relative(classRoot, path))
+    if (lightPath(candidate.path) || lightPath(artifact.path)) return { ok: false, reason: "artifact-event-not-allowed" }
+  }
   const fitted = !measured.ok
   let omitted: ReviewOmissions = { comments: 0, findings: 0 }
   if (fitted) {
@@ -396,6 +424,7 @@ export function preview(artifactPath: string, expectedSha256: string, opts: Revi
   let bytes: Buffer | undefined
   const checked = verify(artifactPath, expectedSha256, {
     reviewStateRoot: opts.reviewStateRoot,
+    storageClass: opts.storageClass,
     fs: {
       readFileSync(target) {
         bytes = Buffer.from(fs.readFileSync(target))
@@ -453,17 +482,18 @@ export function createReviewToolExecutors(directory: string) {
     return checkKeys(input, keys, keys) ?? keys.map(key => nonempty(input[key]) ? undefined : invalid(key)).find(Boolean)
   }
   return {
-    payload(input: unknown): string {
+    payload(input: unknown, caller?: string): string {
       const rejection = validate(input)
       if (rejection) return JSON.stringify(rejection)
       if (!opts) return JSON.stringify({ ok: false, reason: "invalid-workspace-directory" })
       const args = input as { op: "measure"; candidatePath: string }
         | { op: "freeze"; candidatePath: string; artifactPath: string }
         | { op: "preview"; artifactPath: string; expectedSha256: string }
+      const classOptions: ReviewPayloadOptions = { ...opts, storageClass: caller === REVIEW_CALLERS.lightOrchestrator ? "light" : "full" }
       return JSON.stringify(args.op === "measure"
-        ? measureFile(path(args.candidatePath), opts)
-        : args.op === "freeze" ? freeze(path(args.candidatePath), path(args.artifactPath), opts)
-        : preview(path(args.artifactPath), args.expectedSha256, opts))
+        ? measureFile(path(args.candidatePath), classOptions)
+        : args.op === "freeze" ? freeze(path(args.candidatePath), path(args.artifactPath), classOptions)
+        : preview(path(args.artifactPath), args.expectedSha256, classOptions))
     },
   }
 }

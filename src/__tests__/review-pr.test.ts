@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import { createHash } from "node:crypto"
 import {
   checks, config, createPrExecutor, diff, files, find, head, identity, isPrCallerAllowed, local, metadata, repo, reviews,
   type PrExec, type PrExecResult,
@@ -30,7 +31,7 @@ function recordingExec(...responses: Array<PrExecResult | Promise<PrExecResult>>
 
 describe("review PR metadata, head and files", () => {
   test("detectors can recover PR evidence but cannot read invocation controls", () => {
-    for (const caller of ["pr-code-reviewer", "security-reviewer"]) {
+    for (const caller of ["pr-code-reviewer", "security-reviewer", "pr-light-reviewer"]) {
       for (const op of ["metadata", "head", "files", "diff", "reviews", "checks"]) expect(isPrCallerAllowed(caller, op)).toBe(true)
       for (const op of ["identity", "config", "find", "local", "repo", "post", undefined]) expect(isPrCallerAllowed(caller, op)).toBe(false)
     }
@@ -42,7 +43,7 @@ describe("review PR metadata, head and files", () => {
     const data = {
       number: 42, url: "https://github.com/example/project/pull/42", title: "A change", state: "OPEN",
       isDraft: false, isCrossRepository: false, mergeable: "MERGEABLE", author: { login: "contributor" },
-      baseRefName: "main", baseRefOid: BASE_SHA, headRefName: "feature", headRefOid: HEAD_SHA, changedFiles: 2,
+      baseRefName: "main", baseRefOid: BASE_SHA, headRefName: "feature", headRefOid: HEAD_SHA, changedFiles: 2, additions: 137, deletions: 19,
       body: `${BODY}\n\n## Description\nKeep this text as-is.`,
       labels: [{ id: "L_1", name: "breaking-change", description: BODY, color: "ff0000" }],
       closingIssuesReferences: [{ number: 7, url: "https://github.com/example/project/issues/7", title: BODY }],
@@ -63,7 +64,7 @@ describe("review PR metadata, head and files", () => {
     const data = {
       number: 42, url: "https://github.com/example/project/pull/42", title: "A change", state: "OPEN",
       isDraft: false, isCrossRepository: false, mergeable: "MERGEABLE",
-      baseRefName: "main", baseRefOid: BASE_SHA, headRefName: "feature", headRefOid: HEAD_SHA, changedFiles: 2,
+      baseRefName: "main", baseRefOid: BASE_SHA, headRefName: "feature", headRefOid: HEAD_SHA, changedFiles: 2, additions: 0, deletions: 0,
       body: BODY, labels: [], closingIssuesReferences: [], latestReviews: [], reviewDecision: null,
     }
 
@@ -87,6 +88,16 @@ describe("review PR metadata, head and files", () => {
     ])("rejects malformed metadata author login %j", async name => {
       const { exec } = recordingExec(success(JSON.stringify({ ...data, author: { login: name }, files: [] })), commits)
       expect(await metadata(locator, { exec })).toEqual({ ok: false, reason: "invalid-response", api_calls: 2 })
+    })
+
+    test.each(["additions", "deletions"])("validates numeric %s counts, including zero", async field => {
+      const valid = { ...data, author: { login: "contributor" } }
+      for (const value of [undefined, null, "12", -1, 0.5, Number.MAX_SAFE_INTEGER + 1]) {
+        const { exec } = recordingExec(success(JSON.stringify({ ...valid, [field]: value })), commits)
+        expect(await metadata(locator, { exec })).toEqual({ ok: false, reason: "invalid-response", api_calls: 2 })
+      }
+      const { exec } = recordingExec(success(JSON.stringify(valid)), commits)
+      expect(await metadata(locator, { exec })).toMatchObject({ ok: true, additions: 0, deletions: 0 })
     })
   })
 
@@ -113,6 +124,337 @@ describe("review PR metadata, head and files", () => {
       ok: false, reason: "forbidden", http_status: 403, files: [{ ...file, has_patch: false }], complete_pagination: false, excluded_corvus: 0, api_calls: 2,
     })
     expect(calls).toHaveLength(1)
+  })
+})
+
+describe("review PR bounded per-path patches", () => {
+  const anchor = { filename: "src/anchor.ts", status: "added", additions: 2, deletions: 0, patch: "@@ -0,0 +1,2 @@\n+first\n+second" }
+  const binary = { filename: "image.png", status: "added", additions: 0, deletions: 0 }
+  const state = { filename: ".corvus/reviews/pr15/input.md", status: "modified", additions: 1, deletions: 0, patch: "+state" }
+  const listing = JSON.stringify([anchor]) + "\n" + JSON.stringify([binary, state]) + "\n"
+  const input = { op: "files", ...locator, paginate: true }
+  const anchored = { ...anchor, has_patch: true, diff_anchor: `diff-${createHash("sha256").update(anchor.filename).digest("hex")}` }
+  const anchoredBinary = { ...binary, has_patch: false, diff_anchor: `diff-${createHash("sha256").update(binary.filename).digest("hex")}` }
+
+  test("derives anchors from exact UTF-8 paths, not an API-supplied anchor", async () => {
+    const filename = 'src/é path "quoted".ts'
+    const item = { ...anchor, filename, diff_anchor: "diff-untrusted" }
+    const { exec } = recordingExec(success(JSON.stringify([item])))
+    expect(await files({ ...locator, paginate: true, paths: [filename] }, { exec })).toEqual({
+      ok: true, files: [{ ...anchor, filename, has_patch: true, diff_anchor: `diff-${createHash("sha256").update(filename, "utf8").digest("hex")}` }],
+      excluded_corvus: 0, missing_paths: [], complete_pagination: true, api_calls: 1,
+    })
+  })
+
+  test("filters after full pagination, deduplicates selectors and preserves entire patches in listing order", async () => {
+    const { exec, calls } = recordingExec(success(listing))
+    const result = JSON.parse(await createPrExecutor({ exec })({ ...input, paths: [binary.filename, anchor.filename, anchor.filename] }))
+    expect(result).toEqual({
+      ok: true, files: [anchored, anchoredBinary],
+      excluded_corvus: 1, missing_paths: [], complete_pagination: true, api_calls: 2,
+    })
+    expect(calls).toEqual([["gh", "api", "--method", "GET", "--paginate", `${endpoint}/files`, "-H", "Accept: application/vnd.github+json"]])
+  })
+
+  test("reports missing paths once in request order without treating excluded state files as absent", async () => {
+    const { exec } = recordingExec(success(listing))
+    expect(await files({ ...locator, paginate: true, paths: ["missing-z.ts", state.filename, anchor.filename, "missing-a.ts", "missing-z.ts"] }, { exec })).toEqual({
+      ok: true, files: [anchored], excluded_corvus: 1,
+      missing_paths: ["missing-z.ts", "missing-a.ts"], complete_pagination: true, api_calls: 2,
+    })
+  })
+
+  test("an empty selector returns no records but still reads every page", async () => {
+    const { exec } = recordingExec(success(listing))
+    expect(await files({ ...locator, paginate: true, paths: [] }, { exec })).toEqual({
+      ok: true, files: [], excluded_corvus: 1, missing_paths: [], complete_pagination: true, api_calls: 2,
+    })
+  })
+
+  test("partial pagination retains matching evidence without claiming missing paths are confirmed absent", async () => {
+    for (const response of [
+      { ...forbidden, stdout: JSON.stringify([anchor]) },
+      success(JSON.stringify([anchor]) + "\n[{"),
+      success(JSON.stringify([anchor]) + "\n" + JSON.stringify([{ ...binary, additions: "bad" }])),
+    ]) {
+      const { exec } = recordingExec(response)
+      expect(await files({ ...locator, paginate: true, paths: [anchor.filename, binary.filename] }, { exec })).toEqual({
+        ok: false, reason: response.code === 0 ? "invalid-response" : "forbidden",
+        ...(response.code === 0 ? {} : { http_status: 403 }), files: [anchored],
+        excluded_corvus: 0, missing_paths: [binary.filename], complete_pagination: false,
+        api_calls: 2,
+      })
+    }
+  })
+
+  test.each([
+    null, "src/anchor.ts", {}, [null], [1], [""], ["."], [".."], ["./src/anchor.ts"],
+    ["src/../anchor.ts"], ["src/./anchor.ts"], ["/src/anchor.ts"], ["src//anchor.ts"], ["src/"],
+    ["C:/src/anchor.ts"], ["C:\\src\\anchor.ts"], ["src\\anchor.ts"], ["src/\0anchor.ts"],
+    ["src/\nanchor.ts"], ["src/\tanchor.ts"], ["src/\u007fanchor.ts"], ["src/\u0085anchor.ts"],
+    ["a".repeat(1_025)], Array.from({ length: 51 }, () => "duplicate.ts"),
+  ].map(paths => [paths]))("rejects invalid paths %j before exec", async paths => {
+    const { exec, calls } = recordingExec()
+    expect(JSON.parse(await createPrExecutor({ exec })({ ...input, paths }))).toEqual({
+      ok: false, reason: "invalid-input:paths", complete_pagination: false, api_calls: 0,
+    })
+    expect(calls).toEqual([])
+  })
+
+  test("rejects sparse or accessor-backed selectors without evaluating their entries", async () => {
+    let reads = 0
+    const accessor: string[] = []
+    Object.defineProperty(accessor, "0", { get: () => { reads++; return anchor.filename } })
+    const { exec, calls } = recordingExec()
+    for (const paths of [Array<string>(1), accessor]) {
+      expect(JSON.parse(await createPrExecutor({ exec })({ ...input, paths }))).toMatchObject({ ok: false, reason: "invalid-input:paths", api_calls: 0 })
+    }
+    expect(reads).toBe(0)
+    expect(calls).toEqual([])
+  })
+
+  test("accepts the count/length boundaries and valid spaces, quotes and Unicode without interpreting paths", async () => {
+    const paths = ["a".repeat(1_024), "src/path with spaces.ts", 'src/"quoted".ts', "src/é.ts", ...Array.from({ length: 46 }, (_, index) => `src/${index}.ts`)]
+    const { exec, calls } = recordingExec(success("[]"))
+    expect(await files({ ...locator, paginate: true, paths, names_only: false, include_corvus: false }, { exec })).toEqual({
+      ok: true, files: [], excluded_corvus: 0, missing_paths: paths, complete_pagination: true, api_calls: 1,
+    })
+    expect(calls).toHaveLength(1)
+    expect(calls[0].join(" ")).not.toContain(paths[0])
+  })
+
+  test("rejects paths with either names-only mode and rejects paths on other operations", async () => {
+    const { exec, calls } = recordingExec()
+    const run = createPrExecutor({ exec })
+    for (const flags of [{ names_only: true }, { include_corvus: true }, { include_corvus: true, names_only: false }]) {
+      expect(JSON.parse(await run({ ...input, paths: [anchor.filename], ...flags }))).toEqual({
+        ok: false, reason: "invalid-input:paths", complete_pagination: false, api_calls: 0,
+      })
+    }
+    expect(JSON.parse(await run({ op: "diff", ...locator, paths: [anchor.filename] }))).toEqual({ ok: false, reason: "invalid-arguments", api_calls: 0 })
+    expect(calls).toEqual([])
+  })
+
+  test("keeps unfiltered executor JSON byte-identical to the captured pre-filter fixture", async () => {
+    const snapshots: Array<[Record<string, boolean>, string]> = [
+      [{}, '{"ok":true,"files":[{"filename":"src/anchor.ts","status":"added","additions":2,"deletions":0,"has_patch":true,"patch":"@@ -0,0 +1,2 @@\\n+first\\n+second"},{"filename":"image.png","status":"added","additions":0,"deletions":0,"has_patch":false}],"excluded_corvus":1,"complete_pagination":true,"api_calls":2}'],
+      [{ names_only: true }, '{"ok":true,"files":["src/anchor.ts","image.png"],"excluded_corvus":1,"complete_pagination":true,"api_calls":2}'],
+      [{ include_corvus: true }, '{"ok":true,"files":["src/anchor.ts","image.png",".corvus/reviews/pr15/input.md"],"excluded_corvus":0,"complete_pagination":true,"api_calls":2}'],
+      [{ include_corvus: true, names_only: false }, '{"ok":true,"files":["src/anchor.ts","image.png",".corvus/reviews/pr15/input.md"],"excluded_corvus":0,"complete_pagination":true,"api_calls":2}'],
+    ]
+    for (const [flags, before] of snapshots) {
+      const { exec } = recordingExec(success(listing))
+      expect(await createPrExecutor({ exec })({ ...input, ...flags })).toBe(before)
+    }
+  })
+
+  test("PR #15-sized oversized diff falls back to a complete new-file anchor in a readable filtered result", async () => {
+    const bulk = { filename: "generated.txt", status: "added", additions: 1, deletions: 0, patch: "@@ -0,0 +1 @@\n+" }
+    const baseOutput = JSON.stringify({ ok: true, files: [anchor, bulk].map(({ patch, ...item }) => ({ ...item, has_patch: true, patch })), excluded_corvus: 0, complete_pagination: true, api_calls: 2 })
+    bulk.patch += "x".repeat(527_565 - Buffer.byteLength(baseOutput))
+    const pages = JSON.stringify([anchor]) + "\n" + JSON.stringify([bulk])
+    const { exec } = recordingExec(success("x".repeat(514_396)), success(pages), success(pages))
+    const run = createPrExecutor({ exec })
+    expect(JSON.parse(await run({ op: "diff", ...locator }))).toEqual({ ok: true, oversized: true, api_calls: 1 })
+    const unfiltered = await run(input)
+    expect(Buffer.byteLength(unfiltered)).toBe(527_565)
+    const filtered = await run({ ...input, paths: [anchor.filename] })
+    expect(Buffer.byteLength(filtered)).toBeLessThan(2_000)
+    expect(JSON.parse(filtered)).toEqual({
+      ok: true, files: [anchored], excluded_corvus: 0,
+      missing_paths: [], complete_pagination: true, api_calls: 2,
+    })
+  })
+})
+
+describe("review PR tool-verified RIGHT anchors", () => {
+  const input = { op: "files", ...locator, paginate: true }
+  const changed = { filename: "src/changed.ts", status: "modified", additions: 2, deletions: 2,
+    patch: "@@ -10,4 +10,4 @@\n context\n-deleted\n+added\n context2\n-tail\n+replacement\n@@ -30 +30 @@\n last" }
+  const added = { filename: "new.ts", status: "added", additions: 2, deletions: 0, patch: "@@ -0,0 +1,2 @@\n+first\n+last\n\\ No newline at end of file" }
+  const deleted = { filename: "deleted.ts", status: "removed", additions: 0, deletions: 1, patch: "@@ -1 +0,0 @@\n-only old" }
+  const binary = { filename: "image.png", status: "added", additions: 0, deletions: 0 }
+  const listing = JSON.stringify([changed, added]) + "\n" + JSON.stringify([deleted, binary])
+  const resultAnchor = (path: string, line: number, reason?: string, start_line?: number) => ({ path, line,
+    ...(start_line === undefined ? {} : { start_line }), postable: reason === undefined, ...(reason ? { reason } : {}),
+    source: "api",
+    diff_anchor: `diff-${createHash("sha256").update(path).digest("hex")}` })
+
+  test("verifies added/context lines, new files and exact single-hunk ranges without returning patches", async () => {
+    const anchors = [{ path: changed.filename, line: 10 }, { path: changed.filename, line: 11 },
+      { path: changed.filename, start_line: 10, line: 13 }, { path: added.filename, start_line: 1, line: 2 },
+      { path: changed.filename, start_line: 30, line: 30 }]
+    const { exec, calls } = recordingExec(success(listing))
+    const result = JSON.parse(await createPrExecutor({ exec })({ ...input, anchors }))
+    expect(result).toEqual({ ok: true, excluded_corvus: 0,
+      anchors: anchors.map(anchor => resultAnchor(anchor.path, anchor.line, undefined, anchor.start_line)), complete_pagination: true, api_calls: 2 })
+    expect(result).not.toHaveProperty("files")
+    expect(JSON.stringify(result)).not.toContain("patch")
+    expect(calls).toHaveLength(1)
+  })
+
+  test("rejects deleted-only, outside, multi-hunk, missing and patchless anchors with compact reasons", async () => {
+    const anchors = [{ path: deleted.filename, line: 1 }, { path: changed.filename, line: 14 },
+      { path: changed.filename, start_line: 13, line: 30 }, { path: "missing.ts", line: 1 }, { path: binary.filename, line: 1 }]
+    const { exec } = recordingExec(success(listing))
+    expect(JSON.parse(await createPrExecutor({ exec })({ ...input, anchors })).anchors).toEqual([
+      resultAnchor(deleted.filename, 1, "outside-hunk"), resultAnchor(changed.filename, 14, "outside-hunk"),
+      resultAnchor(changed.filename, 30, "spans-hunks", 13), resultAnchor("missing.ts", 1, "path-not-in-pr"), resultAnchor(binary.filename, 1, "no-patch"),
+    ])
+  })
+
+  test.each([
+    "@@ -1,2 +1,2 @@\n context", // truncated hunk, even the observed line cannot establish completeness
+    "@@ -1 +1 @@\n-context only old", // missing RIGHT line
+    "@@ -1 +1 @@\n+new", // missing old line
+    "@@ -1 +1 @@\n context\n+extra", // over-counted
+    "@@ -1 +1 @@\nmalformed",
+    "@@ -1 +9007199254740992 @@\n context",
+    "@@ -0 +0 @@\n context",
+  ])("malformed or incomplete patch %s cannot verify a visible line", async patch => {
+    const { exec } = recordingExec(success(JSON.stringify([{ ...changed, patch }])))
+    expect(JSON.parse(await createPrExecutor({ exec })({ ...input, anchors: [{ path: changed.filename, line: 1 }] })).anchors)
+      .toEqual([resultAnchor(changed.filename, 1, "outside-hunk")])
+  })
+
+  test("incomplete pagination fails every anchor closed, including present early-page matches", async () => {
+    for (const response of [{ ...forbidden, stdout: JSON.stringify([added]) }, success(JSON.stringify([added]) + "\n[{"),
+      success(JSON.stringify([added, { ...binary, additions: "bad" }]))]) {
+      const { exec } = recordingExec(response)
+      const result = JSON.parse(await createPrExecutor({ exec })({ ...input, anchors: [{ path: added.filename, line: 1 }, { path: "missing.ts", line: 1 }] }))
+      expect(result).toMatchObject({ ok: false, complete_pagination: false, anchors: [
+        resultAnchor(added.filename, 1, "incomplete-pagination"), resultAnchor("missing.ts", 1, "incomplete-pagination"),
+      ] })
+      expect(result).not.toHaveProperty("files")
+    }
+  })
+
+  test("anchors combine with independent paths selection and preserve empty-selector semantics", async () => {
+    const { exec } = recordingExec(success(listing), success(listing))
+    const run = createPrExecutor({ exec })
+    const result = JSON.parse(await run({ ...input, paths: [binary.filename], anchors: [{ path: added.filename, line: 2 }] }))
+    expect(result.files).toEqual([{ ...binary, has_patch: false, diff_anchor: resultAnchor(binary.filename, 1).diff_anchor }])
+    expect(result.missing_paths).toEqual([])
+    expect(result.anchors).toEqual([resultAnchor(added.filename, 2)])
+    expect(JSON.parse(await run({ ...input, anchors: [] }))).toEqual({ ok: true, excluded_corvus: 0, anchors: [], complete_pagination: true, api_calls: 2 })
+  })
+
+  test.each([null, {}, "new.ts", [null], [{}], [{ path: "new.ts" }], [{ path: "new.ts", line: 0 }],
+    [{ path: "new.ts", line: 1.5 }], [{ path: "new.ts", line: Number.MAX_SAFE_INTEGER + 1 }], [{ path: "new.ts", line: 1, side: "LEFT" }],
+    [{ path: "new.ts", line: 1, start_line: 2 }], [{ path: "new.ts", line: 1, start_line: null }], [{ path: "new.ts", line: 1, start_line: undefined }],
+    ...["", "./new.ts", "src/../new.ts", "/new.ts", "C:/new.ts", "src\\new.ts", "src/\0new.ts", "a".repeat(1_025)]
+      .map(path => [{ path, line: 1 }]), Array.from({ length: 51 }, () => ({ path: "new.ts", line: 1 }))].map(anchors => [anchors]))(
+    "invalid anchor input %j rejects before any exec", async anchors => {
+      const { exec, calls } = recordingExec()
+      expect(JSON.parse(await createPrExecutor({ exec })({ ...input, anchors }))).toEqual({ ok: false, reason: "invalid-input:anchors", complete_pagination: false, api_calls: 0 })
+      expect(calls).toEqual([])
+    })
+
+  test("dense plain-data anchors reject accessors without executing them; names-only flags and other ops reject", async () => {
+    let reads = 0
+    const accessor: unknown[] = []
+    Object.defineProperty(accessor, "0", { get: () => { reads++; return { path: "new.ts", line: 1 } } })
+    const item = { path: "new.ts" }
+    Object.defineProperty(item, "line", { get: () => { reads++; return 1 } })
+    const { exec, calls } = recordingExec()
+    const run = createPrExecutor({ exec })
+    for (const anchors of [accessor, Array(1), [item]]) expect(JSON.parse(await run({ ...input, anchors })).reason).toBe("invalid-input:anchors")
+    for (const flags of [{ names_only: true }, { include_corvus: true }])
+      expect(JSON.parse(await run({ ...input, anchors: [], ...flags })).reason).toBe("invalid-input:anchors")
+    expect(JSON.parse(await run({ op: "diff", ...locator, anchors: [] })).reason).toBe("invalid-arguments")
+    expect(reads).toBe(0)
+    expect(calls).toEqual([])
+  })
+
+  test("paths-only JSON stays byte-identical to the beta.2 field order and patch bytes", async () => {
+    const { exec } = recordingExec(success(JSON.stringify([added])))
+    const expected = `{"ok":true,"files":[{"filename":"new.ts","status":"added","additions":2,"deletions":0,"has_patch":true,"patch":${JSON.stringify(added.patch)},"diff_anchor":${JSON.stringify(resultAnchor(added.filename, 1).diff_anchor)}}],"excluded_corvus":0,"missing_paths":[],"complete_pagination":true,"api_calls":1}`
+    expect(await createPrExecutor({ exec })({ ...input, paths: [added.filename] })).toBe(expected)
+  })
+
+  const prIdentity = { number: 42, html_url: "https://github.com/example/project/pull/42", head: { sha: HEAD_SHA }, base: { sha: BASE_SHA } }
+  const merge = "c".repeat(40)
+  function localExec(mode = "success", status = "modified") {
+    const calls: { argv: string[]; options: Parameters<PrExec>[1] }[] = []
+    let snapshots = 0, listings = 0
+    const exec: PrExec = async (argv, options) => {
+      calls.push({ argv, options })
+      if (argv[0] === "gh") {
+        if (argv.includes(`${endpoint}/files`)) {
+          listings++
+           return success(JSON.stringify(mode === "listing-moved" && listings === 2 ? [] : [{ ...binary, filename: ":(glob)*.ts", status,
+             ...(mode === "previous-filename" ? { previous_filename: "old.ts" } : {}) }]))
+        }
+        snapshots++
+        return success(JSON.stringify(mode === "head-moved" && snapshots === 2 ? { ...prIdentity, head: { sha: "d".repeat(40) } }
+          : mode === "base-moved" && snapshots === 2 ? { ...prIdentity, base: { sha: "d".repeat(40) } }
+          : mode === "wrong-pr" ? { ...prIdentity, number: 7 } : prIdentity))
+      }
+      const args = argv.slice(3)
+      if (args[0] === "rev-parse" && args[1] === "--show-toplevel") return success("/session/repo\n")
+      if (args[0] === "rev-parse") {
+        if (mode === "missing") return { code: 128, stdout: "", stderr: "missing object" }
+        return success(mode === "sha-mismatch" ? merge : args[2].slice(0, 40))
+      }
+      if (args[0] === "merge-base") return success(merge)
+      if (args[0] === "diff") return { ...success("diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1 +1,2 @@\n context\n+added\n"),
+        ...(mode === "truncated" ? { stdout_truncated: true as const } : {}) }
+      throw new Error("Unexpected command")
+    }
+    return { exec, calls }
+  }
+
+  test.each(["modified", "patch omitted"])("API %s without a patch verifies local object hunks with literal paths and scrubbed env", async status => {
+    const { exec, calls } = localExec("success", status)
+    const result = await files({ ...locator, paginate: true, anchors: [{ path: ":(glob)*.ts", line: 2 }] }, { exec, cwd: "/session/repo/subdir" })
+    expect(result).toMatchObject({ ok: true, anchors: [{ path: ":(glob)*.ts", line: 2, postable: true, source: "local" }], complete_pagination: true, api_calls: 4 })
+    expect(result).not.toHaveProperty("files")
+    const git = calls.filter(call => call.argv[0] === "git")
+    expect(git[0].options?.cwd).toBe("/session/repo/subdir")
+    expect(git.slice(1).every(call => call.options?.cwd === "/session/repo")).toBe(true)
+    expect(git.at(-1)?.argv).toEqual(["git", "-c", "core.fsmonitor=false", "diff", "--no-color", "--no-ext-diff", "--no-textconv", "-U3", `${merge}...${HEAD_SHA}`, "--", ":(glob)*.ts"])
+    for (const call of git) expect(call.options?.env).toMatchObject({ GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null",
+      GIT_NO_REPLACE_OBJECTS: "1", GIT_NO_LAZY_FETCH: "1", GIT_LITERAL_PATHSPECS: "1", GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0" })
+  })
+
+  test.each(["missing", "sha-mismatch", "head-moved", "base-moved", "wrong-pr", "truncated", "listing-moved"])("local fallback %s fails closed to no-patch", async mode => {
+    const { exec, calls } = localExec(mode)
+    const result = await files({ ...locator, paginate: true, anchors: [{ path: ":(glob)*.ts", line: 2 }] }, { exec })
+    expect(result).toMatchObject({ ok: true, anchors: [{ postable: false, reason: "no-patch", source: "api" }] })
+    if (["missing", "sha-mismatch", "wrong-pr"].includes(mode)) expect(calls.some(call => call.argv.includes("diff"))).toBe(false)
+  })
+
+  test.each([["success", "renamed"], ["previous-filename", "modified"]])("patchless rename provenance (%s/%s) never verifies new-path-only hunks", async (mode, status) => {
+    const { exec, calls } = localExec(mode, status)
+    const result = await files({ ...locator, paginate: true, anchors: [{ path: ":(glob)*.ts", line: 2 }] }, { exec })
+    expect(result).toMatchObject({ ok: true, anchors: [{ postable: false, reason: "no-patch", source: "api" }], api_calls: 1 })
+    expect(calls.some(call => call.argv[0] === "git")).toBe(false)
+  })
+
+  test("patchless unfiltered/paths output is byte-identical and performs no fallback I/O", async () => {
+    const record = { ...binary, filename: "huge.ts" }
+    for (const paths of [undefined, [record.filename]]) {
+      const { exec, calls } = recordingExec(success(JSON.stringify([record])))
+      const projected = { ...record, has_patch: false, ...(paths ? { diff_anchor: resultAnchor(record.filename, 1).diff_anchor } : {}) }
+      expect(await createPrExecutor({ exec })({ ...input, ...(paths ? { paths } : {}) })).toBe(JSON.stringify({ ok: true,
+        files: [projected], excluded_corvus: 0, ...(paths ? { missing_paths: [] } : {}), complete_pagination: true, api_calls: 1 }))
+      expect(calls).toHaveLength(1)
+    }
+  })
+
+  test("PR #15-sized selected README patch verifies all three anchors in less than 2 KB", async () => {
+    const readmePatch = "@@ -280,5 +280,5 @@\n" + Array.from({ length: 5 }, () => " " + "x".repeat(10_000)).join("\n")
+      + "\n@@ -704 +704 @@\n " + "x".repeat(3_206)
+    expect(readmePatch.length).toBeGreaterThan(53_000)
+    const records = [{ ...changed, filename: "README.md", patch: readmePatch },
+      { ...changed, filename: "src/review-post.ts", patch: "@@ -113 +113 @@\n context" }]
+    const { exec } = recordingExec(success(JSON.stringify(records)), success(JSON.stringify(records)))
+    const run = createPrExecutor({ exec })
+    expect(Buffer.byteLength(await run({ ...input, paths: records.map(item => item.filename) }))).toBeGreaterThan(50_000)
+    const result = await run({ ...input, anchors: [{ path: "README.md", line: 284 }, { path: "README.md", line: 704 }, { path: "src/review-post.ts", line: 113 }] })
+    expect(Buffer.byteLength(result)).toBeLessThan(2_000)
+    expect(JSON.parse(result).anchors.every((anchor: { postable: boolean }) => anchor.postable)).toBe(true)
+    expect(JSON.parse(result)).not.toHaveProperty("files")
   })
 })
 
@@ -195,7 +537,7 @@ describe("review PR reviews and threads", () => {
     }
     const { exec } = recordingExec(success(JSON.stringify([review])), success("[]"))
     expect(await reviews(locator, { exec })).toEqual({
-      ok: true, reviews: [{ ...review, user: "raven-nachoflizaur[bot]" }], threads: [], dispositions: [],
+      ok: true, reviews: [{ ...review, user: "raven-nachoflizaur[bot]" }], threads: [], dispositions: [], prior_threads: [],
       complete_pagination: true, complete_threads: true, api_calls: 2,
     })
   })
@@ -222,7 +564,8 @@ describe("review PR reviews and threads", () => {
       finding_id: "logic-spec-001", axis: "spec", dimension: "correctness",
       body: root.body,
     } as const
-    expect(result).toEqual({
+    const { prior_threads, ...legacy } = result
+    expect(legacy).toEqual({
       ok: true,
       reviews: [{ id: 123, user: "reviewer", state: "COMMENTED", commit_id: HEAD_SHA, submitted_at: review.submitted_at, html_url: REVIEW_URL, body: review.body, body_marker: MARKER }],
       threads: [{ root: projectedRoot, replies: [{
@@ -233,6 +576,7 @@ describe("review PR reviews and threads", () => {
       dispositions: [{ finding_id: "logic-spec-001", axis: "spec", dimension: "correctness", thread_url: THREAD_URL, state: "unknown", evidence: BASE_SHA }],
       complete_pagination: true, complete_threads: true, api_calls: 4,
     })
+    expect(prior_threads).toEqual([{ ...legacy.threads![0], is_corvus_review: true, is_resolved: null, is_outdated: null }])
     expect(calls).toEqual([
       ["gh", "api", "--method", "GET", "--paginate", `${endpoint}/reviews`, "-H", "Accept: application/vnd.github+json"],
       ["gh", "api", "--method", "GET", "--paginate", `${endpoint}/comments`, "-H", "Accept: application/vnd.github+json"],
@@ -242,10 +586,25 @@ describe("review PR reviews and threads", () => {
   test("does not claim complete pagination or thread coverage when comments are forbidden", async () => {
     const { exec, calls } = recordingExec(success("[]"), forbidden)
     expect(await reviews(locator, { exec })).toEqual({
-      ok: false, reason: "forbidden", http_status: 403, reviews: [], threads: [], dispositions: [],
+      ok: false, reason: "forbidden", http_status: 403, reviews: [], threads: [], dispositions: [], prior_threads: [],
       complete_pagination: false, complete_threads: false, api_calls: 2,
     })
     expect(calls).toHaveLength(2)
+  })
+
+  test("additive prior_threads includes other reviewers and replies without changing full-review dispositions", async () => {
+    const review = { id: 1, user: { login: "human" }, state: "COMMENTED", commit_id: HEAD_SHA,
+      submitted_at: "2026-11-02T00:00:00Z", html_url: REVIEW_URL, body: "Check the guard" }
+    const root = { id: 2, pull_request_review_id: 1, path: "src/guard.ts", html_url: THREAD_URL,
+      line: null, original_line: 10, start_line: null, original_start_line: 8, user: { login: "human" }, body: "Missing validation\nUntrusted input reaches the sink.",
+      commit_id: HEAD_SHA, original_commit_id: BASE_SHA }
+    const reply = { ...root, id: 3, in_reply_to_id: 2, body: "Fixed?", html_url: `${THREAD_URL}-reply` }
+    const { exec } = recordingExec(success(JSON.stringify([review])), success(JSON.stringify([reply, root])))
+    const result = await reviews(locator, { exec })
+    expect(result).toMatchObject({ ok: true, threads: [], dispositions: [], complete_threads: true,
+      prior_threads: [{ is_corvus_review: false, is_resolved: null, is_outdated: null,
+        root: { id: 2, body: root.body, html_url: THREAD_URL, path: root.path, line: null, original_line: 10, start_line: null, original_start_line: 8, user: "human" },
+        replies: [{ id: 3, in_reply_to_id: 2, body: "Fixed?" }] }] })
   })
 })
 
@@ -446,6 +805,20 @@ describe("review local changes", () => {
     expect(result).toMatchObject({ ok: true, dirty: true })
   })
 
+  test("AC10: LOCAL patch covers tracked staged and unstaged bytes against the trusted merge base, not HEAD", async () => {
+    const stagedAndUnstaged = "diff --git a/src/example.ts b/src/example.ts\n@@ -1 +1 @@\n-merge-base bytes\n+staged and unstaged worktree bytes\n"
+    const { result, calls } = await runLocal({ patch: success(stagedAndUnstaged), status: success("MM src/example.ts\n") })
+    expect(result).toMatchObject({ ok: true, merge_base: BASE_SHA, dirty: true, diff: stagedAndUnstaged, api_calls: 0 })
+    const diffs = calls.filter(argv => argv[1] === "diff")
+    expect(diffs).toEqual([commands.stat, commands.names, commands.patch])
+    for (const argv of diffs) {
+      expect(argv).toContain(BASE_SHA)
+      expect(argv).not.toContain(HEAD_SHA)
+      expect(argv).not.toContain("--cached")
+      expect(argv).not.toContain("HEAD")
+    }
+  })
+
   test.each(["main", "master"] as const)("falls back to local %s in main-then-master order when origin HEAD is unavailable", async branch => {
     const { result, calls } = await runLocal({ originHead: absent, ...(branch === "master" ? { main: absent } : {}) })
     expect(result).toMatchObject({ ok: true, default_branch: branch, merge_base: BASE_SHA })
@@ -496,7 +869,7 @@ describe("committed review state PR reads", () => {
     const data = {
       number: 42, url: "https://github.com/example/project/pull/42", title: "A change", state: "OPEN",
       isDraft: false, isCrossRepository: false, mergeable: "MERGEABLE", author: { login: "contributor" },
-      baseRefName: "main", baseRefOid: BASE_SHA, headRefName: "feature", headRefOid: tip, changedFiles: 2,
+      baseRefName: "main", baseRefOid: BASE_SHA, headRefName: "feature", headRefOid: tip, changedFiles: 2, additions: 137, deletions: 19,
       body: BODY, labels: [], closingIssuesReferences: [], latestReviews: [], reviewDecision: null,
     }
     const metadataExec = recordingExec(success(JSON.stringify(data)), pages)

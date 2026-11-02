@@ -15,7 +15,7 @@ import { createFakeContext } from "../src/__tests__/fake-context"
  * There is no non-interactive host oracle for "which tools did a plugin add", so
  * this probe instantiates `dist/server.js`'s `setup()` with the same host double
  * the registration tests use, and `dist/index.js`'s v1 hook function, then
- * asserts the complete seven-tool inventory on both hosts. Every assertion throws;
+ * asserts the complete eight-tool inventory on both hosts. Every assertion throws;
  * no flag bypasses inventory, schema, caller or functional checks.
  *
  * FUNCTIONAL LEG: in a throwaway workspace the probe writes a valid candidate
@@ -27,7 +27,7 @@ import { createFakeContext } from "../src/__tests__/fake-context"
  * even if a broken post tool reports zero. The sentinel is not a general network sandbox.
  */
 
-const TOOLS = ["corvus_review_lock", "corvus_review_payload", "corvus_review_persist", "corvus_review_post", "corvus_review_pr", "corvus_review_sync", "corvus_review_verdict"] as const
+const TOOLS = ["corvus_review_lock", "corvus_review_payload", "corvus_review_persist", "corvus_review_post", "corvus_review_pr", "corvus_review_sync", "corvus_review_verdict", "corvus_review_worktree"] as const
 type ToolName = (typeof TOOLS)[number]
 const CONTRACTS = {
   corvus_review_lock: { ops: ["acquire", "release", "status"], required: ["op", "reviewRoot"], caller: "corvus-review-auto" },
@@ -37,6 +37,7 @@ const CONTRACTS = {
   corvus_review_pr: { ops: ["metadata", "head", "files", "diff", "reviews", "checks", "identity", "config", "repo", "find", "local"], required: ["op"], caller: "corvus-review-auto" },
   corvus_review_sync: { ops: ["resolve", "pull", "push"], required: ["op"], caller: "corvus-review-auto" },
   corvus_review_verdict: { ops: ["compute"], required: ["op", "reviewRoot", "priorReviews", "config"], caller: "corvus-review-auto" },
+  corvus_review_worktree: { ops: ["create", "remove"], required: ["op", "pr", "code_head", "runId"], caller: "corvus-review-light" },
 } as const
 const LIMIT_BODY = 24000
 const LIMIT_TOTAL = 48000
@@ -106,6 +107,7 @@ async function checkCallers(host: string, call: Call): Promise<void> {
     corvus_review_pr: { op: "identity", cwd: "relative" },
     corvus_review_verdict: { op: "compute" },
     corvus_review_sync: { op: "pull", cwd: "relative" },
+    corvus_review_worktree: { op: "create", pr: 0 },
   }
   for (const name of TOOLS) {
     const result = await call(name, inputs[name])
@@ -218,7 +220,7 @@ export async function probeTools(installRoot: string): Promise<string[]> {
       checkToolSchema("v2", name, tool.input)
     }
     fake.replay()
-    check(fake.tools.size === 7 && sameStrings([...fake.tools.keys()], TOOLS), "v2: reload replay leaves exactly seven tools (upsert, no duplicates)")
+    check(fake.tools.size === 8 && sameStrings([...fake.tools.keys()], TOOLS), "v2: reload replay leaves exactly eight tools (upsert, no duplicates)")
     const callV2: Call = async (name, args, agent = CONTRACTS[name].caller) => {
       const tool = fake.tools.get(name)!
       const output = await tool.execute(args, { agent } as Parameters<typeof tool.execute>[1])

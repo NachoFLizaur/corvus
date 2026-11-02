@@ -19,7 +19,7 @@ test("v2 preflight re-reads lazy agent registration after scoped plugin initiali
   writeFileSync(cli, '#!/bin/bash\nif [[ -e "$WORK/read-once" ]]; then printf \'[{"id":"corvus-review-auto"}]\\n\'; else touch "$WORK/read-once"; printf \'[{"id":"build"}]\\n\'; fi\n')
   chmodSync(cli, 0o700)
   const result = Bun.spawnSync(["bash", "-c", `set -euo pipefail\n${helpers}\npreflight_v2_agents`], {
-    env: { ...process.env, WORK: directory, SMOKE_WORK: directory, CLI: cli },
+    env: { ...process.env, WORK: directory, SMOKE_WORK: directory, CLI: cli, AGENT_ID: "corvus-review-auto", SMOKE_AGENT_ID: "corvus-review-auto" },
   })
   expect(result.exitCode, result.stderr.toString()).toBe(0)
   expect(JSON.parse(readFileSync(join(directory, "agents.json"), "utf8"))).toEqual([{ id: "corvus-review-auto" }])
@@ -102,7 +102,7 @@ test.each([
   chmodSync(join(bin, "gh"), 0o700)
   const harness = readFileSync(resolve(import.meta.dirname, "../../scripts/smoke-review.sh"), "utf8")
   const helpers = harness.slice(harness.indexOf("die()"), harness.indexOf("usage()"))
-  const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, WORK: directory, SMOKE_WORK: directory, OWNER: "NachoFLizaur", REPO: "corvus", NUMBER: "8",
+  const env = { ...process.env, AGENT: "auto", PATH: `${bin}:${process.env.PATH}`, WORK: directory, SMOKE_WORK: directory, OWNER: "NachoFLizaur", REPO: "corvus", NUMBER: "8",
     BRANCH: branch, INTAKE: intake, GH_REPO: "NachoFLizaur/corvus", CORVUS_SMOKE_REAL_GH: real, CORVUS_SMOKE_GH_AUDIT: audit, CORVUS_SMOKE_GH_CANNED: "", FAKE_PR: "8" }
   const setup = Bun.spawnSync(["bash", "-c", `set -euo pipefail\n${helpers}\n[[ "$INTAKE" == local ]] || seed_pr_branch\nif [[ "$INTAKE" == url ]]; then git checkout --detach "$BRANCH"; else git checkout "$BRANCH"; fi\nprepare_sync_remotes\npreflight_branch_pr`], { cwd: workspace, env })
   expect(setup.exitCode, setup.stderr.toString()).toBe(0)
@@ -148,7 +148,7 @@ test.each(["v1", "v2"] as const)("%s writer preflight resolves wildcard fallback
   const harness = readFileSync(resolve(import.meta.dirname, "../../scripts/smoke-review.sh"), "utf8")
   const preflight = /bun -e '(\n  const data = await Bun\.file[\s\S]*?)\n' \|\| die 6 'posting barrier not installed; model was not started'/.exec(harness)?.[1]
   if (!preflight?.trim()) throw new Error("Writer preflight snippet not found")
-  const env = { ...process.env, SMOKE_WORK: directory, SMOKE_HOST: host, SMOKE_ROOT: resolve(import.meta.dirname, "../..") }
+  const env = { ...process.env, SMOKE_AGENT: "auto", SMOKE_AGENT_ID: "corvus-review-auto", SMOKE_WORK: directory, SMOKE_HOST: host, SMOKE_ROOT: resolve(import.meta.dirname, "../..") }
   for (const script of ["smoke-writer.sh", "smoke-review.sh"]) {
     const source = readFileSync(resolve(import.meta.dirname, "../../scripts", script), "utf8")
     const exposure = /# Exposure invariant:[\s\S]*?\n\s*bun -e '([\s\S]+?)\n\s*' \|\| die 6 'writer tool exposure failed; model was not started'/.exec(source)?.[1]
@@ -309,7 +309,7 @@ test("every review-pr argv form reaches the read-only shim, including identity f
     { input: { op: "repo" }, argv: [["repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"]], replies: [success("o/r\n")] },
     { input: { op: "metadata", ...locator }, argv: [["pr", "view", "8", "--repo", "o/r", "--json", metadataFields], commitsArgv], replies: [success({
       number: 8, url: "https://github.com/o/r/pull/8", title: "Fixture", body: "", author: { login: "alice" }, baseRefName: "main", baseRefOid: base,
-      headRefName: "feature", headRefOid: head, labels: [], reviewRequests: [], isDraft: false, mergeable: "MERGEABLE", state: "OPEN", changedFiles: 1,
+      headRefName: "feature", headRefOid: head, labels: [], reviewRequests: [], isDraft: false, mergeable: "MERGEABLE", state: "OPEN", changedFiles: 1, additions: 1, deletions: 0,
       closingIssuesReferences: [], latestReviews: [], reviewDecision: null, isCrossRepository: false,
     }), commits] },
     { input: { op: "head", ...locator }, argv: [["api", "--method", "GET", endpoint, ...accept], commitsArgv], replies: [success({ head: { sha: head }, base: { sha: base } }), commits] },

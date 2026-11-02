@@ -52,6 +52,35 @@ function expectLineLimit(text: string): void {
   expect(Math.max(...text.split("\n").map(line => line.length))).toBeLessThanOrEqual(1_900)
 }
 
+describe("review persist light event rail", () => {
+  test("single-call, begin and pre-upgrade staged finalize reject light APPROVE before candidate mutation; full staging still allows it", () => withFixture(({ opts, reviewRoot, reviewPath }) => {
+    const execute = createPersistExecutor(opts.reviewStateRoot)
+    const light = (args: object) => JSON.parse(execute({ reviewRoot, ...args }, "corvus-review-light"))
+    const approve = { ...candidate, event: "APPROVE" as const }
+    const rejected = { ok: false, reason: "artifact-event-not-allowed" } as const
+    expect(light({ op: "write_candidate", candidate: approve })).toEqual(rejected)
+    expect(light({ op: "begin", target: "candidate", commit_id: HEAD_SHA, event: "APPROVE" })).toEqual(rejected)
+    const classRoot = join(reviewPath, ".light"), target = join(classRoot, "candidate.json")
+    expect(fs.existsSync(target)).toBe(false)
+    const started = light({ op: "begin", target: "candidate", commit_id: HEAD_SHA, event: "COMMENT" })
+    const session = { staging_id: started.staging_id }
+    expect(light({ op: "append", ...session, field: "body", part: 0, parts: 1, text: BODY })).toMatchObject({ ok: true })
+    const path = join(classRoot, ".staging/candidate/manifest.json")
+    const manifest = JSON.parse(fs.readFileSync(path, "utf8"))
+    fs.writeFileSync(path, JSON.stringify({ ...manifest, event: "APPROVE" }))
+    const before = fs.readFileSync(path)
+    expect(light({ op: "finalize", ...session, expected_comments: 0 })).toEqual(rejected)
+    expect(fs.readFileSync(path)).toEqual(before)
+    expect(fs.existsSync(target)).toBe(false)
+    expect(write_candidate({ reviewRoot: classRoot, candidate: approve }, opts)).toEqual(rejected)
+    const full = begin({ reviewRoot, target: "candidate", commit_id: HEAD_SHA, event: "APPROVE" }, opts)
+    if (!full.ok || !("staging_id" in full)) throw new Error(JSON.stringify(full))
+    expect(append({ reviewRoot, staging_id: full.staging_id, field: "body", part: 0, parts: 1, text: BODY }, opts)).toMatchObject({ ok: true })
+    expect(finalize({ reviewRoot, staging_id: full.staging_id, expected_comments: 0 }, opts)).toMatchObject({ ok: true })
+    expect(JSON.parse(fs.readFileSync(join(reviewPath, "candidate.json"), "utf8")).event).toBe("APPROVE")
+  }))
+})
+
 describe("review persist documents", () => {
   test("writes sections and roundtrips the input with frontmatter and a fenced YAML block preserved", () => withFixture(({ opts, reviewRoot, reviewPath }) => {
     const frontmatterYaml = 'title: "Review"\nlabels:\n  - correctness'
@@ -141,6 +170,61 @@ describe("review persist documents", () => {
     const result = write_document({ reviewRoot, headSha: HEAD_SHA, sections: [{ heading: "Summary", body: BODY }] }, { ...opts, fs: io })
     expect(result).toEqual({ ok: false, reason: "readback-mismatch", expectedBytes, actualBytes: expectedBytes })
     expect(JSON.stringify(result)).not.toContain(BODY)
+  }))
+})
+
+describe("light candidate storage", () => {
+  test("LOCAL candidates use the same class without a head checkpoint", () => withFixture(({ opts, reviewRoot, reviewPath }) => {
+    const localRoot = reviewRoot.replace(/pr42$/, "local-feature")
+    const localPath = reviewPath.replace(/pr42$/, "local-feature")
+    expect(JSON.parse(createPersistExecutor(opts.reviewStateRoot)({ op: "write_candidate", reviewRoot: localRoot, candidate }, "corvus-review-light")))
+      .toMatchObject({ ok: true, path: join(localPath, ".light/candidate.json") })
+    expect(fs.readdirSync(localPath)).toEqual([".light"])
+  }))
+
+  test("routes candidate writes and staging to the caller-owned class without full checkpoints", () => withFixture(({ opts, reviewRoot, reviewPath }) => {
+    const execute = createPersistExecutor(opts.reviewStateRoot)
+    const light = (args: object) => JSON.parse(execute({ reviewRoot, ...args }, "corvus-review-light"))
+    expect(light({ op: "write_candidate", candidate })).toMatchObject({ ok: true, path: join(reviewPath, ".light/candidate.json") })
+    const started = light({ op: "begin", target: "candidate", commit_id: HEAD_SHA, event: "COMMENT" })
+    expect(started.ok).toBe(true)
+    expect(fs.existsSync(join(reviewPath, ".light/.staging/candidate/manifest.json"))).toBe(true)
+    const session = { staging_id: started.staging_id }
+    expect(light({ op: "append", ...session, field: "body", text: BODY, part: 0, parts: 1 })).toMatchObject({ ok: true })
+    expect(light({ op: "status", ...session })).toMatchObject({ ok: true })
+    expect(light({ op: "finalize", ...session, expected_comments: 0 })).toMatchObject({ ok: true, path: join(reviewPath, ".light/candidate.json") })
+    const other = light({ op: "begin", target: "candidate", commit_id: HEAD_SHA, event: "COMMENT" })
+    expect(light({ op: "abort", staging_id: other.staging_id })).toMatchObject({ ok: true })
+    expect(fs.readdirSync(reviewPath)).toEqual([".light"])
+    expect(fs.existsSync(join(reviewPath, ".light/.staging/candidate"))).toBe(false)
+  }))
+
+  test("rejects non-candidate ops, foreign staging and model-selected class roots before mutation", () => withFixture(({ opts, reviewRoot, reviewPath }) => {
+    const execute = createPersistExecutor(opts.reviewStateRoot)
+    for (const args of [
+      ...["write_document", "write_input", "write_meta", "write_facts", "read_document", "read_facts"].map(op => ({ op })),
+      ...["input", "document"].map(target => ({ op: "begin", target })),
+      ...["append", "status", "finalize", "abort"].map(op => ({ op, staging_id: "input:id" })),
+    ]) expect(JSON.parse(execute({ reviewRoot, ...args }, "corvus-review-light"))).toEqual({ ok: false, reason: "caller-not-allowed" })
+    for (const root of [`${reviewRoot}/.light`, `${reviewRoot}/nested`, `${reviewRoot}\n`, "reviews/legacy__repo__pr42"]) {
+      expect(JSON.parse(execute({ op: "write_candidate", reviewRoot: root, candidate }, "corvus-review-light"))).toMatchObject({ ok: false, reason: "path-outside-root" })
+    }
+    expect(fs.existsSync(reviewPath)).toBe(false)
+    const full = JSON.parse(execute({ op: "begin", reviewRoot, target: "candidate", commit_id: HEAD_SHA, event: "COMMENT" }, "corvus-review"))
+    expect(full.ok).toBe(true)
+    expect(JSON.parse(execute({ op: "abort", reviewRoot, staging_id: full.staging_id }, "corvus-review-light"))).toMatchObject({ ok: false })
+    expect(fs.existsSync(join(reviewPath, ".staging/candidate/manifest.json"))).toBe(true)
+    expect(JSON.parse(execute({ op: "write_candidate", reviewRoot: `${reviewRoot}/.light`, candidate }, "corvus-review")))
+      .toEqual({ ok: false, reason: "path-outside-root" })
+  }))
+
+  test("rejects a class symlink rather than writing through it into full state", () => withFixture(({ opts, reviewRoot, reviewPath }) => {
+    fs.mkdirSync(reviewPath, { recursive: true })
+    fs.mkdirSync(join(reviewPath, "full"))
+    fs.symlinkSync(join(reviewPath, "full"), join(reviewPath, ".light"))
+    expect(JSON.parse(createPersistExecutor(opts.reviewStateRoot)({ op: "write_candidate", reviewRoot, candidate }, "corvus-review-light")))
+      .toMatchObject({ ok: false, reason: "path-outside-root" })
+    expect(fs.readdirSync(join(reviewPath, "full"))).toEqual([])
   }))
 })
 

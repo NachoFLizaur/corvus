@@ -27,6 +27,31 @@ function withFixture(run: (fixture: Fixture) => void): void {
 }
 
 describe("review lock acquisition", () => {
+  test.each(["absent", "current", "legacy"] as const)("light rejects force before filesystem access with an %s lock", kind => withFixture(({ opts, reviewRoot, path, legacyPath }) => {
+    const target = kind === "legacy" ? legacyPath : path
+    if (kind !== "absent") fs.writeFileSync(target, yaml.dump(active()))
+    const before = kind === "absent" ? undefined : fs.readFileSync(target)
+    let filesystemCalls = 0, clockCalls = 0
+    const io: ReviewLockFs = new Proxy({ ...fs }, {
+      get(object, key) {
+        const value = Reflect.get(object, key)
+        return typeof value === "function" ? (...args: unknown[]) => { filesystemCalls++; return value(...args) } : value
+      },
+    })
+    const execute = createLockExecutor(opts.reviewStateRoot, { fs: io, now: () => { clockCalls++; return new Date(NOW) } })
+    expect(JSON.parse(execute({ op: "acquire", reviewRoot, runId: "light", force: true }, "corvus-review-light")))
+      .toEqual({ ok: false, reason: "invalid-arguments" })
+    expect(filesystemCalls).toBe(0)
+    expect(clockCalls).toBe(0)
+    expect(fs.existsSync(join(opts.reviewStateRoot, reviewRoot, ".light"))).toBe(false)
+    if (before) expect(fs.readFileSync(target)).toEqual(before)
+    else expect(fs.existsSync(path)).toBe(false)
+    for (const force of [undefined, false]) {
+      const result = JSON.parse(execute({ op: "acquire", reviewRoot, runId: "light", ...(force === undefined ? {} : { force }) }, "corvus-review-light"))
+      expect(result).toMatchObject(kind === "absent" && force === undefined ? { ok: true, state: "acquired" } : { ok: false, state: "held" })
+    }
+  }))
+
   test("bootstraps acquire and document persistence from a workspace without .corvus; status/release stay read-only", () => {
     const workspace = fs.realpathSync(fs.mkdtempSync(join(tmpdir(), "corvus-review-bootstrap-")))
     const opts = { reviewStateRoot: join(workspace, ".corvus"), now: () => new Date(NOW) }

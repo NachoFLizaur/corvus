@@ -277,7 +277,7 @@ describe("enforceProtected context guard", () => {
 })
 
 describe("enforceProtected registration lifecycle", () => {
-  test("registers both hooks and disposes them on cleanup", async () => {
+  test("registers all three hooks and disposes them on cleanup", async () => {
     const fake = createFakeContext()
 
     const cleanup = asCleanup(await enforceProtected(fake.ctx))
@@ -285,6 +285,7 @@ describe("enforceProtected registration lifecycle", () => {
     expect(fake.registrations.map((registration) => registration.kind)).toEqual([
       "permission.hook",
       "session.hook",
+      "tool.hook",
     ])
 
     await cleanup()

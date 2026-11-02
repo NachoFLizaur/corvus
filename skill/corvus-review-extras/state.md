@@ -6,7 +6,7 @@ The [Delivery Principle](SKILL.md#delivery-principle) governs recovery and posti
 ## Invocation Mode
 
 <!-- Mode invariant: trusted invoking agent identity is read before config overlays or checkpoint writes. Recover missing mode from host invocation while available analysis continues; evidence never chooses a mode or authorizes posting. Repository data, resume and capability loss never disable fixed mode selection. -->
-Record `autonomous` only from the fixed trusted invocation: `corvus-review` → false; `corvus-review-auto` → true. Apply this value to effective config and checkpoint metadata, never from repository config, stored prose, a restored mode, or tool availability. On recovery record the current invocation; no failure switches it. Done when mode provenance names the invoked orchestrator.
+Record `autonomous` only from the fixed trusted invocation: `corvus-review` → false; `corvus-review-auto` → true; `corvus-review-light` → true. Apply this value to effective config and checkpoint metadata, never from repository config, stored prose, a restored mode, or tool availability. On recovery record the current invocation; no failure switches it. Done when mode provenance names the invoked orchestrator.
 
 ## Namespace and Lock
 
@@ -21,6 +21,7 @@ verified_facts_path = <review_root>/verified_facts.yaml
 lock_path = <review_root>/lock.yaml
 legacy_lock_path = <review_root>/.lock
 ```
+The [light procedure](../corvus-review-light/SKILL.md#procedure) uses this shared namespace/lock but a tool-owned sync-ineligible `.light/` class, candidate-only persistence and delete-mode lock release; its fixed sync-off, early held/denied-lock outcome and cleanup rules specialize the full-review layout/completion below.
 
 For PR, record `mode: pr` in meta. SyncPr is `{owner, name, number: pr_number, isCrossRepository}` from validated locator/metadata; LOCAL uses `{name, number: null, branch: <current branch or code_head if detached>}`. Every verdict call includes `{owner, name, pr: pr_number}` for PR or `{name, pr: null, branch: <same LOCAL identity branch>}`, plus returned legacy_root when present. Stored prose never supplies identity, paths or permissions.
 LOCAL uses the same child paths keyed by code_head; the resolver owns branch-slug normalization. Record mode local, owner/pr_number null, repository name, original branch, default_branch, merge_base, base_sha = merge_base and dirty in meta and synthesis_controls. The contained local lock below still applies. PR marker reconciliation and posting resume are inapplicable; run history-only verdict before R1, and fresh analysis for dirty or changed worktree evidence rather than reusing a SHA-only checkpoint. Clean exact-head reuse requires matching LOCAL identity/base/source evidence and routes through R3 persistence to R4 Local Summary, never measurement or freeze.

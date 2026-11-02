@@ -1,0 +1,134 @@
+import { afterEach, expect, test } from "bun:test"
+import { execFileSync } from "node:child_process"
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join, resolve } from "node:path"
+import { checkLightSnapshots, snapshotLightFixture } from "../../scripts/check-review-artifacts"
+import { isLightClassPath } from "../review-storage-class"
+
+const directories: string[] = []
+afterEach(() => { for (const path of directories.splice(0)) rmSync(path, { recursive: true, force: true }) })
+const root = resolve(import.meta.dirname, "../..")
+const harness = readFileSync(join(root, "scripts/smoke-review.sh"), "utf8")
+const helpers = harness.slice(harness.indexOf("die()"), harness.indexOf("usage()"))
+
+test("light fixture keeps dirty sentinels and ignores unchanged until the model-free full push", () => {
+  const work = mkdtempSync(join(tmpdir(), "corvus-smoke-light-"))
+  directories.push(work)
+  const fixture = join(work, "fixture")
+  mkdirSync(fixture)
+  const git = (...args: string[]) => execFileSync("git", ["-C", fixture, ...args], { encoding: "utf8" }).trim()
+  git("init", "-b", "main")
+  git("config", "user.name", "Fixture")
+  git("config", "user.email", "fixture@example.invalid")
+  git("config", "commit.gpgsign", "false")
+  writeFileSync(join(fixture, ".gitignore"), ".corvus/\n")
+  git("add", ".gitignore")
+  git("commit", "-m", "Base")
+  const head = git("rev-parse", "HEAD")
+  const source = join(work, "source.git")
+  git("clone", "--bare", fixture, source)
+  git("remote", "add", "origin", source)
+  writeFileSync(join(work, "changed-files.json"), '["README.md"]\n')
+  const env = { ...process.env, WORK: work, SMOKE_WORK: work, SMOKE_ROOT: root, OWNER: "owner", REPO: "repo", NUMBER: "8",
+    INTAKE: "url", AGENT: "light", SMOKE_INTAKE: "url", SMOKE_OWNER: "owner", SMOKE_REPO: "repo", GIT_TRACE2_EVENT: "" }
+  const setup = Bun.spawnSync(["bash", "-c", `set -euo pipefail\n${helpers}\nprepare_light_fixture\nprepare_sync_remotes\nlight_snapshot before\nlight_compare\nlight_push_probe`], { env, cwd: fixture })
+  expect(setup.exitCode, setup.stderr.toString()).toBe(0)
+  expect(git("remote", "get-url", "github")).toBe("https://github.com/owner/repo")
+  expect(git("remote", "get-url", "origin")).toBe(join(work, "bare.git"))
+  const before = JSON.parse(readFileSync(join(work, "light-before.json"), "utf8"))
+  const after = JSON.parse(readFileSync(join(work, "light-after.json"), "utf8"))
+  expect(before.head).not.toBe(head)
+  expect(before.branch).toStartWith("smoke/light-unrelated-")
+  expect(checkLightSnapshots(before, after).every(row => row.ok)).toBe(true)
+  expect(before.worktrees).toContain(`worktree ${realpathSync(fixture)}`)
+  expect(before.siblingWorktrees).toEqual([])
+  expect(checkLightSnapshots(before, after).filter(row => /worktree/.test(row.check)).map(row => row.check)).toEqual(["worktree list unchanged", "sibling worktree directories absent"])
+  expect(Buffer.from(before.ignores[".gitignore"], "base64").toString()).toBe(".corvus/\n")
+  const probe = JSON.parse(readFileSync(join(work, "light-push-probe.json"), "utf8"))
+  expect(probe).toMatchObject({ ok: true, root: ".corvus/reviews/pr8", paths: [".corvus/reviews/pr8/probe-meta.yaml"] })
+  expect(probe.paths.some((path: string) => isLightClassPath(path.replace(/^\.corvus\//, "")))).toBe(false)
+  expect(git("diff", "--cached", "--name-only")).toBe(".smoke-light-staged")
+  expect(readFileSync(join(fixture, ".smoke-light-staged"), "utf8")).toBe("staged sentinel worktree bytes\n")
+  // Snapshot helpers are read-only even after the probe.
+  expect(snapshotLightFixture(fixture, join(work, "bare.git")).sentinels).toEqual(before.sentinels)
+  // A directory leak without a Git registration is independently observable.
+  const probed = snapshotLightFixture(fixture, join(work, "bare.git"))
+  const sibling = join(work, "fixture.corvus-review-pr8-1111111-abcdef")
+  mkdirSync(sibling)
+  const leakedDirectory = snapshotLightFixture(fixture, join(work, "bare.git"))
+  expect(checkLightSnapshots(probed, leakedDirectory).find(row => row.check === "sibling worktree directories absent")?.ok).toBe(false)
+  expect(checkLightSnapshots(probed, leakedDirectory).find(row => row.check === "worktree list unchanged")?.ok).toBe(true)
+  rmSync(sibling, { recursive: true })
+  // A registered leak is caught even when its HEAD already exists in localLog.
+  const stable = snapshotLightFixture(fixture, join(work, "bare.git"))
+  git("worktree", "add", "--detach", "--no-checkout", sibling, "HEAD")
+  const registered = snapshotLightFixture(fixture, join(work, "bare.git"))
+  for (const check of ["worktree list unchanged", "sibling worktree directories absent"]) expect(checkLightSnapshots(stable, registered).find(row => row.check === check)?.ok).toBe(false)
+  git("worktree", "remove", "--force", sibling)
+  expect(checkLightSnapshots(stable, snapshotLightFixture(fixture, join(work, "bare.git"))).every(row => row.ok)).toBe(true)
+})
+
+test.each(["v1", "v2"] as const)("%s light exposure requires all seven tools and denies direct post", host => {
+  const work = mkdtempSync(join(tmpdir(), "corvus-smoke-light-exposure-"))
+  directories.push(work)
+  const preflight = /bun -e '(\n  const data = await Bun\.file[\s\S]*?)\n' \|\| die 6 'posting barrier not installed; model was not started'/.exec(harness)?.[1]
+  if (!preflight?.trim()) throw new Error("Orchestrator preflight snippet not found")
+  expect(harness).toMatch(/export [^\n]*SMOKE_AGENT="\$AGENT"/)
+  expect(preflight).toContain(': ["corvus_review_payload", "corvus_review_post"]')
+  const required = ["corvus_review_pr", "corvus_review_lock", "corvus_review_persist", "corvus_review_payload",
+    "corvus_review_verdict", "corvus_review_sync", "corvus_review_worktree"]
+  const run = (missing?: string, post: "allow" | "deny" | "ask" = "deny") => {
+    const tools = Object.fromEntries(required.map(name => [name, name !== missing]))
+    writeFileSync(join(work, "agents.json"), JSON.stringify(host === "v1"
+      ? { name: "corvus-review-light", tools: { ...tools, corvus_review_post: post === "allow" },
+        permission: [{ permission: "task", pattern: "pr-comment-writer", action: "deny" }] }
+      : [{ id: "corvus-review-light", permissions: [
+        ...required.filter(name => name !== missing).map(name => ({ action: name, resource: "*", effect: "allow" })),
+        { action: "corvus_review_post", resource: "*", effect: post },
+        { action: "subagent", resource: "pr-comment-writer", effect: "deny" },
+      ] }]))
+    return Bun.spawnSync([process.execPath, "-e", preflight], { env: { ...process.env,
+      SMOKE_AGENT: "light", SMOKE_AGENT_ID: "corvus-review-light", SMOKE_WORK: work,
+      SMOKE_HOST: host, SMOKE_ROOT: root, SMOKE_WRITER: "0" } })
+  }
+  const valid = run()
+  expect(valid.exitCode, valid.stderr.toString()).toBe(0)
+  for (const missing of required) {
+    const result = run(missing)
+    expect(result.exitCode, missing).toBe(1)
+    expect(result.stderr.toString()).toContain("Orchestrator requires " + required.join(", "))
+  }
+  for (const post of host === "v2" ? ["allow", "ask"] as const : ["allow"] as const) {
+    const result = run(undefined, post)
+    expect(result.exitCode).toBe(1)
+    expect(result.stderr.toString()).toContain("Light direct post must remain denied")
+  }
+})
+
+test("light rejects writer/full and preflight exits before run; auto remains the default", () => {
+  expect(harness).toContain("AGENT=auto")
+  expect(harness).toContain("AGENT_ID=corvus-review-auto")
+  for (const flag of ["--writer", "--full"]) {
+    const result = Bun.spawnSync(["bash", join(root, "scripts/smoke-review.sh"), "--host", "v1", "--agent", "light", flag])
+    expect(result.exitCode).toBe(3)
+    expect(result.stderr.toString()).toContain("requires denied writer")
+  }
+  const preflight = harness.slice(harness.indexOf("if ((PREFLIGHT_HOST)); then"), harness.indexOf("REVIEW_START=$SECONDS"))
+  expect(preflight).toContain("light_compare; light_push_probe; light_preflight_metrics")
+  expect(preflight).toContain("exit 0")
+  expect(preflight).not.toContain('"$CLI" "${ARGS[@]}"')
+  expect(harness).toContain('ARGS=(run --agent "$AGENT_ID"')
+  expect(harness).toContain('CHECK_ARGS+=(--agent light)')
+})
+
+test.each(["v1", "v2"] as const)("%s light branch intake rejects before host selection or PR tracking setup", host => {
+  const result = Bun.spawnSync(["bash", join(root, "scripts/smoke-review.sh"), "--host", host, "--agent", "light", "--intake", "branch", "--preflight-host"])
+  expect(result.exitCode).toBe(3)
+  expect(result.stderr.toString()).toContain("--agent light does not support --intake branch; use --intake url with --pr URL")
+  expect(result.stdout.toString()).not.toContain("Sandbox:")
+  expect(harness.indexOf("does not support --intake branch")).toBeLessThan(harness.indexOf('smoke_host_prepare "$HOST"'))
+  expect(harness).toContain("branch (auto only)")
+  expect(harness).toContain("Host preflight: PASS; plugin load verified")
+  expect(harness).not.toContain("Host preflight: PASS; scoped plugin active")
+})

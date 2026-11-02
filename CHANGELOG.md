@@ -5,6 +5,117 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.11.0-beta.8 — 2026-11-02
+
+### Changed
+
+- Light detector shards fetch and filter their own prior-review evidence. Orchestrator dispatches contain only trusted controls, avoiding serialized per-shard feedback assembly; the parent keeps history for marker rounds and no-new-findings decisions. Runtime improvement remains unmeasured.
+- The light orchestrator defaults to denying tools, with explicit review-tool, skill/reference-read, shell and two-child permissions. Both hosts enforce the packaged ceiling despite user allows, preserving additional restrictions.
+
+### Fixed
+
+- Light shell calls require a realpath workdir equal to the cached session repository top-level; sibling worktrees, nested/fake repositories and other directories are denied. v2 enforces arguments through `tool.execute.before`, since permission evaluation lacks them.
+- Same-head no-new-findings skips and Fixed since last review statuses require the authenticated author's login and a valid Corvus marker, not another reviewer's copied marker text.
+- The light artifact checker accepts genuine review-body source IDs alongside thread IDs and parses trusted brief controls independently of untrusted feedback text. Detector-owned history and classifications remain auditable.
+
+## 0.11.0-beta.7 — 2026-11-02
+
+### Changed
+
+- Light reviews consider the whole assigned PR scope and earlier feedback from all reviewers. Detectors independently reassess prior concerns without repeating their inline comments; an optional Earlier feedback section links Corvus's still-open/fixed findings and independently confirmed major-or-higher concerns from other reviewers.
+- Same-head light reruns with no new findings and no verified status changes finish locally as `no-new-findings`, without writer dispatch, and still clean up their owned worktree and lock. Posted reviews retain normal round increments; full-review behavior is unchanged.
+
+### Fixed
+
+- Both hosts reject light-shell brace, parenthesis, glob, history, caret and token-start equals expansion forms, preserving only the exact SHA `^{commit}` suffix for required cat-file commands. A v1 pre-execution guard supplements wildcard permission maps, which cannot express literal `*`/`?` denials.
+- v1 preserves user `ask` restrictions on light bash/task as well as denies. Map asks conservatively prompt for all authored allows of that action; denied capabilities stay denied and user allows still cannot widen the fixed boundary.
+
+## 0.11.0-beta.6 — 2026-11-02
+
+### Changed
+
+- Light synthesis merges cross-axis findings only for the same defect, retaining the first ID, highest severity/confidence and both axis attributions. Shared findings appear once under Standards and are counted once in each axis with Spec shared counts; full-review axis separation is unchanged.
+- PR title/body/description findings stay body-only with intent-source attribution, never attached to an unrelated code line. The structural read-through now includes the mandatory skill load: 21 turns, not a live measurement.
+
+### Fixed
+
+- The writer accepts tool-verified API and local-diff anchors equally. Patchless renamed files remain body-only instead of receiving misleading new-path-only local anchors.
+- Worktree raw-blob batches use object sizes and framing bytes against the 64 MiB output budget. An oversized single blob returns an explicit fallback diagnostic before worktree creation.
+- Light checker scoring treats crossed writer denies as posting-barrier exit 6, recognizes Git global options in model mutation attempts and retains worktree snapshot evidence in live metrics.
+- Light fetch accepts only validated named remotes matching the PR owner/repository; the HTTPS-URL fallback is removed. Both hosts deny colon, slash/backslash and `@` remote tokens (including bare `host:path`), leading dot/hyphen/tilde, options and trailing arguments. With no matching named remote, light discloses the gap and uses GitHub API reads / available objects without fetch or worktree creation. SSH-configured named remotes remain usable, correcting beta.5's broad transport claim.
+
+## 0.11.0-beta.5 — 2026-11-02
+
+### Changed
+
+- Light review discloses every retained minor with full compact inline or body details, removing the minor-detail cap and count-only overflow. Nitpicks stay excluded; full-review filtering is unchanged.
+
+### Fixed
+
+- Patch-free anchor verification falls back to a local Git object diff when GitHub omits a file patch, validating stable PR head/base identities and exact local commit SHAs before accepting anchors. Missing objects or mismatches fail closed; per-anchor provenance distinguishes API and local verification without mislabeling worktree-based review.
+- Light fetch permissions reject extra options/arguments, dot/parent/absolute/home paths, and file/SSH/helper URLs on both hosts, closing the upload-pack allowlist bypass while preserving named remotes and the validated HTTPS fallback.
+- The light checker accepts quoted and unquoted YAML-flow focus paths, rejects non-string paths and count-only minor rendering, and removes unreachable light fragments without changing full-review rows.
+
+## 0.11.0-beta.4 — 2026-11-01
+
+### Fixed
+
+- PR metadata returns validated additions and deletions on both hosts, so light review headers can render numeric line counts.
+- Light orchestration fixes shell access to the skill's command allowlist and child dispatch to `pr-light-reviewer`/`pr-comment-writer` on both hosts; user allows cannot widen them, while extra denials and model overrides survive. Together with fixed edit/write/patch denies and `.light` candidate/freeze routing, this closes shell-write and alternate-child full-class artifact authoring.
+- Full-review sync retries temporarily neutralize excluded tracked locks during rebase and restore their exact local bytes or deletion afterward, keeping locks out of state commits. Roots without `.light` retain their existing Git argv.
+- Light agent wording now reflects concurrent detector shards, and the skill-set reference describes compact patch-free `files` `anchors` verification.
+
+## 0.11.0-beta.3 — 2026-11-01
+
+### Fixed
+
+- `corvus_review_pr` files verifies RIGHT-side anchors inside complete API patch hunks and returns compact postability/diff links without patches. The shared writer uses this primary path even when patches would exceed host output limits; light synthesis moves unpostable anchors body-only before freeze. Unfiltered and paths-only output remain unchanged.
+- Light-class APPROVE is rejected by candidate persistence, freeze and the posting tool before any posting API call; full-review APPROVE remains available.
+- LOCAL light smoke runs build the standalone payload verifier before artifact replay, without relying on reused `dist` files.
+- README light-agent descriptions now reflect concurrent axis shards; the read-through target correctly counts 19 tool batches plus summary (20 turns), not a measured live result.
+
+## 0.11.0-beta.2 — 2026-11-01
+
+### Changed
+
+- Light review plans cohesive shards from the trusted changed-file inventory and dispatches every shard of both axes in one foreground batch. One shard per axis remains the comfortable small-diff case; large diffs gain parallel coverage without numeric shard/file/line caps or review time limits. Each assigned eligible hunk is reviewed by default; only non-reviewable content is omitted with reasons, and focus/sampling require unavailable evidence rather than size. Restart re-plans shards; a failed shard preserves other results with a named uncovered-path gap, without a repair rerun.
+- Inline findings keep their compact details inline and gain one-line severity/location/title indexes under their axis headlines, linked to exact diff lines or ranges using paths-filtered `diff_anchor` results. Body-only findings retain full blocks; relocation replaces only affected index lines with compact body findings. LOCAL has no links. Checker coverage now includes shard roster/partition accounting and exact inline-index anchors, without changing full-review rows.
+
+### Fixed
+
+- Light lock acquisition rejects `force: true` on both hosts, preserving a held lock. Fixed light denies additionally cover Git mutation commands and gh mutation families, including merge/pull/rebase/apply/restore/clean/config, PR close/ready/create and issue/release/repo/workflow/run/credential commands; additional user denials and model overrides remain intact.
+- Paths-filtered `corvus_review_pr` files records return `diff_anchor: "diff-" + sha256(path)` without changing unfiltered results. Shared lock expiry/restart admission, action/minor/marker rules and digest-bound writer publication remain unchanged; new live timing/quality results are not claimed.
+
+## 0.11.0-beta.1 — 2026-11-01
+
+### Added
+
+- Light-only `corvus_review_worktree` on both hosts: create a detached PR-head sibling after lock acquisition, populate raw blobs without running checkout hooks or filters, store symlinks as regular files and report skipped submodules. Owned-only removal verifies directory/registration absence before lock release and restart re-creation; other worktrees remain untouched, and cleanup failures disclose the exact path and manual remedy. Fixed light shell denies now include worktree/read-tree and `git --` forms.
+- `corvus_review_pr` files supports a validated `paths` filter (up to 50 paths) with intact selected patches and missing-path evidence after full pagination; unfiltered calls remain unchanged. The shared writer uses it only for oversized/truncated-diff anchor fallback.
+
+### Changed
+
+- Light review dispatches two concurrent foreground instances of the protected `pr-light-reviewer` identity per attempt: Standards and Spec plus independent security. Each chooses its own single-pass scope from size/complexity without fixed file/changed-line cutoffs; `all_diff_files` is the fast default, with justified focus/sampling alternatives. Light size settings remain advisory. A failed brief keeps the sibling's valid evidence with a disclosed gap; restarts re-dispatch both.
+- Supplementary investigation follows soft value/risk guidance instead of a numeric read ceiling; every evidence-read attempt, including failures, stays in the local coverage ledger. Strategy reports account for discovered/selected/reviewed/omitted/unavailable scope, with unknown counts `null` and combined coverage using path/region unions rather than overlapping sums. Transport gaps remain factual limits, not scope cutoffs.
+- Light output now has a recognizable Corvus opening, separate Standards and Spec headlines, and compact Conventional Comments findings: ≤3 short problem/impact lines plus one suggestion/fix. Inline findings are not duplicated in the body, and detector anchors pass through unchanged; relocation moves only compact findings. Review limits use ≤3 short factual bullets, keeping inventories, detector evidence fields and summary filler local. Full-review advice names consequential uncovered risk, material gaps or deeper complexity, never size alone.
+- Light checker/harness evidence now covers both axis briefs, worktree lifecycle ordering/leaks and compact rendering. The no-restart read-through is 18 tool batches plus summary (19 turns), toward a ≤20-turn target; current live metrics remain UNVERIFIED pending separate cost authorization, not a measured improvement over the 35-turn PR #15 baseline.
+- Restart/terminal-state behavior, the three-attempt and 90-minute restart limits, fresh lock ownership, local-only sync-ineligible artifacts, protected read-only detection, digest-bound writer publication, never-APPROVE action rails and minor/nitpick filtering remain unchanged.
+
+## 0.11.0-beta.0 — 2026-10-31
+
+### Added
+
+- `@corvus-review-light`: autonomous PR and LOCAL review through one bounded detector per attempt, reduced coverage and local-only posting artifacts. It never APPROVEs; PR publication reuses the frozen/digest-bound artifact and existing writer, without switching the user's worktree.
+- Protected read-only `pr-light-reviewer` and the single `corvus-review-light` skill, covering correctness, security, stated intent and consequential architecture/conventions within experimental bounds.
+- Tool-owned `.light/` review storage class, candidate-only light persistence, and host-enforced fixed question/Git/gh command denies that preserve additional user denials and model overrides.
+- Non-posting `smoke-review.sh --agent light` fixture and `light-metrics.json` for agent-controlled timing, session/turn/tool counts and local-only evidence. Live light verification remains unverified without separate cost authorization; expected savings and full-review quality parity are unproven. See [Review Gates](README.md#review-gates).
+
+### Changed
+
+- Light review omits the generic reduced-coverage banner from frozen artifacts and posted bodies, keeping applicable factual scope/gap/overflow disclosures. Code-head or verified base-SHA moves restart a fresh bounded review, including writer `head-moved`, for at most three detection attempts (initial plus two restarts); each restart adds a detector pass and renews artifact/preview/authorization. CLOSED/MERGED stops at intake and revalidation before further detection/posting; raw-head-only changes are ignored. The shared lock is retained with fresh-ownership checks; changed roots or lock age over 90 minutes refuse restart. Completion reports attempts, their full head/base SHAs and the terminal reason. Minor filtering is unchanged: up to two eligible minors detailed by default, extra minors counted per axis, nitpicks excluded. Live light detection now needs an OPEN `--pr` URL; default fixture PR #8 is CLOSED and stops at intake. Full-review behavior is unchanged.
+- Both host adapters use one shared review caller roster, with detector-only reads for `pr-light-reviewer`, resolve-only sync for `corvus-review-light` and writer-only posting unchanged.
+- Full-review state sync excludes `.light/` artifacts and shared lock records in roots containing that class, including later or overlapping full reviews. Other full-review state remains sync-eligible; see [local-artifact guidance](README.md#light-review-and-local-artifacts).
+
 ## 0.10.2 — 2026-09-30
 
 ### Fixed

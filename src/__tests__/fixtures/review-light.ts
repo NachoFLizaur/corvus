@@ -1,0 +1,83 @@
+/** Test-owned contract, independent of packaged permissions and prompt prose. */
+export const LIGHT_TOOLS = ["skill", "read", "corvus_review_pr", "corvus_review_lock", "corvus_review_persist", "corvus_review_payload",
+  "corvus_review_verdict", "corvus_review_sync", "corvus_review_worktree"]
+export const LIGHT_DENIED_TOOLS = ["execute", "webfetch", "websearch", "edit", "write", "patch", "question", "grep", "glob", "todowrite", "corvus_review_post"]
+export const LIGHT_BASH_ALLOWS = ["git fetch --no-tags * pull/*/head", "git fetch --no-tags * 'pull/*/head'",
+  'git fetch --no-tags * "pull/*/head"', "git cat-file -e ????????????????????????????????????????^{commit}",
+  "git cat-file -e '????????????????????????????????????????^{commit}'", 'git cat-file -e "????????????????????????????????????????^{commit}"',
+  "git ls-files -- *", "git remote", "git remote get-url *", "date -u +%Y-%m-%dT%H:%M:%SZ"]
+export const LIGHT_BASH_DENIES = ["*", "*;*", "*&*", "*|*", "*>*", "*<*", "*`*", "*$*", "*\n*", "*\r*", "*\t*",
+  "*(*", "*)*", "*[*", "*]*", "*!*", "* =*", "git fetch *{*", "git fetch *}*", "git remote*{*", "git remote*}*", "git ls-files*{*", "git ls-files*}*",
+  "git fetch --no-tags -*", "git fetch --no-tags '-*", 'git fetch --no-tags "-*',
+  "git fetch --no-tags * * ?*", "git fetch --no-tags * --*",
+  "git fetch --no-tags * pull/*:*", "git fetch --no-tags * 'pull/*:*", 'git fetch --no-tags * "pull/*:*',
+  "git fetch --no-tags *''*", 'git fetch --no-tags *""*', "git fetch --no-tags *:* ?*", "git fetch --no-tags */* ?*", "git fetch --no-tags *@* ?*",
+  "git fetch --no-tags .*", "git fetch --no-tags '.*", 'git fetch --no-tags ".*',
+  "git fetch --no-tags ~*", "git fetch --no-tags '~*", 'git fetch --no-tags "~*']
+export const LIGHT_BASH_MAP = { "*": "deny", ...Object.fromEntries(LIGHT_BASH_ALLOWS.map(pattern => [pattern, "allow"])),
+  ...Object.fromEntries(LIGHT_BASH_DENIES.slice(1).map(pattern => [pattern, "deny"])) }
+export const LIGHT_CHILDREN = ["pr-light-reviewer", "pr-comment-writer"]
+export const LIGHT_TASK_MAP = { "*": "deny", ...Object.fromEntries(LIGHT_CHILDREN.map(name => [name, "allow"])) }
+export const LIGHT_MUTATIONS = ["git add .", "git commit -m probe", "git push origin HEAD", "git switch main",
+  "git checkout --detach HEAD", "git restore --staged file", "git reset HEAD file", "git stash push", "gh pr checkout 1",
+  "gh api --method POST repos/example/project/pulls/42/reviews", "gh pr review 42 --approve", "gh pr comment 42 --body probe",
+  "gh pr merge 42", "gh pr edit 42 --title probe", "git -C . add .", "git -c core.hooksPath=/dev/null commit -m probe",
+  "git update-ref refs/heads/main HEAD", "git rm file", "git branch -D main", "git worktree add --detach ../review HEAD",
+  "git worktree remove --force ../review", "git worktree prune", "git read-tree -u --reset HEAD",
+  "git --git-dir=.git read-tree -u --reset HEAD", "git --work-tree=. reset --hard HEAD", "git --no-optional-locks worktree add ../review HEAD",
+  "git merge FETCH_HEAD", "git pull", "git rebase main", "git cherry-pick HEAD", "git revert HEAD", "git am patch.mbox",
+  "git apply patch.diff", "git restore .", "git clean -fd", "git mv old new", "git tag v1", "git config core.hooksPath x",
+  "git notes add -m probe", "git update-index --add file", "git symbolic-ref HEAD refs/heads/main", "git gc", "git prune",
+  "gh pr close 15", "gh pr ready 15", "gh pr create --title probe", "gh issue create --title probe", "gh release create v1",
+  "gh repo delete example/project", "gh workflow disable ci", "gh run cancel 1", "gh label create probe", "gh secret set TOKEN",
+  "gh variable set NAME --body probe", "gh gist create file", "cp src.json .corvus/reviews/pr15/post-request.json",
+  "python3 -c 'print(1)'", "node -e 'console.log(1)'", "sh -c 'cp a b'", "git fetch --no-tags origin pull/15/head; cp a b",
+  "git cat-file -e x && cp a b", "date > f", "git show HEAD:src/index.ts", "git diff HEAD", "git log -1",
+  "git rev-parse HEAD", "git remote -v", "gh auth status", "shasum -a 256 .corvus/reviews/pr15/.light/post-request.json",
+  "git fetch --no-tags --upload-pack=evil pull/15/head", "git fetch --no-tags origin --upload-pack=evil pull/15/head",
+  "git fetch --no-tags 'origin --upload-pack=evil' 'pull/15/head'", 'git fetch --no-tags "-x" "pull/15/head"',
+  "git fetch --no-tags origin pull/15/head && cp a b", "git fetch --no-tags origin pull/15/head || cp a b",
+  "git fetch --no-tags origin pull/15/head | cp a b", "git fetch --no-tags origin pull/15/head > f",
+  "git fetch --no-tags origin pull/15/head < f", "git fetch --no-tags `evil` pull/15/head",
+  "git fetch --no-tags $(evil) pull/15/head", "git fetch --no-tags ${REMOTE} pull/15/head",
+  "git fetch --no-tags origin\ncp a b\npull/15/head", "git fetch --no-tags origin pull/15/head:refs/heads/x/head",
+  "git fetch --no-tags 'origin' 'pull/15/head:refs/heads/x/head'", 'git fetch --no-tags "origin" "pull/15/head:refs/heads/x/head"',
+  "git fetch --no-tags ''--upload-pack=evil pull/15/head", 'git fetch --no-tags ""--upload-pack=evil pull/15/head',
+  "git fetch --no-tags \\--upload-pack=evil pull/15/head", 'git fetch --no-tags "\\--upload-pack=evil" pull/15/head',
+  "git fetch --no-tags . pull/1/head --upload-pack='touch /tmp/x #'/head",
+  "git fetch --no-tags origin pull/1/head --upload-pack=evil/head",
+  "git fetch --no-tags origin --upload-pack=evil pull/1/head",
+  ...[".", "./repo", "../repo", "/repo", "~repo", "-remote", ".remote", "~remote", "repo/path", "repo\\path", "remote@name",
+    "https://github.com/example/project.git", "file://repo", "ext::evil", "other::evil", "ssh://github.com/example/project",
+    "host:path", "git@github.com:example/project.git", "user@host:path", "git+ssh://github.com/example/project", "ssh+git://github.com/example/project"].flatMap(remote =>
+    [remote, `'${remote}'`, `"${remote}"`].map(literal => `git fetch --no-tags ${literal} pull/1/head`))]
+export const LIGHT_READS = ["git fetch --no-tags origin pull/42/head", "git fetch --no-tags 'origin' pull/42/head", 'git fetch --no-tags "origin" pull/42/head',
+  "git fetch --no-tags 'github' 'pull/42/head'", 'git fetch --no-tags "custom.remote-2" "pull/42/head"',
+  "git remote get-url origin", "git remote get-url 'custom.remote-2'", 'git remote get-url "github"',
+  "git ls-files -- .corvus/reviews/pr42/lock.yaml", "git ls-files -- '.corvus/tasks/task/reviews/pr42/lock.yaml'",
+  'git ls-files -- ".corvus/reviews/pr42/lock.yaml"', "git cat-file -e 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa^{commit}'",
+  'git cat-file -e "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa^{commit}"', "git cat-file -e aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa^{commit}",
+  "git remote", "date -u +%Y-%m-%dT%H:%M:%SZ"]
+export const LIGHT_EXPANSIONS = ["git fetch --no-tags origin pull/{1,--upload-pack=x}/head",
+  "git fetch --no-tags origin pull/(1)/head", "git fetch --no-tags origin pull/1/head(N)",
+  "git fetch --no-tags origin pull/*/head", "git fetch --no-tags origin pull/?/head",
+  "git fetch --no-tags origin pull/[1]/head", "git fetch --no-tags origin pull/!1/head",
+  "git fetch --no-tags origin pull/^1/head", "git fetch --no-tags =evil pull/1/head",
+  "git remote get-url {origin,evil}", "git ls-files -- *", "git ls-files -- ?",
+  "git ls-files -- =evil", "git remote get-url ^origin", "git remote get-url [origin]",
+  `git cat-file -e '${"*".repeat(40)}^{commit}'`, `git cat-file -e '${"a".repeat(39)}?^{commit}'`,
+  `git cat-file -e '${"a".repeat(38)}{}^{commit}'`, `git cat-file -e '${"a".repeat(39)}^^{commit}'`]
+
+// These are contract scenarios, not simulated model runs. Tests assert the real
+// prompt's evidence-selection and omission instructions for each input shape.
+export const LIGHT_EVIDENCE_CASES = [
+  { name: "PR head differs from worktree", mode: "pr", code_head: "a".repeat(40), base_sha: "b".repeat(40),
+    worktree_head: "c".repeat(40), merge_base: null, head_content: "available", diagnostic: null,
+    path: "src/example.ts", pr_head_bytes: "export const limit = 1", worktree_bytes: "export const limit = 100" },
+  { name: "head preparation failed", mode: "pr", code_head: "a".repeat(40), base_sha: "b".repeat(40),
+    worktree_head: "c".repeat(40), merge_base: null, head_content: "unavailable", diagnostic: "fetch failed: remote unavailable",
+    path: "src/example.ts", pr_head_bytes: null, worktree_bytes: "export const limit = 100" },
+  { name: "LOCAL tracked staged and unstaged evidence", mode: "local", code_head: "c".repeat(40), base_sha: "b".repeat(40),
+    worktree_head: "c".repeat(40), merge_base: "b".repeat(40), head_content: null, diagnostic: null,
+    path: "src/example.ts", pr_head_bytes: null, worktree_bytes: "export const limit = 100", staged: "limit = 10", unstaged: "limit = 100" },
+] as const

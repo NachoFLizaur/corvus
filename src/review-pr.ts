@@ -1,15 +1,24 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process"
+import { createHash } from "node:crypto"
 import { resolve } from "node:path"
+import { isReviewCallerAllowed } from "./review-callers"
 
 export type PrExecResult = { code: number; stdout: string; stderr: string; stdout_truncated?: true }
-export type PrExec = (argv: string[], options?: { cwd?: string }) => Promise<PrExecResult>
+export type PrExec = (argv: string[], options?: { cwd?: string; env?: NodeJS.ProcessEnv }) => Promise<PrExecResult>
 export type PrOptions = { exec?: PrExec; timeoutMs?: number; cwd?: string }
 export type PrRepoInput = { cwd?: string }
 export type PrFindInput = PrRepoInput & { branch?: string }
 export type PrLocalInput = PrRepoInput & { base?: string }
 export type PrCandidate = { number: number; url: string; state: string; headRefName: string }
 export type PrLocator = { owner: string; name: string; pr: number | string }
-export type PrFilesInput = PrLocator & { paginate: true; include_corvus?: boolean; names_only?: boolean }
+export type PrAnchor = { path: string; line: number; start_line?: number }
+export type PrAnchorResult = PrAnchor & {
+  postable: boolean
+  source: "api" | "local"
+  reason?: "path-not-in-pr" | "no-patch" | "outside-hunk" | "spans-hunks" | "incomplete-pagination"
+  diff_anchor: string
+}
+export type PrFilesInput = PrLocator & { paginate: true; include_corvus?: boolean; names_only?: boolean; paths?: string[]; anchors?: PrAnchor[] }
 export type PrConfigInput = { owner: string; name: string; ref: string }
 export type PrMetadata = {
   number: number
@@ -32,10 +41,12 @@ export type PrMetadata = {
   code_head: string
   isCrossRepository: boolean
   changedFiles: number
+  additions: number
+  deletions: number
 }
 export type PrFile = {
   filename: string; status: string; additions: number; deletions: number
-  has_patch: boolean; patch?: string
+  has_patch: boolean; patch?: string; diff_anchor?: string
 }
 export type PrReview = {
   id: number; user: string | null; state: string; commit_id: string | null
@@ -49,9 +60,13 @@ type FindingIdentity = {
 export type PrComment = FindingIdentity & {
   id: number; pull_request_review_id: number; in_reply_to_id: number | null
   html_url: string; body: string; path: string; line: number | null; original_line: number | null
+  start_line?: number | null; original_start_line?: number | null
   user: string | null; commit_id: string; original_commit_id: string
 }
 export type PrThread = { root: PrComment; replies: PrComment[] }
+export type PrFeedbackThread = PrThread & {
+  is_corvus_review: boolean; is_resolved: boolean | null; is_outdated: boolean | null
+}
 export type PrDisposition = FindingIdentity & {
   thread_url: string; state: "unknown"; evidence: string
 }
@@ -65,10 +80,10 @@ export type PrData = {
   }
   metadata: PrMetadata
   head: { head_sha: string; code_head: string; base_sha: string }
-  files: { files: PrFile[] | string[]; complete_pagination: boolean; excluded_corvus: number }
+  files: { files?: PrFile[] | string[]; complete_pagination: boolean; excluded_corvus: number; missing_paths?: string[]; anchors?: PrAnchorResult[] }
   diff: { oversized: false; text: string; excluded_corvus: number } | { oversized: true; http_status?: number }
   reviews: {
-    reviews: PrReview[]; threads: PrThread[]; dispositions: PrDisposition[]
+    reviews: PrReview[]; threads: PrThread[]; dispositions: PrDisposition[]; prior_threads?: PrFeedbackThread[]
     complete_pagination: boolean; complete_threads: boolean
   }
   checks: { checks: PrCheck[] }
@@ -83,16 +98,11 @@ export type PrOperation = keyof PrData
  * No tool argument or option disables this caller fence.
  */
 export function isPrCallerAllowed(caller: unknown, op: unknown): boolean {
-  if (typeof op !== "string" || !Object.hasOwn(KEYS, op)) return false
-  if (caller === "pr-comment-writer") return ["head", "diff", "files", "reviews"].includes(op)
-  if (caller === "pr-code-reviewer" || caller === "security-reviewer") {
-    return ["metadata", "head", "files", "diff", "reviews", "checks"].includes(op)
-  }
-  return typeof caller === "string" && ["corvus-review", "corvus-review-auto", "pr-context-gatherer"].includes(caller)
+  return isReviewCallerAllowed("corvus_review_pr", caller, { op })
 }
 export type PrFailure = {
   reason: string; http_status?: number; unavailable?: true; login?: null
-  files?: PrFile[] | string[]; excluded_corvus?: number; reviews?: PrReview[]; threads?: PrThread[]; dispositions?: PrDisposition[]
+  files?: PrFile[] | string[]; excluded_corvus?: number; missing_paths?: string[]; anchors?: PrAnchorResult[]; reviews?: PrReview[]; threads?: PrThread[]; dispositions?: PrDisposition[]; prior_threads?: PrFeedbackThread[]
   complete_pagination?: false; complete_threads?: boolean
 }
 export type PrResult<T> = ({ ok: true } & T | { ok: false } & PrFailure) & { api_calls: number }
@@ -107,6 +117,10 @@ export type PrInput =
 
 const DEFAULT_TIMEOUT_MS = 60_000
 export const MAX_DIFF_BYTES = 512_000
+// Fifty input entries bound each selector; the writer batches larger path sets.
+// 1,024 UTF-16 code units per path caps their combined text at 51,200 before escaping.
+const MAX_FILE_PATHS = 50
+const MAX_FILE_PATH_LENGTH = 1_024
 const OWNER = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/
 const NAME = /^[A-Za-z0-9._-]{1,100}$/
 const SHA = /^[A-Fa-f0-9]{40}$/
@@ -116,7 +130,7 @@ const ACCEPT_JSON = ["-H", "Accept: application/vnd.github+json"]
 const METADATA_FIELDS = "number,url,title,body,author,baseRefName,baseRefOid,headRefName,headRefOid,labels,reviewRequests,isDraft,mergeable,state,mergedAt,additions,deletions,changedFiles,files,closingIssuesReferences,latestReviews,reviewDecision,isCrossRepository"
 const KEYS: Record<PrOperation, readonly string[]> = {
   metadata: ["owner", "name", "pr"], head: ["owner", "name", "pr"],
-  files: ["owner", "name", "pr", "paginate", "include_corvus", "names_only"], diff: ["owner", "name", "pr"],
+  files: ["owner", "name", "pr", "paginate", "include_corvus", "names_only", "paths", "anchors"], diff: ["owner", "name", "pr"],
   reviews: ["owner", "name", "pr"], checks: ["owner", "name", "pr"],
   identity: [], config: ["owner", "name", "ref"], repo: ["cwd"],
   find: ["cwd", "branch"], local: ["cwd", "base"],
@@ -147,7 +161,52 @@ function argumentsObject(input: unknown): Record<string, unknown> {
   }))
 }
 
-type Target = { repo: string; endpoint: string; pr: string; cwd?: string; branch?: string; base?: string; include_corvus?: boolean; names_only?: boolean }
+/**
+ * Plain array entries are checked and copied before PR I/O: only normalized
+ * repository-relative paths select records, never endpoints or argv. Invalid,
+ * sparse or accessor-backed selectors fail invalid-input:paths without a read.
+ * Count bounds apply before deduplication; empty selects none. Only omission
+ * disables selection. Names-only modes reject selection rather than lose patches.
+ */
+function validFilePath(path: unknown): path is string {
+  return typeof path === "string" && path.length <= MAX_FILE_PATH_LENGTH
+    && !/[\u0000-\u001f\u007f-\u009f\\]/.test(path) && !/^[A-Za-z]:/.test(path)
+    && !path.split("/").some(segment => segment === "" || segment === "." || segment === "..")
+}
+
+function filePaths(value: unknown): string[] {
+  if (!Array.isArray(value) || value.length > MAX_FILE_PATHS) return fail("invalid-input:paths")
+  const paths: string[] = []
+  for (let index = 0; index < value.length; index++) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, String(index))
+    const path: unknown = descriptor && "value" in descriptor ? descriptor.value : undefined
+    if (!validFilePath(path)) return fail("invalid-input:paths")
+    paths.push(path)
+  }
+  return [...new Set(paths)]
+}
+
+/** Closed, dense plain-data anchors are copied before PR I/O. The shared path
+ * oracle and safe positive RIGHT coordinates reject invalid ranges with zero
+ * requests; count is bounded before copying. Only omission disables verification. */
+function fileAnchors(value: unknown): PrAnchor[] {
+  if (!Array.isArray(value) || value.length > MAX_FILE_PATHS) return fail("invalid-input:anchors")
+  const anchors: PrAnchor[] = []
+  for (let index = 0; index < value.length; index++) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, String(index))
+    if (!descriptor || !("value" in descriptor)) return fail("invalid-input:anchors")
+    let item: Record<string, unknown>
+    try { item = argumentsObject(descriptor.value) } catch { return fail("invalid-input:anchors") }
+    const positive = (number: unknown): number is number => typeof number === "number" && Number.isSafeInteger(number) && number >= 1
+    if (Object.keys(item).some(key => !["path", "line", "start_line"].includes(key))
+      || !validFilePath(item.path) || !positive(item.line)
+      || (Object.hasOwn(item, "start_line") && (!positive(item.start_line) || item.start_line > item.line))) return fail("invalid-input:anchors")
+    anchors.push({ path: item.path, line: item.line, ...(Object.hasOwn(item, "start_line") ? { start_line: item.start_line as number } : {}) })
+  }
+  return anchors
+}
+
+type Target = { repo: string; endpoint: string; pr: string; cwd?: string; branch?: string; base?: string; include_corvus?: boolean; names_only?: boolean; paths?: string[]; anchors?: PrAnchor[] }
 function target(op: PrOperation, input: unknown): Target {
   const args = argumentsObject(input)
   if (Object.keys(args).some(key => !KEYS[op].includes(key))) return fail("invalid-arguments")
@@ -174,17 +233,23 @@ function target(op: PrOperation, input: unknown): Target {
   for (const key of ["include_corvus", "names_only"] as const) {
     if (args[key] !== undefined && typeof args[key] !== "boolean") return fail(`invalid-input:${key}`)
   }
+  const paths = args.paths === undefined ? undefined : filePaths(args.paths)
+  if (paths !== undefined && (args.names_only === true || args.include_corvus === true)) return fail("invalid-input:paths")
+  const anchors = args.anchors === undefined ? undefined : fileAnchors(args.anchors)
+  if (anchors !== undefined && (args.names_only === true || args.include_corvus === true)) return fail("invalid-input:anchors")
   return { repo, endpoint: `repos/${repo}/pulls/${pr}`, pr,
-    include_corvus: args.include_corvus === true, names_only: args.names_only === true || args.include_corvus === true }
+    include_corvus: args.include_corvus === true, names_only: args.names_only === true || args.include_corvus === true,
+    ...(paths === undefined ? {} : { paths }), ...(anchors === undefined ? {} : { anchors }) }
 }
 
 /**
  * A deadline starts before every injected exec or owned spawn. Expiry fails the
  * read, kills the owned process and permits no retry of that command; injected exec owns its
  * cancellation. Positive finite timer bounds are required and cannot be disabled.
- * PATH resolves fixed gh/git commands with inherited env and no shell; stdin is always closed.
+ * PATH resolves fixed gh/git commands without a shell; stdin is always closed.
+ * Reads inherit env by default; the local-anchor oracle supplies scrubbed Git env.
  */
-function execute(argv: string[], opts: PrOptions, timeoutMs: number, stdoutLimit?: number): Promise<PrExecResult> {
+function execute(argv: string[], opts: PrOptions & { env?: NodeJS.ProcessEnv }, timeoutMs: number, stdoutLimit?: number): Promise<PrExecResult> {
   return new Promise((resolve, reject) => {
     let child: ChildProcessWithoutNullStreams | undefined
     const timer = setTimeout(() => {
@@ -194,8 +259,8 @@ function execute(argv: string[], opts: PrOptions, timeoutMs: number, stdoutLimit
     const done = (value: PrExecResult) => { clearTimeout(timer); resolve(value) }
     const failed = () => { clearTimeout(timer); reject(new ReadFailure({ reason: "exec-failed" })) }
     try {
-      if (opts.exec) { opts.exec(argv, { cwd: opts.cwd }).then(done, failed); return }
-      child = spawn(argv[0], argv.slice(1), { stdio: "pipe", env: process.env, cwd: opts.cwd })
+      if (opts.exec) { opts.exec(argv, { cwd: opts.cwd, ...(opts.env ? { env: opts.env } : {}) }).then(done, failed); return }
+      child = spawn(argv[0], argv.slice(1), { stdio: "pipe", env: opts.env ?? process.env, cwd: opts.cwd })
       let stdout = ""
       let stderr = ""
       let stdoutBytes = 0
@@ -316,7 +381,7 @@ function pages(text: string): Pages {
   return { pages: result, complete: result.length > 0 }
 }
 
-type Context = { calls: number; run: (argv: string[], stdoutLimit?: number) => Promise<PrExecResult> }
+type Context = { calls: number; run: (argv: string[], stdoutLimit?: number, controls?: { cwd?: string; env: NodeJS.ProcessEnv }) => Promise<PrExecResult> }
 type Listing<T> = { items: T[]; complete: boolean; error?: PrFailure }
 async function listing<T>(endpoint: string, context: Context, project: (value: unknown) => T): Promise<Listing<T>> {
   const items: T[] = []
@@ -339,15 +404,144 @@ async function listing<T>(endpoint: string, context: Context, project: (value: u
   }
 }
 
+// Keep rename provenance internal: public files output is unchanged, but a
+// new-path-only diff cannot verify GitHub's rename hunks.
+const renamedFiles = new WeakSet<PrFile>()
 function file(value: unknown): PrFile {
   const item = record(value)
   if (item.patch !== undefined && typeof item.patch !== "string") return fail("invalid-response")
-  return {
+  const projected: PrFile = {
     filename: string(item.filename), status: string(item.status),
     additions: count(item.additions), deletions: count(item.deletions),
     has_patch: typeof item.patch === "string",
     ...(typeof item.patch === "string" ? { patch: item.patch } : {}),
   }
+  if (Object.hasOwn(item, "previous_filename")) renamedFiles.add(projected)
+  return projected
+}
+
+const diffAnchor = (path: string): string => `diff-${createHash("sha256").update(path).digest("hex")}`
+type RightHunk = { start: number; end: number }
+/** API/local patch headers and every body prefix/count are the RIGHT-line oracle,
+ * read after pagination and before returning postability. Only complete hunks
+ * contribute contiguous added/context intervals; deleted lines never advance
+ * RIGHT. Malformed/truncated hunks contribute none. No caller bypass exists. */
+function rightHunks(patch: string): RightHunk[] {
+  const hunks: RightHunk[] = []
+  let hunk: { start: number; oldCount: number; newCount: number; old: number; right: number; valid: boolean } | undefined
+  const finish = () => {
+    if (hunk?.valid && hunk.old === hunk.oldCount && hunk.right === hunk.newCount && hunk.newCount > 0) {
+      hunks.push({ start: hunk.start, end: hunk.start + hunk.newCount - 1 })
+    }
+  }
+  const rows = patch.split("\n")
+  if (rows.at(-1) === "") rows.pop()
+  for (const row of rows) {
+    if (row.startsWith("@@")) {
+      finish()
+      hunk = undefined
+      const header = /^@@ -([0-9]+)(?:,([0-9]+))? \+([0-9]+)(?:,([0-9]+))? @@(?: .*)?$/.exec(row)
+      if (!header) continue
+      const oldStart = Number(header[1]), oldCount = Number(header[2] ?? 1)
+      const start = Number(header[3]), newCount = Number(header[4] ?? 1)
+      if (![oldStart, oldCount, start, newCount, oldStart + oldCount, start + newCount].every(Number.isSafeInteger)
+        || (oldCount > 0 && oldStart < 1) || (newCount > 0 && start < 1)) continue
+      hunk = { start, oldCount, newCount, old: 0, right: 0, valid: true }
+    } else if (hunk) {
+      if (row === "\\ No newline at end of file") continue
+      if (row[0] === " ") { hunk.old++; hunk.right++ }
+      else if (row[0] === "+") hunk.right++
+      else if (row[0] === "-") hunk.old++
+      else hunk.valid = false
+      if (hunk.old > hunk.oldCount || hunk.right > hunk.newCount) hunk.valid = false
+    }
+  }
+  finish()
+  return hunks
+}
+
+/** All validated pages and eligible files are read before anchor decisions.
+ * Incomplete pagination fails every anchor closed, including early matches;
+ * missing files/patches and ranges outside one complete hunk remain unpostable.
+ * Anchor-only results never include patches. Only omission skips these checks. */
+const needsLocalPatch = (item: PrFile) => !item.patch || /patch[ _-]?omitted/i.test(item.status)
+function verifyAnchors(anchors: PrAnchor[], items: PrFile[], complete: boolean, localPatches = new Map<string, string>()): PrAnchorResult[] {
+  const byPath = new Map(items.map(item => [item.filename, item]))
+  const parsed = new Map<string, RightHunk[]>()
+  return anchors.map(anchor => {
+    const item = byPath.get(anchor.path)
+    const patch = item && (needsLocalPatch(item) ? localPatches.get(anchor.path) : item.patch)
+    const source = complete && localPatches.has(anchor.path) ? "local" : "api"
+    let reason: PrAnchorResult["reason"]
+    if (!complete) reason = "incomplete-pagination"
+    else if (!item) reason = "path-not-in-pr"
+    else if (!patch) reason = "no-patch"
+    else {
+      let hunks = parsed.get(anchor.path)
+      if (!hunks) { hunks = rightHunks(patch); parsed.set(anchor.path, hunks) }
+      const start = anchor.start_line ?? anchor.line
+      if (!hunks.some(hunk => start >= hunk.start && anchor.line <= hunk.end)) {
+        reason = hunks.filter(hunk => start <= hunk.end && anchor.line >= hunk.start).length > 1 ? "spans-hunks" : "outside-hunk"
+      }
+    }
+    return { ...anchor, postable: reason === undefined, source, ...(reason ? { reason } : {}), diff_anchor: diffAnchor(anchor.path) }
+  })
+}
+
+/** Fallback oracle: validated REST PR identity/head/base bracket a fresh complete
+ * file listing and local object reads,
+ * before anchor decisions. Exact commit resolution and stable SHAs are required;
+ * missing objects, movement, malformed/truncated output or Git failure leaves
+ * no-patch, never a guessed anchor. Only complete listings with requested patchless
+ * non-renamed files enable this route; renamed/previous_filename records retain
+ * no-patch because a new-path-only diff loses rename pairing. Paths-only/unfiltered
+ * reads never invoke it. Git controls
+ * are scrubbed before exec, replacement/lazy-fetch disabled and literal pathspecs
+ * plus no external diff/textconv keep PR paths/config out of execution. No bypass. */
+async function localAnchorPatches(target: Target, context: Context, items: PrFile[], complete: boolean): Promise<Map<string, string>> {
+  const patches = new Map<string, string>()
+  const requested = new Set(target.anchors?.map(anchor => anchor.path))
+  const missing = items.filter(item => requested.has(item.filename) && needsLocalPatch(item)
+    && item.status !== "renamed" && !renamedFiles.has(item))
+  if (!complete || !missing.length) return patches
+  try {
+    const identity = async () => {
+      const result = await context.run(["gh", "api", "--method", "GET", target.endpoint, ...ACCEPT_JSON])
+      requireSuccess(result)
+      const item = record(json(result.stdout))
+      if (count(item.number, 1) !== Number(target.pr)
+        || string(item.html_url).toLowerCase() !== `https://github.com/${target.repo}/pull/${target.pr}`.toLowerCase()) return fail("metadata-identity-mismatch")
+      return { head: sha(record(item.head).sha), base: sha(record(item.base).sha) }
+    }
+    const before = await identity()
+    const fresh = await listing(`${target.endpoint}/files`, context, file)
+    if (!fresh.complete || missing.some(item => !fresh.items.some(current => current.filename === item.filename
+      && current.status === item.status && current.additions === item.additions && current.deletions === item.deletions
+      && needsLocalPatch(current) && current.status !== "renamed" && !renamedFiles.has(current)))) return patches
+    const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_")))
+    Object.assign(env, { GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", GIT_NO_REPLACE_OBJECTS: "1",
+      GIT_NO_LAZY_FETCH: "1", GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0", GIT_LITERAL_PATHSPECS: "1" })
+    const git = async (args: string[], cwd?: string) => {
+      const result = await context.run(["git", "-c", "core.fsmonitor=false", ...args], 64 * 1024 * 1024, { ...(cwd ? { cwd } : {}), env })
+      if (result.code !== 0 || result.stdout_truncated) return fail("git-read-failed")
+      return result.stdout
+    }
+    const root = (await git(["rev-parse", "--show-toplevel"])).replace(/\r?\n$/, "")
+    if (!root.startsWith("/") || /[\0\r\n]/.test(root)) return patches
+    for (const ref of [before.base, before.head]) {
+      if (sha((await git(["rev-parse", "--verify", `${ref}^{commit}`], root)).trim()) !== ref) return patches
+    }
+    const merge = sha((await git(["merge-base", before.base, before.head], root)).trim())
+    for (const item of missing) {
+      try {
+        const patch = await git(["diff", "--no-color", "--no-ext-diff", "--no-textconv", "-U3", `${merge}...${before.head}`, "--", item.filename], root)
+        if (patch) patches.set(item.filename, patch)
+      } catch { /* One unreadable file does not discard other verified file hunks. */ }
+    }
+    const after = await identity()
+    if (after.head !== before.head || after.base !== before.base) patches.clear()
+  } catch { patches.clear() }
+  return patches
 }
 function review(value: unknown): PrReview {
   const item = record(value)
@@ -377,22 +571,28 @@ function comment(value: unknown): PrComment {
     html_url: string(item.html_url), body: string(item.body), path: string(item.path),
     line: item.line === null ? null : count(item.line, 1),
     original_line: item.original_line === null ? null : count(item.original_line, 1),
+    ...(item.start_line === undefined ? {} : { start_line: item.start_line === null ? null : count(item.start_line, 1) }),
+    ...(item.original_start_line === undefined ? {} : { original_start_line: item.original_start_line === null ? null : count(item.original_start_line, 1) }),
     user: login(item.user), commit_id: sha(item.commit_id), original_commit_id: sha(item.original_commit_id),
     ...findingIdentity(item.body, id),
   }
 }
 
 /**
- * Only API-rooted threads from marker-bearing review IDs produce dispositions.
+ * Only API-rooted threads from marker-bearing review IDs produce legacy threads/dispositions.
+ * Additive prior_threads includes all reviewers; REST cannot establish resolution
+ * or outdated state, so both stay null (a null line alone is not either oracle).
  * Read IDs/reply links before joining; duplicates, missing parents or cycles keep
  * thread coverage incomplete. Bodies remain untrusted source evidence, so every disposition is unknown
  * with commit evidence, never a claimed fix/refusal. No marker grants authority.
  */
-function threads(reviews: PrReview[], comments: PrComment[], complete: boolean): Pick<PrData["reviews"], "threads" | "dispositions" | "complete_threads"> {
+function threads(reviews: PrReview[], comments: PrComment[], complete: boolean): Pick<PrData["reviews"], "threads" | "dispositions" | "complete_threads" | "prior_threads"> {
   const priorIds = new Set(reviews.filter(item => item.body_marker).map(item => item.id))
   const byId = new Map(comments.map(item => [item.id, item]))
-  const roots = comments.filter(item => item.in_reply_to_id === null && priorIds.has(item.pull_request_review_id))
-  const groups = new Map(roots.map(root => [root.id, { root, replies: [] as PrComment[] }]))
+  const allRoots = comments.filter(item => item.in_reply_to_id === null)
+  const roots = allRoots.filter(item => priorIds.has(item.pull_request_review_id))
+  const groups = new Map(allRoots.map(root => [root.id, { root, replies: [] as PrComment[] }]))
+  const legacyGroups = new Map(roots.map(root => [root.id, { root, replies: [] as PrComment[] }]))
   let completeThreads = complete && byId.size === comments.length && new Set(reviews.map(item => item.id)).size === reviews.length
   for (const item of comments) {
     if (item.in_reply_to_id === null) continue
@@ -404,10 +604,15 @@ function threads(reviews: PrReview[], comments: PrComment[], complete: boolean):
       seen.add(parent.id)
       current = parent
     }
-    if (current.in_reply_to_id === null) groups.get(current.id)?.replies.push(item)
+    if (current.in_reply_to_id === null) {
+      groups.get(current.id)?.replies.push(item)
+      legacyGroups.get(current.id)?.replies.push(item)
+    }
   }
   return {
-    threads: [...groups.values()], complete_threads: completeThreads,
+    threads: [...legacyGroups.values()], complete_threads: completeThreads,
+    prior_threads: [...groups.values()].map(group => ({ ...group,
+      is_corvus_review: priorIds.has(group.root.pull_request_review_id), is_resolved: null, is_outdated: null })),
     dispositions: roots.map(root => ({
       finding_id: root.finding_id, ...(root.axis ? { axis: root.axis } : {}),
       ...(root.dimension ? { dimension: root.dimension } : {}),
@@ -621,6 +826,7 @@ const handlers: Handlers = {
       author: item.author === null ? null : { login: login(item.author)! },
       baseRefName: string(item.baseRefName), baseRefOid: sha(item.baseRefOid),
       headRefName: string(item.headRefName), headRefOid: sha(item.headRefOid), changedFiles: count(item.changedFiles),
+      additions: count(item.additions), deletions: count(item.deletions),
     }
   },
   async head(target, context) {
@@ -633,7 +839,22 @@ const handlers: Handlers = {
   async files(target, context) {
     const result = await listing(`${target.endpoint}/files`, context, value => target.names_only ? string(record(value).filename) : file(value))
     const items = result.items.filter(item => target.include_corvus || !isCorvusFile(typeof item === "string" ? item : item.filename))
-    const data = { files: items as PrFile[] | string[], excluded_corvus: result.items.length - items.length }
+    // Select only after validating every page/record; a matching early page never
+    // proves complete pagination. Patches are returned intact, without truncation.
+    // missing_paths means not observed when pagination failed, not confirmed absent;
+    // .corvus exclusion still applies and its count excludes only state records.
+    const requested = target.paths === undefined ? undefined : new Set(target.paths)
+    // Only selected patch records gain GitHub's Files-tab anchor, hashing the
+    // exact API filename as UTF-8; unfiltered/names-only serialization stays intact.
+    const selected = requested === undefined ? items : (items as PrFile[])
+      .filter(item => requested.has(item.filename))
+      .map(item => ({ ...item, diff_anchor: diffAnchor(item.filename) }))
+    const found = new Set(result.items.map(item => typeof item === "string" ? item : item.filename))
+    const localPatches = target.anchors === undefined ? undefined : await localAnchorPatches(target, context, items as PrFile[], result.complete)
+    const data = { ...(target.anchors !== undefined && target.paths === undefined ? {} : { files: selected as PrFile[] | string[] }),
+      excluded_corvus: result.items.length - items.length,
+      ...(target.paths === undefined ? {} : { missing_paths: target.paths.filter(path => !found.has(path)) }),
+      ...(target.anchors === undefined ? {} : { anchors: verifyAnchors(target.anchors, items as PrFile[], result.complete, localPatches) }) }
     return result.error ? { ok: false, ...result.error, ...data, complete_pagination: false }
       : { ok: true, ...data, complete_pagination: result.complete }
   },
@@ -707,9 +928,9 @@ async function perform<O extends PrOperation>(op: O, input: unknown, options: Pr
     const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS
     if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0 || timeoutMs > 2_147_483_647) return fail("invalid-timeout")
     if (opts.exec !== undefined && typeof opts.exec !== "function") return fail("invalid-exec")
-    context.run = async (argv, stdoutLimit) => {
+    context.run = async (argv, stdoutLimit, controls) => {
       if (argv[0] === "gh") context.calls++
-      const result = await execute(argv, opts, timeoutMs, stdoutLimit)
+      const result = await execute(argv, controls ? { ...opts, ...controls, cwd: controls.cwd ?? opts.cwd } : opts, timeoutMs, stdoutLimit)
       if (!isRecord(result) || !Number.isInteger(result.code) || typeof result.stdout !== "string" || typeof result.stderr !== "string") return fail("invalid-exec-result")
       return result
     }

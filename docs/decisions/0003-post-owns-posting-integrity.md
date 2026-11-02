@@ -97,7 +97,7 @@ rules are untouched.
 
 ## Verification
 
-- Tool inventory tests list exactly seven tools on both hosts.
+- Tool inventory tests list exactly eight tools on both hosts (seven after this retirement; ADR-0007 adds the light-only worktree tool).
 - Retirement scope is the **operative surface**: host registrations, the payload executor factory,
   workflow mandates and preflights (agents, skills, smoke shells, probe, writer-run checker) and
   current user documentation (README, skill-set doc, CHANGELOG "Unreleased"). Within that scope

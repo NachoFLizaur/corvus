@@ -23,8 +23,10 @@ const REFERENCES = [
  * effects throw for CLI and unit-test consumers; no flag bypasses an assertion.
  * This is a local matcher probe, not a host permission request: the host exposes
  * session-mutating permission creation, not a read-only evaluation endpoint.
- * The negative control places a blanket deny after a reference grant in memory:
- * last-match-wins must reject it, reproducing the old default-deny failure.
+ * Default-deny agents must also reject external paths outside the canonical
+ * package root. The in-memory control appends an isolated reference grant after
+ * each agent's rules, then a blanket deny: last-match-wins must allow the former
+ * and reject the latter regardless of the agent's authored default.
  */
 export function probeReferences(registered?: readonly RegisteredAgent[], installRoot = root): string[] {
   const canonicalRoot = realpathSync(installRoot)
@@ -51,17 +53,24 @@ export function probeReferences(registered?: readonly RegisteredAgent[], install
       check(external === "allow" && evaluateRules(agent.permissions, "external_directory", path) === "allow"
         && evaluateRules(agent.permissions, "read", path) === "allow", `${name}: ${path} → allow (file + dirname/*; read allowed)`)
     }
+    if (corpus[name].permission?.["*"] === "deny") {
+      const unrelated = `${canonicalRoot}-unrelated/private.md`
+      check([unrelated, `${dirname(unrelated)}/*`].every(resource =>
+        evaluateRules(agent.permissions, "external_directory", resource) === "deny"),
+        `${name}: external paths outside the canonical package root → deny`)
+    }
   }
 
   for (const name of names) {
     const rules = agents.find(agent => agent.id === name)!.permissions
     const isolatedRoot = "/__corvus_runtime_reference_probe__"
     const grant: Rule = { action: "external_directory", resource: `${isolatedRoot}/*`, effect: "allow" }
-    const denied: Rule[] = [grant, ...rules, { action: "*", resource: "*", effect: "deny" }]
+    const granted: Rule[] = [...rules, grant]
+    const denied: Rule[] = [...granted, { action: "*", resource: "*", effect: "deny" }]
     for (const reference of REFERENCES) {
       const path = `${isolatedRoot}/${reference}`
       for (const resource of [path, `${dirname(path)}/*`])
-        check(evaluateRules(rules, "external_directory", resource) === "allow"
+        check(evaluateRules(granted, "external_directory", resource) === "allow"
           && evaluateRules(denied, "external_directory", resource) === "deny", `${name}: blanket deny overrides reference grant (${resource})`)
     }
   }

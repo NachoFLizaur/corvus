@@ -13,6 +13,7 @@
 export const PROTECTED_AGENTS = [
   "pr-code-reviewer",
   "security-reviewer",
+  "pr-light-reviewer",
   "pr-comment-writer",
 ] as const
 

@@ -26,6 +26,7 @@ const REGISTRATION_ORDER = [
   "agent.transform",
   "permission.hook",
   "session.hook",
+  "tool.hook",
   "command.transform",
   "skill.transform",
   "tool.transform",
@@ -72,7 +73,7 @@ function traceRegistrations(fake: FakeContext, failAt: string): Traced {
     command: { transform: wrap("command", "transform") },
     skill: { transform: wrap("skill", "transform") },
     mcp: { transform: wrap("mcp", "transform") },
-    tool: { transform: wrap("tool", "transform") },
+    tool: { transform: wrap("tool", "transform"), hook: wrap("tool", "hook") },
     permission: { hook: wrap("permission", "hook") },
     session: { ...(domains.session as unknown as Record<string, unknown>), hook: wrap("session", "hook") },
   } as unknown as SetupContext
@@ -105,7 +106,7 @@ describe("plugin.server", () => {
 
     expect(Object.keys(hooks).sort()).toEqual(Object.keys(legacyHooks).sort())
     expect(typeof hooks.config).toBe("function")
-    expect(Object.keys(hooks.tool ?? {}).sort()).toEqual(["corvus_review_lock", "corvus_review_payload", "corvus_review_persist", "corvus_review_post", "corvus_review_pr", "corvus_review_sync", "corvus_review_verdict"])
+    expect(Object.keys(hooks.tool ?? {}).sort()).toEqual(["corvus_review_lock", "corvus_review_payload", "corvus_review_persist", "corvus_review_post", "corvus_review_pr", "corvus_review_sync", "corvus_review_verdict", "corvus_review_worktree"])
     expect(hooks.tool).not.toHaveProperty("corvus_review_verify")
     expect(Object.keys(legacyHooks.tool).sort()).toEqual(Object.keys(hooks.tool ?? {}).sort())
   })
@@ -116,7 +117,8 @@ describe("plugin.setup", () => {
     const fake = createFakeContext()
     const cleanup = await plugin.setup(fake.ctx)
     try {
-      const orchestrators = ["corvus-review", "corvus-review-auto"]
+      const fullOrchestrators = ["corvus-review", "corvus-review-auto"]
+      const orchestrators = [...fullOrchestrators, "corvus-review-light"]
       const policies = [
         { name: "corvus_review_payload", allowed: orchestrators, args: { op: "measure", candidatePath: "" } },
         { name: "corvus_review_payload", allowed: orchestrators, args: { op: "preview", artifactPath: "", expectedSha256: "0".repeat(64) } },
@@ -125,9 +127,12 @@ describe("plugin.setup", () => {
         { name: "corvus_review_lock", allowed: orchestrators, args: { op: "acquire", reviewRoot: "" } },
         { name: "corvus_review_pr", allowed: [...orchestrators, "pr-context-gatherer"], args: { op: "identity", cwd: "relative" } },
         { name: "corvus_review_verdict", allowed: orchestrators, args: { op: "compute" } },
-        { name: "corvus_review_sync", allowed: orchestrators, args: { op: "pull", cwd: "relative" } },
+        { name: "corvus_review_sync", allowed: orchestrators, args: { op: "resolve", cwd: "relative" } },
+        { name: "corvus_review_sync", allowed: fullOrchestrators, args: { op: "pull", cwd: "relative" } },
+        { name: "corvus_review_sync", allowed: fullOrchestrators, args: { op: "push", cwd: "relative" } },
+        { name: "corvus_review_worktree", allowed: ["corvus-review-light"], args: { op: "create", pr: 0 } },
       ]
-      const agents = [...fake.agents.keys(), "unknown", "", undefined, null, { agent: "corvus-review" }]
+      const agents = [...new Set([...fake.agents.keys(), "corvus-review-light", "pr-light-reviewer"]), "unknown", "", undefined, null, { agent: "corvus-review" }]
       for (const { name, allowed, args } of policies) {
         const tool = fake.tools.get(name)!
         const rejected = name === "corvus_review_post"
@@ -166,11 +171,11 @@ describe("plugin.setup", () => {
 
     const cleanup = await plugin.setup(traced.ctx)
 
-    expect(fake.agents.size).toBe(16)
+    expect(fake.agents.size).toBe(18)
     expect([...fake.commands.keys()].sort()).toEqual(COMMANDS)
-    expect(fake.skills.size).toBe(18)
+    expect(fake.skills.size).toBe(19)
     expect([...fake.mcp.keys()]).toEqual(["web-research"])
-    expect([...fake.tools.keys()]).toEqual(["corvus_review_payload", "corvus_review_post", "corvus_review_persist", "corvus_review_lock", "corvus_review_pr", "corvus_review_verdict", "corvus_review_sync"])
+    expect([...fake.tools.keys()]).toEqual(["corvus_review_payload", "corvus_review_post", "corvus_review_persist", "corvus_review_lock", "corvus_review_pr", "corvus_review_verdict", "corvus_review_sync", "corvus_review_worktree"])
     for (const tool of fake.tools.values()) {
       expect(tool.options).toEqual({ codemode: false })
       expect(tool.input).toMatchObject({ type: "object", additionalProperties: ["corvus_review_persist", "corvus_review_lock", "corvus_review_pr"].includes(tool.name) })
@@ -198,15 +203,21 @@ describe("plugin.setup", () => {
       ["corvus_review_pr", ["metadata", "head", "files", "diff", "reviews", "checks", "identity", "config", "repo", "find", "local"], ["op"]],
       ["corvus_review_verdict", ["compute"], ["op", "reviewRoot", "priorReviews", "config"]],
       ["corvus_review_sync", ["resolve", "pull", "push"], ["op"]],
+      ["corvus_review_worktree", ["create", "remove"], ["op", "pr", "code_head", "runId"]],
     ] as const) {
       expect(fake.tools.get(name)!.input).toMatchObject({ properties: { op: { type: "string", enum: ops } }, required })
     }
     const postInput = fake.tools.get("corvus_review_post")!.input
     expect(fake.tools.get("corvus_review_pr")!.input).toMatchObject({
-      properties: { cwd: { type: "string" }, branch: { type: "string" }, base: { type: "string" } },
+      properties: { cwd: { type: "string" }, branch: { type: "string" }, base: { type: "string" },
+        paths: { type: "array", maxItems: 50, items: { type: "string", minLength: 1, maxLength: 1_024 } },
+        anchors: { type: "array", maxItems: 50, items: { type: "object", required: ["path", "line"], additionalProperties: false, properties: {
+          path: { type: "string", minLength: 1, maxLength: 1_024 }, line: { type: "integer", minimum: 1 }, start_line: { type: "integer", minimum: 1 },
+        } } },
+      },
     })
-    expect(fake.tools.get("corvus_review_pr")!.description).toContain("find takes optional cwd/branch")
-    expect(fake.tools.get("corvus_review_pr")!.description).toContain("local takes optional cwd/base")
+    expect(fake.tools.get("corvus_review_pr")!.description).toContain("find: optional cwd/branch")
+    expect(fake.tools.get("corvus_review_pr")!.description).toContain("local: optional cwd/base")
     expect(fake.tools.get("corvus_review_persist")!.input).toMatchObject({
       properties: {
         facts: { type: "object", additionalProperties: true }, name: { type: "string" },
@@ -272,11 +283,11 @@ describe("plugin.setup", () => {
     // a bare append would grow it on each replay while everything else matched.
     expect(ruleCounts(fake)).toEqual(counts)
 
-    expect(fake.agents.size).toBe(16)
+    expect(fake.agents.size).toBe(18)
     expect(fake.commands.size).toBe(4)
-    expect(fake.skills.size).toBe(18)
+    expect(fake.skills.size).toBe(19)
     expect(fake.mcp.size).toBe(1)
-    expect(fake.tools.size).toBe(7)
+    expect(fake.tools.size).toBe(8)
   })
 
   test.each(["tool.transform", "mcp.transform"])("unwinds earlier cleanups in reverse when %s throws", async (failAt) => {

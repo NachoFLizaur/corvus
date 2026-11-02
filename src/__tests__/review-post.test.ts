@@ -1,8 +1,9 @@
 import { describe, expect, test } from "bun:test"
 import * as fs from "node:fs"
 import { tmpdir } from "node:os"
+import { createHash } from "node:crypto"
 import { join, relative } from "node:path"
-import { freeze, type CandidateRequest } from "../review-payload"
+import { canonicalize, freeze, type CandidateRequest } from "../review-payload"
 import { createPostExecutor, post, type PostExec, type PostExecResult, type PostInput, type PostOptions } from "../review-post"
 
 const HEAD_SHA = "a".repeat(40)
@@ -30,18 +31,22 @@ type Fixture = {
   outsidePath: string
 }
 
-async function withFixture(run: (fixture: Fixture) => Promise<void>): Promise<void> {
+async function withFixture(run: (fixture: Fixture) => Promise<void>, symlinked = false): Promise<void> {
   const tempRoot = fs.realpathSync(fs.mkdtempSync(join(tmpdir(), "corvus-review-post-")))
+  const alias = `${tempRoot}-link`
   try {
-    const root = join(tempRoot, "review-state")
+    if (symlinked) fs.symlinkSync(tempRoot, alias)
+    const directory = symlinked ? join(alias, "ws") : tempRoot
+    fs.mkdirSync(directory, { recursive: true })
+    const root = join(directory, "review-state")
     fs.mkdirSync(root)
-    const opts: PostOptions = { reviewStateRoot: fs.realpathSync(root) }
+    const opts: PostOptions = { reviewStateRoot: symlinked ? root : fs.realpathSync(root) }
     const candidatePath = join(root, "candidate.json")
     fs.writeFileSync(candidatePath, JSON.stringify(request))
     const frozen = freeze(candidatePath, join(root, "artifact.json"), opts)
     if (!frozen.ok) throw new Error(`Expected a frozen artifact, got ${JSON.stringify(frozen)}`)
     await run({
-      directory: tempRoot,
+      directory,
       opts,
       input: {
         artifactPath: frozen.artifactPath,
@@ -51,9 +56,10 @@ async function withFixture(run: (fixture: Fixture) => Promise<void>): Promise<vo
         headSha: HEAD_SHA,
         event: "COMMENT",
       },
-      outsidePath: join(tempRoot, "outside.json"),
+      outsidePath: join(directory, "outside.json"),
     })
   } finally {
+    if (symlinked) fs.rmSync(alias, { force: true })
     fs.rmSync(tempRoot, { recursive: true, force: true })
   }
 }
@@ -75,6 +81,77 @@ function mismatchedDigest(input: PostInput): PostInput {
 }
 
 describe("review post transport", () => {
+  test.each(["reviews/pr42", "tasks/example/reviews/pr42"])("light APPROVE in %s rejects verified pre-upgrade artifacts before any API call; full APPROVE still posts", namespace => withFixture(async ({ directory, input }) => {
+    const opts = { reviewStateRoot: join(directory, ".corvus"), directory }
+    const root = join(opts.reviewStateRoot, namespace)
+    fs.mkdirSync(join(root, ".light"), { recursive: true })
+    const bytes = canonicalize({ ...request, event: "APPROVE" })
+    const expectedSha256 = createHash("sha256").update(bytes).digest("hex")
+    const lightArtifact = join(root, ".light/post-request.json"), fullArtifact = join(root, "post-request.json")
+    fs.writeFileSync(lightArtifact, bytes)
+    const unused = recordingExec()
+    for (const artifactPath of [lightArtifact, relative(directory, lightArtifact)]) {
+      expect(await post({ ...input, artifactPath, expectedSha256, event: "APPROVE" }, { ...opts, exec: unused.exec }))
+        .toEqual({ outcome: "rejected", reason: "artifact-event-not-allowed", tool_api_calls: 0 })
+    }
+    expect(unused.calls).toEqual([])
+    expect(fs.readFileSync(lightArtifact, "utf8")).toBe(bytes)
+    fs.writeFileSync(fullArtifact, bytes)
+    const allowed = recordingExec(headResponse, postedResponse)
+    expect(await post({ ...input, artifactPath: fullArtifact, expectedSha256, event: "APPROVE" }, { ...opts, exec: allowed.exec }))
+      .toEqual({ outcome: "posted", review_url: REVIEW_URL, tool_api_calls: 2 })
+    expect(allowed.calls).toHaveLength(2)
+  }))
+  test.each(["reviews/pr42", "tasks/example/reviews/pr42"].flatMap(namespace => [false, true].map(symlinked => ({ namespace, symlinked }))))("writer accepts only the light PR post-request leaf in $namespace (symlinked=$symlinked) for every path spelling", ({ namespace, symlinked }) => withFixture(async ({ directory, input }) => {
+    const root = join(directory, ".corvus", namespace)
+    const classPath = join(root, ".light")
+    fs.mkdirSync(classPath, { recursive: true })
+    const candidatePath = join(classPath, "candidate.json"), artifactPath = join(classPath, "post-request.json")
+    fs.writeFileSync(candidatePath, JSON.stringify(request))
+    const opts = { reviewStateRoot: join(directory, ".corvus"), directory }
+    const frozen = freeze(candidatePath, artifactPath, opts)
+    if (!frozen.ok) throw new Error("Expected light artifact")
+    const descriptor = { ...input, artifactPath: relative(directory, artifactPath), expectedSha256: frozen.sha256 }
+    const spellings = (target: string) => [relative(directory, target), target,
+      join(fs.realpathSync(directory), relative(directory, target))]
+    for (const target of spellings(artifactPath)) {
+      const { exec, calls } = recordingExec(headResponse, postedResponse)
+      expect(await post({ ...descriptor, artifactPath: target }, { ...opts, exec }))
+        .toEqual({ outcome: "posted", review_url: REVIEW_URL, tool_api_calls: 2 })
+      expect(calls[1]).toContain(fs.realpathSync(artifactPath))
+    }
+    const execute = createPostExecutor(opts.reviewStateRoot, directory)
+    for (const caller of ["corvus-review-light", "pr-light-reviewer"]) expect(JSON.parse(await execute(descriptor, caller)))
+      .toEqual({ outcome: "rejected", reason: "caller-not-allowed", tool_api_calls: 0 })
+    const rejected = recordingExec()
+    const rejectEverySpelling = async (target: string) => {
+      for (const spelling of spellings(target)) expect(await post({ ...descriptor, artifactPath: spelling }, { ...opts, exec: rejected.exec }))
+        .toEqual({ outcome: "rejected", reason: "artifact-verify-failed:path-outside-root", tool_api_calls: 0 })
+      expect(rejected.calls).toEqual([])
+    }
+    for (const target of [candidatePath, join(classPath, "other.json"), join(classPath, "nested/post-request.json"), `${artifactPath}\n`,
+      artifactPath.replace("pr42", "pr43"), artifactPath.replace("pr42", "local-feature")]) {
+      fs.mkdirSync(join(target, ".."), { recursive: true })
+      fs.writeFileSync(target, fs.readFileSync(artifactPath))
+      await rejectEverySpelling(target)
+    }
+    const fullAlias = join(root, "alias.json")
+    fs.symlinkSync(fs.realpathSync(artifactPath), fullAlias)
+    await rejectEverySpelling(fullAlias)
+    const full = join(root, "post-request.json")
+    fs.writeFileSync(full, fs.readFileSync(artifactPath))
+    for (const target of spellings(full)) {
+      const { exec, calls } = recordingExec(headResponse, postedResponse)
+      expect(await post({ ...descriptor, artifactPath: target }, { ...opts, exec }))
+        .toEqual({ outcome: "posted", review_url: REVIEW_URL, tool_api_calls: 2 })
+      expect(calls[1]).toContain(fs.realpathSync(full))
+    }
+    fs.unlinkSync(artifactPath)
+    fs.symlinkSync(full, artifactPath)
+    await rejectEverySpelling(artifactPath)
+    expect(rejected.calls).toEqual([])
+  }, symlinked))
+
   test.each(["absolute", "workspace-relative"] as const)("posts %s artifacts using GET then POST with the artifact realpath when process cwd differs from the host directory", kind => withFixture(async ({ directory, opts, input }) => {
     expect(process.cwd()).not.toBe(directory)
     const alias = join(opts.reviewStateRoot, "artifact-link.json")
@@ -267,7 +344,7 @@ describe("review post executor", () => {
     const expected = { outcome: "rejected", reason: "caller-not-allowed", tool_api_calls: 0 }
     for (const root of [opts.reviewStateRoot, "relative/review-state"]) {
       const execute = createPostExecutor(root)
-      for (const caller of ["corvus-review", "corvus-review-auto", "pr-context-gatherer", "pr-code-reviewer", "security-reviewer", "researcher", "unknown", "", null, undefined, { agent: "pr-comment-writer" }]) {
+      for (const caller of ["corvus-review", "corvus-review-auto", "corvus-review-light", "pr-context-gatherer", "pr-code-reviewer", "security-reviewer", "pr-light-reviewer", "researcher", "unknown", "", null, undefined, { agent: "pr-comment-writer" }]) {
         expect(JSON.parse(await execute(descriptor, caller))).toEqual(expected)
       }
       expect(JSON.parse(await execute(descriptor))).toEqual(expected)

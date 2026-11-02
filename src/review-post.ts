@@ -1,8 +1,10 @@
 import { Buffer } from "node:buffer"
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process"
 import * as nodeFs from "node:fs"
-import { isAbsolute, sep } from "node:path"
+import { isAbsolute, resolve, sep } from "node:path"
 import { verify, type CandidateRequest, type ReviewPayloadFs } from "./review-payload"
+import { isReviewCallerAllowed } from "./review-callers"
+import { hostRelativePath, isLightClassPath, LIGHT_REVIEW_DIRECTORY, reviewNamespaceOf } from "./review-storage-class"
 
 export type PostInput = {
   artifactPath: string
@@ -71,6 +73,25 @@ function readArtifact(input: PostInput, opts: PostOptions): ArtifactResult {
   const fs = opts.fs ?? nodeFs
   const artifactPath = isAbsolute(input.artifactPath) || !opts.directory
     ? input.artifactPath : `${opts.directory}${sep}${input.artifactPath}`
+  /** The requested PR number and fixed class leaf are the light-layout oracle.
+   * After root realpath, compare requested/verified positions against the host
+   * root before GET/POST; resolution errors, aliases and other class files reject.
+   * No descriptor bypass exists. Library post() with a non-.corvus root yields
+   * null coordinates and retains verify's full contract; tool hosts always pass
+   * <dir>/.corvus to createPostExecutor, so that branch is unreachable via tools. */
+  let realRoot: string
+  try { realRoot = fs.realpathSync(opts.reviewStateRoot) }
+  catch { return { ok: false, reason: "artifact-verify-failed:path-resolution-error" } }
+  const coord = (target: string) => hostRelativePath(opts.reviewStateRoot, resolve(target), realRoot)
+  const light = (position: string | null) => position !== null && isLightClassPath(position)
+  const lightLeaf = (position: string | null) => {
+    if (position === null) return false
+    const namespace = reviewNamespaceOf(position)
+    return namespace !== null && namespace.endsWith(`/pr${input.prNumber}`)
+      && position === `${namespace}/${LIGHT_REVIEW_DIRECTORY}/post-request.json`
+  }
+  const requested = coord(artifactPath)
+  if (light(requested) && !lightLeaf(requested)) return { ok: false, reason: "artifact-verify-failed:path-outside-root" }
   let bytes: Buffer | undefined
   let path = artifactPath
   const checked = verify(artifactPath, input.expectedSha256, {
@@ -88,8 +109,14 @@ function readArtifact(input: PostInput, opts: PostOptions): ArtifactResult {
     },
   })
   if (!checked.ok) return { ok: false, reason: `artifact-verify-failed:${checked.reason ?? "unknown"}` }
+  const actual = coord(path)
+  if ((light(requested) || light(actual)) && (!lightLeaf(requested) || requested !== actual)) return { ok: false, reason: "artifact-verify-failed:path-outside-root" }
   if (!bytes) return { ok: false, reason: "artifact-verify-failed:artifact-read-error" }
   const request = JSON.parse(bytes.toString("utf8")) as CandidateRequest
+  /** The verified class path and those same artifact bytes are the event oracle
+   * before GET and every POST. Light APPROVE rejects with zero new API calls;
+   * no descriptor override disables this. Full artifacts keep all three events. */
+  if (light(actual) && request.event === "APPROVE") return { ok: false, reason: "artifact-event-not-allowed" }
   if (request.commit_id !== input.headSha) return { ok: false, reason: "artifact-head-mismatch" }
   if (request.event !== input.event) return { ok: false, reason: "artifact-event-mismatch" }
   return { ok: true, path, request }
@@ -292,7 +319,7 @@ export async function post(input: PostInput, opts: PostOptions): Promise<Transpo
 export function createPostExecutor(reviewStateRoot: string, directory?: string): (input: unknown, caller?: unknown) => Promise<string> {
   const root = typeof reviewStateRoot === "string" && isAbsolute(reviewStateRoot) ? reviewStateRoot : undefined
   return async (input, caller) => {
-    if (caller !== "pr-comment-writer") return JSON.stringify(rejected("caller-not-allowed"))
+    if (!isReviewCallerAllowed("corvus_review_post", caller)) return JSON.stringify(rejected("caller-not-allowed"))
     return JSON.stringify(root
       ? await post(input as PostInput, { reviewStateRoot: root, directory })
       : rejected("invalid-review-state-root"))

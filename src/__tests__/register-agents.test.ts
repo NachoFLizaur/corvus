@@ -1,7 +1,8 @@
 import { describe, expect, mock, spyOn, test } from "bun:test"
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { dirname, join } from "node:path"
+import plugin from "../index"
 import { loadAgents } from "../load-agents"
 import { agentDir, commandDir, root, skillDir } from "../paths"
 import { toV2Permissions } from "../to-v2-permissions"
@@ -51,16 +52,41 @@ const withCorpus = async (files: Record<string, string>, body: () => Promise<voi
 }
 
 describe("registerAgents", () => {
-  test("registers default-allow reference access for every agent, including replay", async () => {
+  test("registers default-allow and scoped default-deny reference access on both hosts, including replay", async () => {
+    const hooks = await plugin({ directory: process.cwd() } as Parameters<typeof plugin>[0])
+    const v1: Parameters<NonNullable<typeof hooks.config>>[0] = {}
+    await hooks.config!(v1)
+    const beforeReplay = structuredClone(v1.agent)
+    await hooks.config!(v1)
+    expect(v1.agent).toEqual(beforeReplay)
     const fake = createFakeContext()
     await registerAgents(fake.ctx)
     fake.replay()
-    const pattern = `${root.replaceAll("\\", "/")}/*`
+    const canonicalRoot = realpathSync(root).replaceAll("\\", "/")
+    const pattern = `${canonicalRoot}/*`
     for (const name of Object.keys(corpus)) {
-      const rules = fake.agents.get(name)!.permissions
-      expect(rules.some(rule => rule.resource === pattern)).toBe(false)
-      for (const reference of ["corvus-review-extras/schemas.md", "corvus-phase-4/reference/dispatch-templates.md"])
-        expect(evaluateRules(rules, "external_directory", `${root}/skill/${reference}`)).toBe("allow")
+      for (const rules of [toV2Permissions(v1.agent?.[name]?.permission), fake.agents.get(name)!.permissions]) {
+        const grants = rules.filter(rule => rule.action === "external_directory" && rule.resource === pattern)
+        expect(grants).toHaveLength(corpus[name].permission?.skill === "allow" ? 1 : 0)
+        if (grants.length) expect(rules.at(-1)).toEqual(grants[0])
+        for (const reference of ["corvus-review-extras/schemas.md", "corvus-phase-4/reference/dispatch-templates.md"]) {
+          const path = `${canonicalRoot}/skill/${reference}`
+          expect(evaluateRules(rules, "read", path)).toBe("allow")
+          for (const resource of [path, `${dirname(path)}/*`]) {
+            expect(evaluateRules(rules, "external_directory", resource)).toBe("allow")
+            if (corpus[name].permission?.["*"] === "deny") {
+              const withoutGrant = rules.filter(rule => !grants.includes(rule))
+              expect(evaluateRules(withoutGrant, "external_directory", resource)).toBe("deny")
+              expect(evaluateRules([...grants, ...withoutGrant], "external_directory", resource)).toBe("deny")
+            }
+          }
+        }
+        if (corpus[name].permission?.["*"] === "deny") {
+          const unrelated = `${canonicalRoot}-unrelated/private.md`
+          for (const resource of [unrelated, `${dirname(unrelated)}/*`])
+            expect(evaluateRules(rules, "external_directory", resource)).toBe("deny")
+        }
+      }
     }
   })
 
@@ -69,6 +95,7 @@ describe("registerAgents", () => {
     expect(result.stderr.toString()).toBe("")
     expect(result.exitCode).toBe(0)
     expect(result.stdout.toString()).toContain("blanket deny overrides reference grant")
+    expect(result.stdout.toString()).toContain("corvus-review-light: external paths outside the canonical package root → deny")
     expect(result.stdout.toString()).toContain("PASS: reference readability")
   })
 
@@ -78,7 +105,7 @@ describe("registerAgents", () => {
     await registerAgents(fake.ctx)
 
     expect([...fake.agents.keys()].sort()).toEqual(ids)
-    expect(fake.agents.size).toBe(16)
+    expect(fake.agents.size).toBe(18)
     expect(fake.registrations.map((registration) => registration.kind)).toEqual(["agent.transform"])
   })
 
